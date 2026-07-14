@@ -20,7 +20,7 @@ interface Run {
 
 // Every run pins RUNDOWN_CONFIG at a caller-chosen path, so a dispatch test never
 // reads the developer's real ~/.config/rundown/config.json.
-function run(args: string[], configPath: string): Run {
+function run(args: string[], configPath: string, entrypoint = "src/cli.ts"): Run {
   const env: Record<string, string> = {};
   for (const [k, v] of Object.entries(process.env)) if (v !== undefined) env[k] = v;
   env.RUNDOWN_CONFIG = configPath;
@@ -29,7 +29,7 @@ function run(args: string[], configPath: string): Run {
   delete env.AZURE_TENANT_ID;
   delete env.AZURE_CLIENT_ID;
   delete env.LINEAR_API_KEY;
-  const proc = Bun.spawnSync([process.execPath, "src/cli.ts", ...args], { cwd: ROOT, env });
+  const proc = Bun.spawnSync([process.execPath, entrypoint, ...args], { cwd: ROOT, env });
   return { stdout: proc.stdout.toString(), stderr: proc.stderr.toString(), exitCode: proc.exitCode ?? 0 };
 }
 
@@ -54,16 +54,43 @@ describe("cli", () => {
   });
 
   describe("--version", () => {
-    test("prints the version and exits 0", () => {
+    test("prints the dev-fallback version when run from source and exits 0", () => {
       const r = run(["--version"], missing());
-      expect(r.stdout).toBe("0.1.0\n");
+      expect(r.stdout).toBe("0.0.0-dev\n");
       expect(r.exitCode).toBe(0);
     });
 
     test("-v is the same", () => {
       const r = run(["-v"], missing());
-      expect(r.stdout).toBe("0.1.0\n");
+      expect(r.stdout).toBe("0.0.0-dev\n");
       expect(r.exitCode).toBe(0);
+    });
+
+    test("release stamping: `bun build --define RUNDOWN_VERSION` overrides the dev fallback (ADR-0001 §7)", () => {
+      // Mirrors the release workflow's mechanism without compiling a full binary:
+      // bundle with the define, then run the bundle.
+      const outDir = mkdtempSync(join(tmpdir(), "rundown-stamp-"));
+      try {
+        const build = Bun.spawnSync(
+          [
+            process.execPath,
+            "build",
+            "src/cli.ts",
+            "--target=bun",
+            "--define",
+            'RUNDOWN_VERSION="9.9.9"',
+            "--outfile",
+            join(outDir, "cli.js"),
+          ],
+          { cwd: ROOT },
+        );
+        expect(build.exitCode).toBe(0);
+        const r = run(["--version"], missing(), join(outDir, "cli.js"));
+        expect(r.stdout).toBe("9.9.9\n");
+        expect(r.exitCode).toBe(0);
+      } finally {
+        rmSync(outDir, { recursive: true, force: true });
+      }
     });
   });
 

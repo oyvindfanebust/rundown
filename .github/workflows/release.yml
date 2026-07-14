@@ -1,0 +1,55 @@
+# Tag-triggered release pipeline (ADR-0001 §2–§3, §7–§8): a vX.Y.Z tag becomes a
+# GitHub Release carrying 9 assets — 4 compiled binaries + 4 .sha256 checksums +
+# install.sh. Cross-compiled from a single runner via `bun build --compile --target`;
+# the semver is stamped from the tag via --define (source runs print 0.0.0-dev).
+name: Release
+
+on:
+  push:
+    tags: ["v*.*.*"]
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+      - run: bun install
+      # A broken tree must not release: same gates as ci.yml.
+      - name: Typecheck (load-bearing for the Untrusted<T> trust boundary — ADR-0004 §3)
+        run: bun x tsc --noEmit
+      - name: Unit tests
+        run: bun test
+      - name: Build four-target binaries with version stamp (ADR-0001 §3, §7)
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          mkdir -p dist
+          for target in darwin-arm64 darwin-x64 linux-x64 linux-arm64; do
+            bun build --compile --target="bun-${target}" \
+              --define "RUNDOWN_VERSION=\"${VERSION}\"" \
+              src/cli.ts --outfile "dist/rundown-${target}"
+          done
+      - name: Checksums (ADR-0001 §2)
+        # Run inside dist/ so each .sha256 names the bare asset, making
+        # `sha256sum -c` / `shasum -a 256 -c` work after download.
+        run: |
+          cd dist
+          for f in rundown-darwin-arm64 rundown-darwin-x64 rundown-linux-x64 rundown-linux-arm64; do
+            sha256sum "$f" > "$f.sha256"
+          done
+      - name: Create GitHub Release (9 assets — ADR-0001 §2, §8)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" \
+            dist/rundown-darwin-arm64 dist/rundown-darwin-arm64.sha256 \
+            dist/rundown-darwin-x64 dist/rundown-darwin-x64.sha256 \
+            dist/rundown-linux-x64 dist/rundown-linux-x64.sha256 \
+            dist/rundown-linux-arm64 dist/rundown-linux-arm64.sha256 \
+            install.sh \
+            --generate-notes
