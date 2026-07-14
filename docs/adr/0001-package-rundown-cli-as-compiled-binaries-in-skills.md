@@ -11,8 +11,8 @@ inventory and CLI-wrapping decisions are in [ADR-0009](0009-skills-collection.md
 
 ## Context
 
-`rundown` ships as an agent-skills collection (like `mattpocock/skills`) that a coding agent installs
-and drives. Two constraints shape distribution:
+`rundown` ships as an agent-skills collection that a coding agent installs and drives. Two
+constraints shape distribution:
 
 - The skills channel (`vercel-labs/skills`, `npx skills add`) only copies files: it runs no
   `bun install`, no build, and puts nothing on `PATH`. A bundled program works as-is only if it is
