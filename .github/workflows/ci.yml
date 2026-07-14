@@ -17,3 +17,5 @@ jobs:
         run: bun x tsc --noEmit
       - name: Unit tests
         run: bun test
+      - name: Shellcheck shell scripts
+        run: git ls-files '*.sh' | xargs -r shellcheck
