@@ -71,7 +71,8 @@ manifest, `status`, logs, error formatting) structurally cannot touch untrusted 
 visible, greppable `unwrap()`.
 
 - The unwrap call sites **are** the leak-path audit — a short, reviewable list of where untrusted data
-  legitimately flows.
+  legitimately flows. This is mechanically enforced in CI by `scripts/check-unwrap-sites.sh`, not only
+  by review: any `unwrap` import or call outside `src/trust.ts`/`src/plan.ts` fails the build.
 - This realizes ADR-0002's "the structural-trusted field set is *exactly* `{source, kind, timestamp,
   end}`."
 - **Guarantee scope: dev-time types plus runtime redaction.** `Untrusted<T>` is a real runtime box in

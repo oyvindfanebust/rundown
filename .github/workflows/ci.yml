@@ -19,3 +19,5 @@ jobs:
         run: bun test
       - name: Shellcheck shell scripts
         run: git ls-files '*.sh' | xargs -r shellcheck
+      - name: "Trust-boundary: sole unwrap site (ADR-0004 §3)"
+        run: bash scripts/check-unwrap-sites.sh
