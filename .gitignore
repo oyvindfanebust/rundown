@@ -1,0 +1,12 @@
+node_modules/
+# compiled binaries live in GitHub Releases, never in git (ADR-0001)
+bin/
+dist/
+.env
+.envrc
+*.local
+*.log
+.DS_Store
+# local agent tooling — vendored skills are reproducible via skills-lock.json + `npx skills add`
+.agents/
+.claude/

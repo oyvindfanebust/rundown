@@ -1,0 +1,40 @@
+#!/bin/sh
+# rundown launcher (ADR-0001 §4). Prefers an installed compiled binary for this
+# platform; falls back to running from source with Bun in the working tree (the
+# local-dev path). One entry point, identical invocation in dev and installed.
+set -e
+
+# Resolve $0 through any symlinks so an install can symlink this launcher onto
+# PATH while still finding src/ (and bin/) in the real working tree.
+self=$0
+while [ -L "$self" ]; do
+  target=$(readlink -- "$self")
+  case "$target" in
+    /*) self=$target ;;
+    *) self=$(dirname -- "$self")/$target ;;
+  esac
+done
+dir=$(CDPATH= cd -- "$(dirname -- "$self")" && pwd)
+
+os=$(uname -s | tr '[:upper:]' '[:lower:]')
+arch=$(uname -m)
+case "$arch" in
+  x86_64) arch=x64 ;;
+  aarch64 | arm64) arch=arm64 ;;
+esac
+binary="$dir/bin/rundown-$os-$arch"
+
+if [ -x "$binary" ]; then
+  exec "$binary" "$@"
+fi
+
+# Local-dev fallback: run the TypeScript source with Bun.
+if command -v bun >/dev/null 2>&1; then
+  exec bun "$dir/src/cli.ts" "$@"
+elif [ -x "$HOME/.bun/bin/bun" ]; then
+  exec "$HOME/.bun/bin/bun" "$dir/src/cli.ts" "$@"
+fi
+
+echo "rundown: no compiled binary at $binary and Bun is not installed." >&2
+echo "Install Bun (https://bun.sh) to run from source, or install a release binary." >&2
+exit 1

@@ -1,0 +1,24 @@
+{
+  "name": "rundown",
+  "version": "0.1.0",
+  "type": "module",
+  "description": "A plain, honest readout of where you stand across every work source, synthesized to help you plan.",
+  "bin": {
+    "rundown": "./rundown"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "test": "bun test",
+    "dev": "bun src/cli.ts"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.110.0",
+    "@azure/msal-node": "^2.16.2",
+    "@linear/sdk": "^88.1.0",
+    "zod": "^4.4.3"
+  },
+  "devDependencies": {
+    "@types/bun": "latest",
+    "typescript": "^5.6.0"
+  }
+}

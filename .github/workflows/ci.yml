@@ -1,0 +1,19 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+      - run: bun install
+      - name: Typecheck (load-bearing for the Untrusted<T> trust boundary — ADR-0004 §3)
+        run: bun x tsc --noEmit
+      - name: Unit tests
+        run: bun test

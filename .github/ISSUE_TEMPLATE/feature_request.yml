@@ -1,0 +1,39 @@
+name: Feature request
+description: Suggest an improvement or a new capability.
+title: "[Feature]: "
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for the suggestion. If your idea touches the Summarizer, `Untrusted<T>`, source
+        adapters, or the CLI's command surface, it will be held to `CONTRIBUTING.md`'s trust-boundary
+        rule — see the note at the end of this form before you spend time on a design.
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem / job you're trying to do
+      description: >
+        What are you trying to accomplish? Describe the situation and the outcome you want, not
+        (yet) the mechanism — this helps find the simplest fix, which isn't always the one you
+        imagined.
+    validations:
+      required: true
+
+  - type: textarea
+    id: solution
+    attributes:
+      label: Proposed solution (optional)
+      description: If you have a specific idea for how this could work, sketch it here.
+    validations:
+      required: false
+
+  - type: markdown
+    attributes:
+      value: |
+        **Trust-boundary note:** `rundown`'s one non-negotiable rule is that untrusted work-source
+        content (meeting titles, email/message bodies, issue titles, ...) meets a model only in the
+        sandboxed, tool-less Summarizer. Any proposal that would add tools to the Summarizer, add an
+        `unwrap()` site outside `src/plan.ts`, or add a command that emits raw source data will be
+        rejected regardless of how valuable the feature is. See `CONTRIBUTING.md` for the full rule.

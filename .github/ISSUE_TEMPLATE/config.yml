@@ -1,0 +1,10 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Report a security vulnerability (prompt injection, boundary bypass)
+    url: https://github.com/oyvindfanebust/rundown/security/advisories/new
+    about: >-
+      Use GitHub's private vulnerability reporting instead of a public issue for anything that
+      touches the trust boundary. See SECURITY.md for what counts.
+  - name: Questions and general discussion
+    url: https://github.com/oyvindfanebust/rundown#readme
+    about: For general questions that aren't a bug report or feature request, start with the README.
