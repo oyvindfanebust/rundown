@@ -9,6 +9,7 @@
   "scripts": {
     "typecheck": "tsc --noEmit",
     "test": "bun test",
+    "check:unwrap": "bash scripts/check-unwrap-sites.sh",
     "dev": "bun src/cli.ts"
   },
   "dependencies": {
