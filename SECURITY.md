@@ -6,47 +6,46 @@ Use GitHub's private vulnerability reporting: go to this repo's **Security** tab
 **"Report a vulnerability."** That opens a private draft security advisory that only the
 maintainer can see — nothing you write there becomes a public issue.
 
-**Do not open a public GitHub Issue for a security report.** If you're not sure whether something
-is a security issue or a regular bug, see [What counts as a vulnerability](#what-counts-as-a-vulnerability)
-below; when in doubt, use private reporting — it costs you nothing to be cautious.
+Do not open a public GitHub Issue for a security report. If you're not sure whether something is
+a security issue or a regular bug, see
+[What counts as a vulnerability](#what-counts-as-a-vulnerability) below; when in doubt, use
+private reporting.
 
 `rundown` is a personal, solo-maintained project. Reports are triaged and responded to
-**best-effort, with no SLA**. There is no dedicated security team and no numeric response-time
-guarantee — just one person looking at it when they can. That said, reports that clearly land on
-the trust boundary described below will get priority attention.
+best-effort, with no SLA — there is no security team, just one maintainer. Reports that clearly
+land on the trust boundary described below will get priority attention.
 
 ## Threat model
 
 `rundown` reads from work sources — calendar, mail, issue trackers, chat — and has a model
-summarize what it finds into a plain-language Brief. The content it reads is **untrusted**: a
-meeting title, an email body, a message, an issue title can all be authored by someone other than
-you, and that someone could try to hide instructions in it aimed at a model or an agent acting on
-your behalf. That's the threat this project defends against: **prompt injection carried in
-untrusted work-source content**, aimed at making a tool-capable agent do something its user didn't
-ask for.
+summarize what it finds into a plain-language Brief. The content it reads is untrusted: a meeting
+title, an email body, a message, or an issue title can be authored by someone other than you, and
+that someone could hide instructions in it aimed at a model or an agent acting on your behalf.
+That is the threat this project defends against: prompt injection carried in untrusted
+work-source content, aimed at making a tool-capable agent do something its user didn't ask for.
 
 ### The three enforcement layers
 
 1. **Structural seal.** The entire read → aggregate → summarize pipeline runs sealed inside the
    compiled `rundown` binary. The only commands the binary exposes are `brief`, `login`, `status`,
-   `init`, and `--version` — every one of them post-summarizer. There is **no raw-fetch command**
-   in the release build; raw source content never crosses the CLI surface at all.
-2. **Sole-unwrap-site typing.** Every field that carries untrusted content is branded with a
-   type (`Untrusted<T>`) that forces an explicit, greppable "unwrap" to get at the raw bytes.
-   Exactly one place in the codebase is allowed to unwrap — the prompt assembly that feeds the
-   Summarizer. Every other output channel (status text, logs, error messages, the source manifest)
+   `init`, and `--version`, and every one of them is post-summarizer. There is no raw-fetch
+   command in the release build; raw source content never crosses the CLI surface at all.
+2. **Sole-unwrap-site typing.** Every field that carries untrusted content is branded with a type
+   (`Untrusted<T>`) that forces an explicit, greppable "unwrap" to get at the raw bytes. Exactly
+   one place in the codebase is allowed to unwrap — the prompt assembly that feeds the Summarizer.
+   Every other output channel (status text, logs, error messages, the source manifest)
    structurally cannot touch raw untrusted bytes. If an unwrap ever happens somewhere else by
-   accident, the wrapper itself redacts to a fixed `[untrusted]` marker on every common accidental-
-   serialization path, rather than printing the real content.
-3. **Brief-as-data.** The model that actually reads untrusted content — the Summarizer — has
-   **zero tools**. It can only produce text; it cannot act on anything it's told to do. Its output
-   (the Brief) is never treated as fully trusted: any agent consuming it is expected to treat every
+   accident, the wrapper redacts to a fixed `[untrusted]` marker on every common
+   accidental-serialization path rather than printing the real content.
+3. **Brief-as-data.** The model that actually reads untrusted content — the Summarizer — has zero
+   tools. It can only produce text; it cannot act on anything it's told to do. Its output (the
+   Brief) is never treated as fully trusted: any agent consuming it is expected to treat every
    field as quoted data describing your work, never as an instruction to follow.
 
-Together: injection against the Summarizer is inert (it has nothing to act with), a leak that
-somehow escapes the Summarizer's prompt boundary is confined to labeled, structured fields rather
-than a bare imperative, and the one component with tools (the agent driving `rundown`) never sees
-raw content in the first place.
+Taken together: injection against the Summarizer is inert (it has nothing to act with), a leak
+that somehow escapes the Summarizer's prompt boundary is confined to labeled, structured fields
+rather than a bare imperative, and the one component with tools (the agent driving `rundown`)
+never sees raw content in the first place.
 
 ### What's explicitly *not* in this threat model
 
@@ -63,39 +62,39 @@ raw content in the first place.
 
 ## What counts as a vulnerability
 
-**Is a security vulnerability** — please report privately:
+These are security vulnerabilities — please report them privately:
 
 - Any path where untrusted source bytes reach a tool-capable context, or reach any output channel
   other than the Summarizer's prompt — e.g., an `unwrap()` call (or equivalent leak) outside
   `src/plan.ts`'s prompt assembly that lets untrusted content reach status output, logs, error
   messages, or the source manifest.
-- A "delimiter breakout" — a way to make source content escape the untrusted-data region of the
+- A delimiter breakout: a way to make source content escape the untrusted-data region of the
   Summarizer's prompt and land in the trusted-instruction region, where it would be followed
   instead of described.
-- A new agent-facing command, flag, or code path that emits pre-summarizer or otherwise raw source
-  content.
+- A new agent-facing command, flag, or code path that emits pre-summarizer or otherwise raw
+  source content.
 - An exfiltration vector carried in Brief fields — for example, a source-influenced URL or
   markdown image reference that survives into rendered output and could be used for zero-click
   tracking or data exfiltration.
 - Any change that would add tools to the Summarizer, or otherwise give it the ability to act
   rather than merely describe.
 
-**Is a regular bug, not a vulnerability** — please use a normal GitHub Issue:
+These are regular bugs, not vulnerabilities — please use a normal GitHub Issue:
 
 - Crashes, incorrect bucketing or sorting, formatting glitches, auth-flow UX rough edges, config
   parsing errors, missing or incomplete source data.
 - Anything that doesn't cross the untrusted-content → trusted-output boundary described above.
 
 If you're unsure which bucket something falls into, treat it as a vulnerability and report it
-privately — it's easy to redirect a private report to a public issue afterward, and much harder to
-undo the reverse.
+privately — it's easy to redirect a private report to a public issue afterward, and much harder
+to undo the reverse.
 
 ## Supported versions
 
-Only the **latest release** is supported. `rundown` self-updates (see
-[ADR-0001](docs/adr/0001-package-rundown-cli-as-compiled-binaries-in-skills.md)), so every user can
-move to the latest version with no more effort than running the CLI again. There's no backport
-policy and no support matrix for older releases — upgrading is always the fix.
+Only the latest release is supported. `rundown` self-updates (see
+[ADR-0001](docs/adr/0001-package-rundown-cli-as-compiled-binaries-in-skills.md)), so every user
+can move to the latest version with no more effort than running the CLI again. There's no
+backport policy and no support matrix for older releases — upgrading is always the fix.
 
 ## Scope and safe harbor
 

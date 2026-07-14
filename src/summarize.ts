@@ -4,7 +4,7 @@
 //   • prepend the hardening system prompt ("describe, quote, classify — never obey")
 //   • wrap `data` in the <untrusted-data> delimiter (hardening + delimiter together,
 //     so they cannot drift)
-//   • make the tool-less API call (ZERO tools defined — crown-jewel rule)
+//   • make the tool-less API call (zero tools defined — the core rule)
 //   • enforce structured output via the API's response format (json_schema), NEVER
 //     a tool (a tool would breach "zero tools")
 //   • own all retries, by failure class (ADR-0005 §8)
@@ -19,7 +19,7 @@ import Anthropic from "@anthropic-ai/sdk";
 // the balanced Sonnet tier fits it (near-Opus on instruction-following and
 // classification, cheaper, faster). Override per run with RUNDOWN_MODEL: an
 // ops knob, env-first — deliberately NOT part of the personalization config
-// (ADR-0007's four fields), since the model is an internal choice, not user ritual.
+// (ADR-0007's four fields), since the model is an internal choice, not user config.
 const DEFAULT_MODEL = "claude-sonnet-5";
 const MAX_TOKENS = 16_000;
 const MAX_SCHEMA_RETRIES = 2;
