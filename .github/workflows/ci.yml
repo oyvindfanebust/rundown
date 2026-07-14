@@ -17,3 +17,5 @@ jobs:
         run: bun x tsc --noEmit
       - name: Unit tests
         run: bun test
+      - name: "Trust-boundary: sole unwrap site (ADR-0004 §3)"
+        run: bash scripts/check-unwrap-sites.sh
