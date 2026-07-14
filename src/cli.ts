@@ -12,7 +12,10 @@ import { parseWindowSelector, WindowError, WINDOW_SPANS, type WindowSelector } f
 import { registry, registeredKeys } from "./sources/registry.ts";
 import { narrateStatus, optionTemplateDefault, type Source } from "./sources/source.ts";
 
-const VERSION = "0.1.0"; // build-time semver (ADR-0001 §7); stamped by the release workflow.
+// Build-time semver (ADR-0001 §7): the release workflow injects RUNDOWN_VERSION via
+// `bun build --define` from the git tag; running from source falls back to the dev marker.
+declare const RUNDOWN_VERSION: string;
+const VERSION = typeof RUNDOWN_VERSION === "string" ? RUNDOWN_VERSION : "0.0.0-dev";
 
 function fail(message: string): never {
   process.stderr.write(`${message}\n`);
