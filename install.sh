@@ -80,11 +80,29 @@ mv -f "${tmp}/${asset}" "$dest"
 
 echo "Installed: $dest"
 echo "Version:   $("$dest" --version)"
+
+# Expose the binary under the standard user bin dir (XDG ~/.local/bin), the uv/pipx
+# pattern: the real binary stays in INSTALL_DIR (self-update's atomic-rename home),
+# and ~/.local/bin/rundown is a symlink to that stable path. Skip if the name is
+# already taken by something that isn't ours — never clobber a foreign file.
+LINK_DIR="${HOME}/.local/bin"
+link="${LINK_DIR}/rundown"
+mkdir -p "$LINK_DIR"
+if [ ! -e "$link" ] && [ ! -L "$link" ]; then
+  ln -s "$dest" "$link"
+  echo "Symlinked: $link -> $dest"
+elif [ -L "$link" ] && [ "$(readlink "$link")" = "$dest" ]; then
+  : # already ours
+else
+  echo "Note: $link already exists and is not managed by this installer; leaving it alone."
+fi
+
+# PATH guidance: fine if either the link dir or the install dir is already on PATH.
 case ":${PATH}:" in
-  *":${INSTALL_DIR}:"*) ;;
+  *":${LINK_DIR}:"* | *":${INSTALL_DIR}:"*) ;;
   *)
     echo
-    echo "Hint: ${INSTALL_DIR} is not on your PATH. Either add it, or symlink the binary:"
-    echo "  ln -s \"$dest\" ~/.local/bin/rundown"
+    echo "Hint: ${LINK_DIR} is not on your PATH. Add it to your shell profile:"
+    echo "  export PATH=\"\$HOME/.local/bin:\$PATH\""
     ;;
 esac
