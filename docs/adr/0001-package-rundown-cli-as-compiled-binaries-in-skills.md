@@ -62,8 +62,10 @@ separate from the untrusted work-source data the boundary defends against. The t
 - Install is a small (~30-line) `install.sh`. It detects `uname -sm`, maps to the asset name, runs
   `curl -fsSL https://github.com/<owner>/rundown/releases/latest/download/rundown-<os>-<arch>`,
   verifies the checksum, runs `chmod +x`, installs into a user-writable directory
-  (`~/.config/rundown/bin`, optionally symlinked onto `PATH`), and errors clearly on an unsupported
-  platform.
+  (`~/.config/rundown/bin` — self-update's atomic-rename home), symlinks the binary into the
+  standard XDG user bin dir `~/.local/bin` (created if absent; never clobbering a foreign file,
+  the uv/pipx pattern), prints a PATH hint only when neither dir is on `PATH`, and errors clearly
+  on an unsupported platform.
 - One-liner: `curl -fsSL https://<...>/install.sh | bash`. This is the standard rustup/deno/bun
   shape, and it relies on the public-repo unauthenticated release URLs from the decision above. The
   user can always download and inspect first.
