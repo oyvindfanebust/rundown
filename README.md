@@ -29,13 +29,12 @@ That gives you two guarantees:
   instructed to treat as data, and there is no raw-fetch command for it to reach for.
 
 The full enforcement model — structural, in-code (`Untrusted<T>`), and behavioral — is in
-[`AGENTS.md`](AGENTS.md) and [ADR-0004](docs/adr/0004-trust-boundary-enforcement.md) /
-[ADR-0008](docs/adr/0008-bounded-context-and-component-architecture.md).
+[`AGENTS.md`](AGENTS.md).
 
 ## How it works
 
 `rundown` is one bounded context with a single external surface, the CLI. Inside are four
-components (see [`CONTEXT.md`](CONTEXT.md) and [`docs/adr/`](docs/adr/)):
+components (see [`CONTEXT.md`](CONTEXT.md)):
 
 - **Sources** — read-only adapters, one per backend/auth boundary (Graph, Linear, Claude Code logs).
 - **Aggregator** — pulls the selected sources concurrently into one normalized, bucketed Bundle.
@@ -51,8 +50,8 @@ curl -fsSL https://github.com/oyvindfanebust/rundown/releases/latest/download/in
 ```
 
 It fetches the compiled `rundown` binary and puts it on your `PATH`; after that the binary
-self-updates in the background (see [ADR-0001](docs/adr/0001-package-rundown-cli-as-compiled-binaries-in-skills.md)).
-This is the intended path, available from the v0.1.0 release — until that ships, run from source.
+self-updates in the background. This is the intended path, available from the v0.1.0 release —
+until that ships, run from source.
 
 ### Run from source
 
@@ -171,25 +170,22 @@ rundown brief --window 2026-07-06..2026-07-12  # an explicit, end-inclusive rang
 
 `--window` accepts a symbolic span (`today` | `this-week` | `next-week` | `last-week`), a single
 `YYYY-MM-DD` date, or an explicit end-inclusive date range. Spans are the recommended form and the
-only form the config file's `window` accepts; explicit dates are for one-off invocations (see
-[ADR-0010](docs/adr/0010-explicit-date-windows.md)).
+only form the config file's `window` accepts; explicit dates are for one-off invocations.
 
 stdout is either a valid Brief or empty; errors and refusals go to stderr with a non-zero exit.
 An empty window emits an empty Brief and exits 0.
 
 ## Using it from a coding agent
 
-`rundown` is published as a single-skill collection (see
-[ADR-0009](docs/adr/0009-skills-collection.md)). A coding agent installs the `rundown` skill
+`rundown` is published as a single-skill collection. A coding agent installs the `rundown` skill
 (`SKILL.md` + `references/onboarding.md`) and drives the CLI: the skill carries the treat-as-data
-trust contract and the rendering guidance, while the CLI is installed separately (see
-[ADR-0001](docs/adr/0001-package-rundown-cli-as-compiled-binaries-in-skills.md)). The skill walks
+trust contract and the rendering guidance, while the CLI is installed separately. The skill walks
 the agent through onboarding and renders each Brief; where the output lands is the agent's call.
 
 ## Development
 
 ```sh
-bun x tsc --noEmit    # typecheck — a hard gate; part of the trust boundary (ADR-0004 §3)
+bun x tsc --noEmit    # typecheck — a hard gate; part of the trust boundary
 bun test              # unit tests for every component
 scripts/e2e.sh        # end-to-end acceptance against live Graph (needs BYO credentials + login)
 ```
