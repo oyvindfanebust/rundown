@@ -18,6 +18,7 @@
 
 import type { NormalizedItem, Window } from "../../domain.ts";
 import { normalizer, text } from "../normalize.ts";
+import { statusOnlyError } from "../errors.ts";
 import type { Source, SourceStatus } from "../source.ts";
 import { linearClient } from "./auth.ts";
 
@@ -71,22 +72,10 @@ function defaultTransport(): LinearRequest | null {
       // error text (and whose .raw stringifies the whole response + our query).
       // A read() transport error propagates to cli.ts fail() → stderr, an
       // agent-readable channel, so scrub it to a status-only message (ADR-0004 §5).
-      throw scrubbedTransportError(e);
+      // The shared statusOnlyError owns that rule (sources/errors.ts).
+      throw statusOnlyError("Linear", e);
     }
   };
-}
-
-/**
- * Reduce any transport error to `Linear request failed[: <status>]` — a generic
- * description plus the HTTP status if the error carries one, with NO response-body
- * bytes. The status lives on `.status` (SDK `LinearError`) or `.response.status`
- * (raw `GraphQLClientError`); both are trusted structural scalars, never content.
- */
-export function scrubbedTransportError(e: unknown): Error {
-  const raw = e as { status?: unknown; response?: { status?: unknown } } | null;
-  const candidate = raw?.status ?? raw?.response?.status;
-  const status = typeof candidate === "number" ? candidate : undefined;
-  return new Error(`Linear request failed${status !== undefined ? `: ${status}` : ""}`);
 }
 
 const VIEWER_QUERY = `query { viewer { name email } }`;
