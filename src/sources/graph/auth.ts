@@ -113,7 +113,9 @@ export function openBrowser(
 // the authorization server (or, during the redirect window, anyone who can reach
 // localhost:53682 with a crafted GET) supplies verbatim — it must never cross into
 // a thrown error's message, which propagates to cli.ts fail() → stderr, an
-// agent-readable channel (ADR-0004 §5) — the same scrub pattern applied here.
+// agent-readable channel (ADR-0004 §5) — the same scrub motive as
+// sources/errors.ts, but by allowlist-validation of a code rather than
+// status-extraction, so it stays local here.
 const OAUTH_ERROR_CODE = /^[a-z0-9_]{1,64}$/i;
 
 /**

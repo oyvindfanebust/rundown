@@ -12,6 +12,7 @@
 
 import type { NormalizedItem, Window } from "../../domain.ts";
 import { normalizer, text } from "../normalize.ts";
+import { statusOnlyError } from "../errors.ts";
 import type { Source, SourceStatus } from "../source.ts";
 import { azureConfig, getToken, login as graphLogin, signedInAccount } from "./auth.ts";
 
@@ -44,13 +45,9 @@ async function graphGet(token: string, url: string): Promise<any> {
   const r = await fetch(url, {
     headers: { Authorization: `Bearer ${token}`, Prefer: 'outlook.timezone="UTC"' },
   });
-  if (!r.ok) {
-    // Scrub the backend response body from the thrown error: only the HTTP status
-    // may cross into the message, which propagates to cli.ts fail() → stderr, an
-    // agent-readable channel. Response bytes (a Graph error.message or any body
-    // an external party could shape) must never leak there (ADR-0004 §5).
-    throw new Error(`Graph request failed: ${r.status}`);
-  }
+  // Scrub the backend response body: only the HTTP status crosses into the thrown
+  // message (ADR-0004 §5). The shared statusOnlyError owns that rule (sources/errors.ts).
+  if (!r.ok) throw statusOnlyError("Graph", r);
   return r.json();
 }
 
