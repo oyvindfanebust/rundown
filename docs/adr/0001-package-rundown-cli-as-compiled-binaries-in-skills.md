@@ -2,9 +2,9 @@
 
 **Status:** Accepted
 
-The compiled-binary distribution described below (the release workflow, `install.sh`, and background
-self-update) is designed but not yet shipped in v0.1.0. Today `rundown` runs from source via the
-launcher's fallback (§4's local-dev path).
+The compiled-binary distribution described below (the release workflow and `install.sh`) ships as of
+v0.1.0; releases carry the nine assets (§2). Background self-update (§6) is designed but not yet
+wired. The launcher still falls back to running from source in local dev (§4's local-dev path).
 
 This ADR covers the CLI's binary packaging, distribution, and self-update. The skills-collection
 inventory and CLI-wrapping decisions are in [ADR-0009](0009-skills-collection.md).
@@ -121,18 +121,27 @@ separate from the untrusted work-source data the boundary defends against. The t
   [ADR-0009](0009-skills-collection.md), and config is the reuse point
   ([ADR-0007](0007-config-personalization-layer.md)).
 
-### 7. Versioning — semver stamped in the artifact; vendoring is still the pin
+### 7. Versioning — release-please owns the bump; the tag stamps the artifact
 
-- A semver is stamped into `rundown --version` (a build-time constant) from source-repo git tags.
-  Consumers who disable auto-update pin by vendoring their installed binary. `computedHash` on the
+- The next semver is **derived, not hand-picked**: [release-please](https://github.com/googleapis/release-please)
+  reads the Conventional Commits since the last release (`fix:` → patch, `feat:` → minor, `!`/
+  `BREAKING CHANGE` → major) and keeps an open "release PR" that bumps `package.json`, updates the
+  `.release-please-manifest.json` version, and writes the `CHANGELOG.md` entry. The version lives in
+  the manifest as the source of truth; `package.json` mirrors it.
+- Merging that release PR creates the `vX.Y.Z` git tag, and that tag semver is what gets stamped into
+  `rundown --version` (a build-time constant via `--define`). Source runs print `0.0.0-dev`.
+- Consumers who disable auto-update pin by vendoring their installed binary. `computedHash` on the
   light skill folder is drift detection for the SKILL.md, not the binary.
 
-### 8. Release pipeline — tag-triggered GitHub Actions
+### 8. Release pipeline — release-please on push to main
 
 - SKILL.md files are source, authored and reviewed in the normal repo alongside the code they wrap.
-- A workflow triggered on a `vX.Y.Z` tag runs the `bun build --compile` matrix for the v1 subset and
-  uploads each binary and its checksum as release assets on that tag. There is no distribution repo
-  and no hand-authored build output.
+- `release.yml` runs on every push to `main`. The `release-please` job maintains the release PR
+  (§7); when that PR merges it cuts the tag and the GitHub Release from the accumulated changelog.
+- Gated on `release_created`, the same run's `assets` job runs the `bun build --compile` matrix for
+  the v1 subset and uploads each binary and its checksum onto that release. The build hangs off this
+  run by necessity: a release/tag created with the default `GITHUB_TOKEN` does not trigger a
+  separate tag-triggered workflow. There is no distribution repo and no hand-authored build output.
 
 ## Consequences
 

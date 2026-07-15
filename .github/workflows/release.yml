@@ -1,18 +1,40 @@
-# Tag-triggered release pipeline (ADR-0001 §2–§3, §7–§8): a vX.Y.Z tag becomes a
-# GitHub Release carrying 9 assets — 4 compiled binaries + 4 .sha256 checksums +
-# install.sh. Cross-compiled from a single runner via `bun build --compile --target`;
-# the semver is stamped from the tag via --define (source runs print 0.0.0-dev).
+# Release pipeline (ADR-0001 §2–§3, §7–§8): release-please owns versioning and the
+# changelog. On every push to main it maintains a "release PR" that turns the
+# Conventional Commits since the last release into a semver bump + CHANGELOG.md
+# entry. Merging that PR creates the vX.Y.Z tag and the GitHub Release; the assets
+# job then cross-compiles the 4 binaries and uploads the 9 assets (4 binaries +
+# 4 .sha256 + install.sh) onto that release. The semver is stamped into each
+# binary from the tag via --define (source runs print 0.0.0-dev).
+#
+# Why the build lives here, gated on release_created (not a separate tag-triggered
+# workflow): a release/tag created with the default GITHUB_TOKEN does not trigger
+# further workflow runs, so the build must hang off this same run.
 name: Release
 
 on:
   push:
-    tags: ["v*.*.*"]
+    branches: ["main"]
 
 permissions:
   contents: write
+  pull-requests: write
 
 jobs:
-  release:
+  release-please:
+    runs-on: ubuntu-latest
+    outputs:
+      release_created: ${{ steps.release.outputs.release_created }}
+      tag_name: ${{ steps.release.outputs.tag_name }}
+    steps:
+      - uses: googleapis/release-please-action@v4
+        id: release
+        with:
+          config-file: release-please-config.json
+          manifest-file: .release-please-manifest.json
+
+  assets:
+    needs: release-please
+    if: ${{ needs.release-please.outputs.release_created == 'true' }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
@@ -26,8 +48,10 @@ jobs:
       - name: Unit tests
         run: bun test
       - name: Build four-target binaries with version stamp (ADR-0001 §3, §7)
+        env:
+          TAG_NAME: ${{ needs.release-please.outputs.tag_name }}
         run: |
-          VERSION="${GITHUB_REF_NAME#v}"
+          VERSION="${TAG_NAME#v}"
           mkdir -p dist
           for target in darwin-arm64 darwin-x64 linux-x64 linux-arm64; do
             bun build --compile --target="bun-${target}" \
@@ -42,14 +66,14 @@ jobs:
           for f in rundown-darwin-arm64 rundown-darwin-x64 rundown-linux-x64 rundown-linux-arm64; do
             sha256sum "$f" > "$f.sha256"
           done
-      - name: Create GitHub Release (9 assets — ADR-0001 §2, §8)
+      - name: Upload 9 assets onto the release release-please created (ADR-0001 §2, §8)
         env:
           GH_TOKEN: ${{ github.token }}
+          TAG_NAME: ${{ needs.release-please.outputs.tag_name }}
         run: |
-          gh release create "$GITHUB_REF_NAME" \
+          gh release upload "$TAG_NAME" \
             dist/rundown-darwin-arm64 dist/rundown-darwin-arm64.sha256 \
             dist/rundown-darwin-x64 dist/rundown-darwin-x64.sha256 \
             dist/rundown-linux-x64 dist/rundown-linux-x64.sha256 \
             dist/rundown-linux-arm64 dist/rundown-linux-arm64.sha256 \
-            install.sh \
-            --generate-notes
+            install.sh
