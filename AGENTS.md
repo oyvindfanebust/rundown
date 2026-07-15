@@ -51,6 +51,19 @@ What this means for an agent driving the CLI:
 - Never add tools to the Summarizer, and never add an `unwrap()` call site outside `plan.ts`'s
   prompt assembly — the unwrap sites are the trust-boundary audit.
 
+## Writing conventions
+
+Docs and comments use a plain, declarative voice. When you add or edit prose (README, ADRs,
+CONTEXT, this file, the skills), match it — see PR #3, the language-cleanup pass:
+
+- No bold for emphasis. Reserve `**bold**` for genuine term labels (like the Structural / In-code /
+  Behavioral list above); state everything else plainly.
+- No rhetorical flourish or metaphor (crown jewel, paved path, funnel, ritual, load-bearing).
+- Avoid em-dash appositive chains and scare-quotes for emphasis; hyphenate compound adjectives
+  (sole-unwrap-site) instead of quoting them.
+- Drop throat-clearing openers (Concretely, Importantly, Note that) — state the fact.
+- Keep only / never / always for contract weight, not emphasis.
+
 ## Agent skills
 
 - **Domain docs** — Single-context: one `CONTEXT.md` + `docs/adr/` at the repo root. See `docs/agents/domain.md`.
