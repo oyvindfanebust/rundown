@@ -13,3 +13,17 @@
 ### Documentation
 
 * restore plain voice in ADR-0012 and eval comments ([#10](https://github.com/oyvindfanebust/rundown/issues/10)) ([0463a9f](https://github.com/oyvindfanebust/rundown/commit/0463a9f25b29804ca8618d63763645b18d3f1d7a))
+
+## [0.1.1](https://github.com/oyvindfanebust/rundown/compare/v0.1.0...v0.1.1) (2026-07-15)
+
+
+### Documentation
+
+* trim ADR cross-references from README and SECURITY ([#6](https://github.com/oyvindfanebust/rundown/issues/6)) ([9b0aaa8](https://github.com/oyvindfanebust/rundown/commit/9b0aaa812aa2a50fdc526d701a8894e9ed409032))
+
+## [0.1.0](https://github.com/oyvindfanebust/rundown/releases/tag/v0.1.0) (2026-07-14)
+
+
+### Features
+
+* initial public release of rundown ([f70cb8c](https://github.com/oyvindfanebust/rundown/commit/f70cb8c5125384760551b8d42613076e0f2bf2bc))
