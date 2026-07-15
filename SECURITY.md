@@ -91,10 +91,9 @@ to undo the reverse.
 
 ## Supported versions
 
-Only the latest release is supported. `rundown` self-updates (see
-[ADR-0001](docs/adr/0001-package-rundown-cli-as-compiled-binaries-in-skills.md)), so every user
-can move to the latest version with no more effort than running the CLI again. There's no
-backport policy and no support matrix for older releases — upgrading is always the fix.
+Only the latest release is supported. `rundown` self-updates, so every user can move to the
+latest version with no more effort than running the CLI again. There's no backport policy and no
+support matrix for older releases — upgrading is always the fix.
 
 ## Scope and safe harbor
 
