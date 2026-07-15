@@ -18,6 +18,9 @@ Bun, not Node. `bun install` for deps. This is a production setup, not a "no bui
   `Untrusted<T>` sole-unwrap-site guarantee is a dev-time typecheck (ADR-0004 §3).
 - Unit tests (`bun test`) cover every component.
 - E2E acceptance (`scripts/e2e.sh`) drives the real CLI against live Graph; run it to dogfood.
+- Brief-quality evals (`scripts/evals.sh`) drive the real Summarizer over synthetic fixture
+  bundles (`evals/`) — the manual gate before any `DEFAULT_MODEL` bump or prompt change
+  (ADR-0012). Not in CI; `bun test` skips them unless `RUNDOWN_EVALS=1`.
 - CI (`.github/workflows/ci.yml`) runs typecheck + unit tests on push.
 
 ## The rule that matters
