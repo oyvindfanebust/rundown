@@ -26,9 +26,20 @@ jobs:
       release_created: ${{ steps.release.outputs.release_created }}
       tag_name: ${{ steps.release.outputs.tag_name }}
     steps:
+      # Author the release PR as a GitHub App rather than github-actions[bot]. A
+      # PR from the default token stalls on "approve workflows to run" before its
+      # required CI check can report; a PR from the App triggers CI without that
+      # gate. App id lives in the RELEASE_PLEASE_APP_ID variable, the private key
+      # in the RELEASE_PLEASE_APP_PRIVATE_KEY secret.
+      - uses: actions/create-github-app-token@v2
+        id: app-token
+        with:
+          app-id: ${{ vars.RELEASE_PLEASE_APP_ID }}
+          private-key: ${{ secrets.RELEASE_PLEASE_APP_PRIVATE_KEY }}
       - uses: googleapis/release-please-action@v4
         id: release
         with:
+          token: ${{ steps.app-token.outputs.token }}
           config-file: release-please-config.json
           manifest-file: .release-please-manifest.json
 
