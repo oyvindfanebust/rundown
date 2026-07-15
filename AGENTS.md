@@ -23,6 +23,24 @@ Bun, not Node. `bun install` for deps. This is a production setup, not a "no bui
   (ADR-0012). Not in CI; `bun test` skips them unless `RUNDOWN_EVALS=1`.
 - CI (`.github/workflows/ci.yml`) runs typecheck + unit tests on push.
 
+## Releasing & commits
+
+Releases are automated by release-please (ADR-0001 §7–§8): it reads commit messages to pick the
+version bump and write `CHANGELOG.md`, so **commits must follow
+[Conventional Commits](https://www.conventionalcommits.org)**.
+
+- `feat:` → minor, `fix:` → patch, a `!` (`feat!:`) or a `BREAKING CHANGE:` footer → major.
+- `chore:`, `docs:`, `ci:`, `refactor:`, `test:`, `perf:` trigger no release (recorded, most hidden
+  from the changelog). A commit whose prefix isn't in the convention is invisible to versioning, so
+  the release can stall or under-bump. Choose `feat` vs `fix` vs breaking by user-facing impact, not
+  code size.
+- This repo squash-merges PRs, so the **PR title** becomes the commit on `main` — that title is the
+  line release-please reads. Give every PR a Conventional Commit title.
+
+The flow: push Conventional Commits to `main` → release-please keeps an open "release PR" showing the
+computed bump + changelog → merging it cuts the `vX.Y.Z` tag and GitHub Release and uploads the
+binaries. Never hand-create a `vX.Y.Z` tag — that is release-please's job.
+
 ## The rule that matters
 
 Untrusted source content — meeting titles, email/message bodies, issue titles from any source
