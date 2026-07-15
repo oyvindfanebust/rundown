@@ -56,8 +56,8 @@ What this means for an agent driving the CLI:
 Docs and comments use a plain, declarative voice. When you add or edit prose (README, ADRs,
 CONTEXT, this file, the skills), match it — see PR #3, the language-cleanup pass:
 
-- No bold for emphasis. Reserve `**bold**` for genuine term labels (like the Structural / In-code /
-  Behavioral list above); state everything else plainly.
+- No bold, italics, or caps for emphasis. Reserve `**bold**` for genuine term labels (like the
+  Structural / In-code / Behavioral list above); state everything else plainly.
 - No rhetorical flourish or metaphor (crown jewel, paved path, funnel, ritual, load-bearing).
 - Avoid em-dash appositive chains and scare-quotes for emphasis; hyphenate compound adjectives
   (sole-unwrap-site) instead of quoting them.

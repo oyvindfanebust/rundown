@@ -1,9 +1,9 @@
 #!/bin/sh
-# Brief-quality eval gate (ADR-0012): drive the REAL summarizer over the synthetic
+# Brief-quality eval gate (ADR-0012): drive the real summarizer over the synthetic
 # fixture corpus in evals/ and assert Brief quality. Calls the live Anthropic API
-# (needs ANTHROPIC_API_KEY), so it is NOT run in CI — run it manually before merging
+# (needs ANTHROPIC_API_KEY), so it is not run in CI — run it manually before merging
 # any DEFAULT_MODEL bump or prompt change (summarize.ts hardening, plan.ts task
-# prose). To eval a CANDIDATE model before changing the default:
+# prose). To eval a candidate model before changing the default:
 #   RUNDOWN_MODEL=claude-x-y scripts/evals.sh
 set -e
 

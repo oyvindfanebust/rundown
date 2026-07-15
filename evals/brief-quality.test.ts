@@ -1,13 +1,13 @@
 // The Brief-quality eval runner (ADR-0012): drives each fixture bundle through the
-// REAL plan() — real renderBundle, real prompt assembly, real LIVE summarize(), real
+// real plan() — real renderBundle, real prompt assembly, real live summarize(), real
 // verifyEvidence/defangOutput — and applies the fixture's assertions to the emitted
 // Brief. The unit under test is production end-to-end; the only fake thing is the
 // source data.
 //
-// NOT part of the deterministic gate: without RUNDOWN_EVALS=1 every test here is
+// Not part of the deterministic gate: without RUNDOWN_EVALS=1 every test here is
 // skipped, so plain `bun test` (and CI) makes zero API calls. Run via
 // `scripts/evals.sh` — manually, before merging any DEFAULT_MODEL bump or prompt
-// change. Set RUNDOWN_MODEL to eval a CANDIDATE model before changing the default.
+// change. Set RUNDOWN_MODEL to eval a candidate model before changing the default.
 //
 // Flake policy (ADR-0012 §3): each fixture runs RUNS_PER_FIXTURE times and every run
 // must pass. Assertions are anchored on evidence quotes / kinds / counts (near-
