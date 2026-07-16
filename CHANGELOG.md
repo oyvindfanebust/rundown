@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.1.5](https://github.com/oyvindfanebust/rundown/compare/v0.1.4...v0.1.5) (2026-07-15)
+
+
+### Refactors
+
+* centralize the status-only Source error scrub (ADR-0004 §5) ([#24](https://github.com/oyvindfanebust/rundown/issues/24)) ([7945ebd](https://github.com/oyvindfanebust/rundown/commit/7945ebdf4514cb5bab83accffd30c41fe117593a))
+
+## [0.1.4](https://github.com/oyvindfanebust/rundown/compare/v0.1.3...v0.1.4) (2026-07-15)
+
+
+### Documentation
+
+* backfill CHANGELOG for v0.1.0 and v0.1.1 ([#14](https://github.com/oyvindfanebust/rundown/issues/14)) ([1206828](https://github.com/oyvindfanebust/rundown/commit/12068285fee3d4a60a9df269d50ef88e82465368))
+
 ## [0.1.3](https://github.com/oyvindfanebust/rundown/compare/v0.1.2...v0.1.3) (2026-07-15)
 
 

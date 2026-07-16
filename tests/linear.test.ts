@@ -2,7 +2,7 @@ import { test, expect, describe } from "bun:test";
 import { untrusted, unwrap } from "../src/trust.ts";
 import type { NormalizedItem } from "../src/domain.ts";
 import type { Source } from "../src/sources/source.ts";
-import { LinearSource, scrubbedTransportError, type LinearRequest } from "../src/sources/linear/index.ts";
+import { LinearSource, type LinearRequest } from "../src/sources/linear/index.ts";
 
 const WINDOW = { from: "2026-07-06T00:00:00.000Z", to: "2026-07-13T00:00:00.000Z" };
 
@@ -302,40 +302,8 @@ function filterIsStanding(variables: unknown): boolean {
 }
 
 // ── transport errors scrub the backend response body ─────────────────────────
-// The default transport wraps @linear/sdk's rawRequest, which throws a
-// LinearError whose message echoes the backend GraphQL error text (and whose
-// .raw stringifies the full response + request). That error propagates through
-// read() to cli.ts fail() → stderr, an agent-readable channel: it must carry
-// only a generic description + HTTP status, no response-body bytes (ADR-0004 §5).
-
-describe("Linear transport error scrubbing", () => {
-  test("reduces a LinearError to status only — no backend message, data, or query", () => {
-    // Shape mirrors @linear/sdk's LinearError: .status + backend content fields.
-    const err = Object.assign(new Error("Entity not found - INJECTED backend text"), {
-      status: 400,
-      data: { secret: "leak-me" },
-      query: "query Issues { issues { nodes { title } } }",
-      errors: [{ message: "INJECTED backend text" }],
-    });
-    const scrubbed = scrubbedTransportError(err);
-    expect(scrubbed.message).toContain("400");
-    expect(scrubbed.message).not.toContain("INJECTED");
-    expect(scrubbed.message).not.toContain("leak-me");
-    expect(scrubbed.message).not.toContain("issues");
-  });
-
-  test("reads the HTTP status from a raw GraphQLClientError (.response.status)", () => {
-    const err = Object.assign(new Error('GraphQL Error: {"response":{"data":"leak"}}'), {
-      response: { status: 429, data: "leak" },
-    });
-    const scrubbed = scrubbedTransportError(err);
-    expect(scrubbed.message).toContain("429");
-    expect(scrubbed.message).not.toContain("leak");
-  });
-
-  test("falls back to a generic message when no status is present", () => {
-    const scrubbed = scrubbedTransportError(new Error("some raw backend detail"));
-    expect(scrubbed.message.length).toBeGreaterThan(0);
-    expect(scrubbed.message).not.toContain("backend detail");
-  });
-});
+// The status-only scrub of a Linear transport error is centralized in
+// statusOnlyError (sources/errors.ts) and tested exhaustively there
+// (tests/errors.test.ts), across both the LinearError (.status) and raw
+// GraphQLClientError (.response.status) shapes. defaultTransport's catch is a
+// one-liner over that helper, so the scrub is not re-tested here (ADR-0004 §5).

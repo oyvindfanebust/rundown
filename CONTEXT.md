@@ -374,6 +374,12 @@ unwrap site. Behavioral — the summarizer's output (the brief) is
 instructions. The only trusted data anywhere is the structural fields (`source`, `kind`,
 `timestamp`, `end`, derived `bucket`, manifest scalars).
 
+The output-side corollary — a failed remote request must throw only its HTTP status, never a
+backend-authored body byte, since the message reaches stderr, an agent-readable channel (ADR-0004
+§5) — is centralized in `statusOnlyError` (`src/sources/errors.ts`); every remote source throws
+through it. The OAuth-redirect scrub (`redirectError` in `sources/graph/auth.ts`) shares the motive
+but validates a code against an allowlist rather than extracting a status, so it stays local.
+
 ### Untrusted&lt;T&gt;
 
 The branded wrapper type every untrusted field carries (`id`, `url`, `title`, all of `extras`),
