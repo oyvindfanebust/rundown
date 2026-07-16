@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.2.0](https://github.com/oyvindfanebust/rundown/compare/v0.1.5...v0.2.0) (2026-07-16)
+
+
+### Features
+
+* add `--source` flag to narrow a brief to a subset of configured sources ([#29](https://github.com/oyvindfanebust/rundown/issues/29)) ([0afedaa](https://github.com/oyvindfanebust/rundown/commit/0afedaa2fd1c1820fc4caf6dc5ad18429a830fb8))
+
 ## [0.1.5](https://github.com/oyvindfanebust/rundown/compare/v0.1.4...v0.1.5) (2026-07-15)
 
 
