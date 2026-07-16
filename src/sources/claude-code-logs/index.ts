@@ -27,9 +27,12 @@ import { join } from "node:path";
 import { homedir } from "node:os";
 import type { NormalizedItem, Window } from "../../domain.ts";
 import { normalizer, text } from "../normalize.ts";
-import type { Source, SourceStatus } from "../source.ts";
+import type { OptionSchema, Source, SourceStatus } from "../source.ts";
 
 const KEY = "claude-code-logs";
+
+/** No configurable options — a local, no-auth source. Exposed on the static descriptor (registry.ts). */
+export const CLAUDE_CODE_LOGS_OPTIONS: OptionSchema = {};
 
 // The source's one normalizer — both read paths emit through it.
 const normalize = normalizer(KEY, { untitled: "(untitled session)" });
@@ -180,7 +183,6 @@ function parseTranscript(file: string): ParsedTranscript | null {
 export class ClaudeCodeLogsSource implements Source {
   readonly key = KEY;
   readonly label = "Claude Code session logs";
-  readonly options = {};
 
   private readonly root: string;
   private readonly birthtimeOf: (absPath: string) => Date;
@@ -195,7 +197,7 @@ export class ClaudeCodeLogsSource implements Source {
     return { state: "ready" };
   }
 
-  async read(window: Window, _options: Record<string, unknown> = {}): Promise<NormalizedItem[]> {
+  async read(window: Window): Promise<NormalizedItem[]> {
     if (!existsSync(this.root)) return [];
     const items: NormalizedItem[] = [];
     for (const entry of readdirSync(this.root, { withFileTypes: true })) {

@@ -13,15 +13,15 @@ import { join } from "node:path";
 import { untrusted } from "../src/trust.ts";
 import { resolveSelector, parseWindowSelector } from "../src/temporal.ts";
 import type { NormalizedItem, Window } from "../src/domain.ts";
-import type { Source } from "../src/sources/source.ts";
+import type { Source, SourceDescriptor } from "../src/sources/source.ts";
 
-// buildBrief is the composition root (ADR-0008 §2): resolve config → aggregate →
-// plan, threading ONE shared `now`. It wires in the module-global `registry`
-// (ADR-0008 §5: the real one in production), so we mock that module to inject a
-// fake Source, and mock the Summarizer so the items>0 path needs no network.
-// Both mocks are safe to install here: no other test file imports registry.ts,
-// and bun resets module mocks between test files (plan.test.ts + summarize.test.ts
-// already rely on that isolation).
+// buildBrief is the composition root (ADR-0008 §2): resolve config → build the
+// selected sources → aggregate → plan, threading ONE shared `now`. It wires in
+// the module-global registry (ADR-0008 §5: the real one in production), so we
+// mock that module to inject a fake descriptor + buildRegistry, and mock the
+// Summarizer so the items>0 path needs no network. Both mocks are safe to install
+// here: no other test file imports registry.ts, and bun resets module mocks
+// between test files (plan.test.ts + summarize.test.ts already rely on that).
 
 // A single fake source driven by module-level state, so each test sets what it
 // returns and can read back what `read()` was handed — the shared clock reaches
@@ -31,7 +31,6 @@ let lastReadWindow: Window | undefined;
 const fake: Source = {
   key: "fake",
   label: "Fake",
-  options: {},
   async status() {
     return { state: "ready" };
   },
@@ -41,8 +40,17 @@ const fake: Source = {
   },
 };
 
+const fakeDescriptor: SourceDescriptor = {
+  key: "fake",
+  label: "Fake",
+  interactive: false,
+  options: {},
+  build: () => fake,
+};
+
 mock.module("../src/sources/registry.ts", () => ({
-  registry: { fake },
+  descriptors: { fake: fakeDescriptor },
+  buildRegistry: () => ({ fake }),
   registeredKeys: () => ["fake"],
 }));
 

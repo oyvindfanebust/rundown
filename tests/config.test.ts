@@ -4,13 +4,26 @@ import { dirname, join } from "node:path";
 import { tmpdir } from "node:os";
 import { stripJsonc, parseConfig, resolveConfig, configPath, configDir, ConfigError } from "../src/config.ts";
 import { resolveSelector, parseWindowSelector } from "../src/temporal.ts";
-import type { Source, Sources } from "../src/sources/source.ts";
+import type { Source, SourceDescriptor, Descriptors } from "../src/sources/source.ts";
 
-// A fake source lookup injected into parseConfig — validation is tested against
-// this, not the real registry, so the seam (not the shipped sources) is under test.
-const fakeGraph: Source = {
+// A fake descriptor map injected into parseConfig/resolveConfig — validation runs
+// against the static schemas here, not the real registry, so the seam (not the
+// shipped sources) is under test. `build` returns a trivial always-ready source;
+// config validation never calls it, but it completes the SourceDescriptor shape.
+const readySource = (key: string, label: string): Source => ({
+  key,
+  label,
+  async read() {
+    return [];
+  },
+  async status() {
+    return { state: "ready" };
+  },
+});
+const fakeGraph: SourceDescriptor = {
   key: "graph",
   label: "Fake Graph",
+  interactive: true,
   options: {
     kinds: {
       type: "string[]",
@@ -18,25 +31,16 @@ const fakeGraph: Source = {
       description: "Which kinds to pull.",
     },
   },
-  async read() {
-    return [];
-  },
-  async status() {
-    return { state: "ready" };
-  },
+  build: () => readySource("graph", "Fake Graph"),
 };
-const fakeLinear: Source = {
+const fakeLinear: SourceDescriptor = {
   key: "linear",
   label: "Fake Linear",
+  interactive: false,
   options: {},
-  async read() {
-    return [];
-  },
-  async status() {
-    return { state: "ready" };
-  },
+  build: () => readySource("linear", "Fake Linear"),
 };
-const sources: Sources = { graph: fakeGraph, linear: fakeLinear };
+const descriptors: Descriptors = { graph: fakeGraph, linear: fakeLinear };
 
 describe("stripJsonc", () => {
   test("removes line and block comments", () => {
@@ -93,46 +97,46 @@ describe("configDir", () => {
 
 describe("parseConfig", () => {
   test("accepts a minimal valid config", () => {
-    const parsed = parseConfig(`{"sources": {"graph": {}}}`, sources);
+    const parsed = parseConfig(`{"sources": {"graph": {}}}`, descriptors);
     expect(parsed.selection).toEqual([{ sourceKey: "graph", options: {} }]);
   });
 
   test("accepts graph kinds option", () => {
-    const parsed = parseConfig(`{"sources": {"graph": {"kinds": ["event"]}}}`, sources);
+    const parsed = parseConfig(`{"sources": {"graph": {"kinds": ["event"]}}}`, descriptors);
     expect(parsed.selection[0]!.options).toEqual({ kinds: ["event"] });
   });
 
   test("rejects a missing sources field", () => {
-    expect(() => parseConfig(`{}`, sources)).toThrow(ConfigError);
+    expect(() => parseConfig(`{}`, descriptors)).toThrow(ConfigError);
   });
 
   test("rejects an empty sources map", () => {
-    expect(() => parseConfig(`{"sources": {}}`, sources)).toThrow(/at least one source/);
+    expect(() => parseConfig(`{"sources": {}}`, descriptors)).toThrow(/at least one source/);
   });
 
   test("rejects an unknown source key", () => {
-    expect(() => parseConfig(`{"sources": {"slack": {}}}`, sources)).toThrow(/Unknown source/);
+    expect(() => parseConfig(`{"sources": {"slack": {}}}`, descriptors)).toThrow(/Unknown source/);
   });
 
   test("rejects an unknown option with a did-you-mean", () => {
-    expect(() => parseConfig(`{"sources": {"graph": {"kind": ["event"]}}}`, sources)).toThrow(/did you mean "kinds"/);
+    expect(() => parseConfig(`{"sources": {"graph": {"kind": ["event"]}}}`, descriptors)).toThrow(/did you mean "kinds"/);
   });
 
   test("rejects an out-of-enum kind", () => {
-    expect(() => parseConfig(`{"sources": {"graph": {"kinds": ["chat"]}}}`, sources)).toThrow(/not one of/);
+    expect(() => parseConfig(`{"sources": {"graph": {"kinds": ["chat"]}}}`, descriptors)).toThrow(/not one of/);
   });
 
   test("rejects an invalid timezone", () => {
-    expect(() => parseConfig(`{"timezone": "Mars/Olympus", "sources": {"graph": {}}}`, sources)).toThrow(/timezone/);
+    expect(() => parseConfig(`{"timezone": "Mars/Olympus", "sources": {"graph": {}}}`, descriptors)).toThrow(/timezone/);
   });
 
   test("accepts a last-week window span", () => {
-    const parsed = parseConfig(`{"window": "last-week", "sources": {"graph": {}}}`, sources);
+    const parsed = parseConfig(`{"window": "last-week", "sources": {"graph": {}}}`, descriptors);
     expect(parsed.window).toBe("last-week");
   });
 
   test("rejects an invalid window span", () => {
-    expect(() => parseConfig(`{"window": "yesterday", "sources": {"graph": {}}}`, sources)).toThrow(/window/);
+    expect(() => parseConfig(`{"window": "yesterday", "sources": {"graph": {}}}`, descriptors)).toThrow(/window/);
   });
 });
 
@@ -163,21 +167,21 @@ describe("resolveConfig", () => {
 
   test("absent window falls back to this-week", async () => {
     writeConfig(`{"timezone":"UTC","sources":{"graph":{}}}`);
-    const cfg = await resolveConfig(sources, { now: NOW });
+    const cfg = await resolveConfig(descriptors, { now: NOW });
     expect(cfg.windowSpan).toBe("this-week");
     expect(cfg.window).toEqual(resolveSelector({ kind: "span", span: "this-week" }, "UTC", NOW));
   });
 
   test("--window override takes precedence over the config default", async () => {
     writeConfig(`{"timezone":"UTC","window":"this-week","sources":{"graph":{}}}`);
-    const cfg = await resolveConfig(sources, { now: NOW, windowOverride: { kind: "span", span: "today" } });
+    const cfg = await resolveConfig(descriptors, { now: NOW, windowOverride: { kind: "span", span: "today" } });
     expect(cfg.windowSpan).toBe("today");
     expect(cfg.window).toEqual(resolveSelector({ kind: "span", span: "today" }, "UTC", NOW));
   });
 
   test("windowSpan label is the explicit range literal for a range override", async () => {
     writeConfig(`{"timezone":"UTC","sources":{"graph":{}}}`);
-    const cfg = await resolveConfig(sources, {
+    const cfg = await resolveConfig(descriptors, {
       now: NOW,
       windowOverride: parseWindowSelector("2026-07-06..2026-07-12"),
     });
@@ -189,14 +193,14 @@ describe("resolveConfig", () => {
     // A single-day window: inclusive 2026-07-10 → exclusive `to` at 2026-07-11T00:00Z.
     const windowOverride = parseWindowSelector("2026-07-10");
 
-    const atBoundary = await resolveConfig(sources, {
+    const atBoundary = await resolveConfig(descriptors, {
       now: new Date("2026-07-11T00:00:00.000Z"),
       windowOverride,
     });
     expect(atBoundary.window.to).toBe("2026-07-11T00:00:00.000Z");
     expect(atBoundary.windowIsPast).toBe(true); // to <= now → the window has closed
 
-    const justBefore = await resolveConfig(sources, {
+    const justBefore = await resolveConfig(descriptors, {
       now: new Date("2026-07-10T23:59:59.999Z"),
       windowOverride,
     });
@@ -210,25 +214,25 @@ describe("resolveConfig", () => {
 
     test("absent filter runs the full configured selection", async () => {
       writeConfig(BOTH);
-      const cfg = await resolveConfig(sources, { now: NOW });
+      const cfg = await resolveConfig(descriptors, { now: NOW });
       expect(cfg.selection.map((s) => s.sourceKey)).toEqual(["graph", "linear"]);
     });
 
     test("empty filter is treated as no narrowing", async () => {
       writeConfig(BOTH);
-      const cfg = await resolveConfig(sources, { now: NOW, sourceFilter: [] });
+      const cfg = await resolveConfig(descriptors, { now: NOW, sourceFilter: [] });
       expect(cfg.selection.map((s) => s.sourceKey)).toEqual(["graph", "linear"]);
     });
 
     test("narrows to the named subset", async () => {
       writeConfig(BOTH);
-      const cfg = await resolveConfig(sources, { now: NOW, sourceFilter: ["linear"] });
+      const cfg = await resolveConfig(descriptors, { now: NOW, sourceFilter: ["linear"] });
       expect(cfg.selection.map((s) => s.sourceKey)).toEqual(["linear"]);
     });
 
     test("a name not in the configured selection is a hard error", async () => {
       writeConfig(`{"timezone":"UTC","sources":{"graph":{}}}`);
-      await expect(resolveConfig(sources, { now: NOW, sourceFilter: ["linear"] })).rejects.toThrow(
+      await expect(resolveConfig(descriptors, { now: NOW, sourceFilter: ["linear"] })).rejects.toThrow(
         /not a configured source/,
       );
     });
@@ -237,7 +241,7 @@ describe("resolveConfig", () => {
       // linear is registry-known but not in this config's selection → still an error:
       // the flag narrows the configured selection, it never reaches past config.
       writeConfig(`{"timezone":"UTC","sources":{"graph":{}}}`);
-      await expect(resolveConfig(sources, { now: NOW, sourceFilter: ["graph", "linear"] })).rejects.toThrow(
+      await expect(resolveConfig(descriptors, { now: NOW, sourceFilter: ["graph", "linear"] })).rejects.toThrow(
         /"linear" is not a configured source/,
       );
     });

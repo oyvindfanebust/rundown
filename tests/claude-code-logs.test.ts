@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { untrusted, unwrap } from "../src/trust.ts";
 import type { NormalizedItem } from "../src/domain.ts";
 import type { Source } from "../src/sources/source.ts";
-import { ClaudeCodeLogsSource } from "../src/sources/claude-code-logs/index.ts";
+import { ClaudeCodeLogsSource, CLAUDE_CODE_LOGS_OPTIONS } from "../src/sources/claude-code-logs/index.ts";
 
 // The window used across the fixtures: a single week. "in-window" starts land on
 // 2026-07-09; "out-of-window" starts land in June.
@@ -106,7 +106,7 @@ function source(): ClaudeCodeLogsSource {
 }
 
 async function read(): Promise<NormalizedItem[]> {
-  return source().read(WINDOW, {});
+  return source().read(WINDOW);
 }
 
 // `id` is now a real runtime box, never `===`-comparable across two
@@ -123,7 +123,7 @@ describe("ClaudeCodeLogsSource", () => {
   test("has the declared surface: key, no login, always-ready status, no options", async () => {
     const s: Source = source();
     expect(s.key).toBe("claude-code-logs");
-    expect(s.options).toEqual({});
+    expect(CLAUDE_CODE_LOGS_OPTIONS).toEqual({});
     expect(s.login).toBeUndefined();
     expect(await s.status()).toEqual({ state: "ready" });
   });
@@ -204,6 +204,6 @@ describe("ClaudeCodeLogsSource", () => {
 
   test("empty when the logs root does not exist", async () => {
     const missing = new ClaudeCodeLogsSource(join(root, "nope"), { birthtimeOf: () => new Date(0) });
-    expect(await missing.read(WINDOW, {})).toEqual([]);
+    expect(await missing.read(WINDOW)).toEqual([]);
   });
 });

@@ -116,7 +116,13 @@ Deliberately not in the core:
 - **Config.** Each source declares its credential and option needs so `status()` can answer
   "configured?" and config resolution has a per-source schema to target. Secrets are
   machine-local and env-first (`~/.config/rundown/config.json` section plus env-var fallback, per
-  ADR-0001 §4). Config resolution is composition-root plumbing, not invented here.
+  ADR-0001 §4). Config resolution is composition-root plumbing, not invented here. The option
+  schema is a static property, exposed on the source's descriptor (see
+  [ADR-0008](0008-bounded-context-and-component-architecture.md) §5) so config validation and the
+  `init` template can read it before any instance exists. The resolved per-source config is then
+  injected at construction, so `status()` and `read()` both close over `this.config` rather than
+  taking a per-call `options` argument. A source that reads config needs it in both methods, and
+  `status()` has no per-call argument to carry it, so injection is the one shape that serves both.
 - **Selection.** Not the source's concern. A source owns only a stable name/key (its registry
   key); which sources run is decided upstream by the Aggregator / config resolution.
 - **Timezone.** Not a `read` parameter. Applied when constructing the window ("this week in

@@ -67,10 +67,11 @@ export async function aggregate(
   );
 
   // Read concurrently; any rejection aborts the whole run (fail-hard, no partial bundle).
+  // Each source closes over its injected config (#27), so `read` takes only the window.
   const perSource = await Promise.all(
-    selection.map(async ({ sourceKey, options }) => {
+    selection.map(async ({ sourceKey }) => {
       const source = sources[sourceKey]!;
-      const items = await source.read(window, options);
+      const items = await source.read(window);
       return { sourceKey, items };
     }),
   );

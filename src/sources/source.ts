@@ -115,11 +115,13 @@ export interface Source {
   readonly key: string;
   /** Human-facing label. */
   readonly label: string;
-  /** Declared per-source options — the config-validation + init-template surface. */
-  readonly options: OptionSchema;
 
-  /** The sole data operation. `window` is absolute; `options` are the resolved per-source config. */
-  read(window: Window, options: Record<string, unknown>): Promise<NormalizedItem[]>;
+  /**
+   * The sole data operation. `window` is absolute; the resolved per-source config
+   * is injected at construction (ADR-0002 §5), so `read` closes over `this.config`
+   * rather than taking a per-call `options` argument.
+   */
+  read(window: Window): Promise<NormalizedItem[]>;
 
   /** Optional interactive auth — only sources with interactive login implement it. Returns identity. */
   login?(): Promise<string>;
@@ -127,14 +129,36 @@ export interface Source {
   /**
    * Readiness/identity report — **required**: every source has a meaningful
    * total answer to "can I read you right now?" (a local source: always ready).
+   * Closes over `this.config`, so no per-call argument (config injection, #27).
    */
   status(): Promise<SourceStatus>;
 }
 
 /**
- * A source lookup, keyed by registry key. The seam the Aggregator and config
- * validation accept as a dependency (ADR-0008 §5): the real `registry` in
- * production, an in-memory fake in tests. Injected at the composition root, so
- * no consumer reaches into the module-global registry.
+ * A source lookup, keyed by registry key. The seam the Aggregator accepts as a
+ * dependency (ADR-0008 §5): the `buildRegistry(selection)` output in production
+ * (config-injected instances), an in-memory fake in tests. Injected at the
+ * composition root, so no consumer reaches into the module-global registry.
  */
 export type Sources = Record<string, Source>;
+
+/**
+ * A static source descriptor (ADR-0008 §5, #27): everything about a source that
+ * exists before any config does — its key/label, its option schema (read by
+ * `init` and config validation), whether it has interactive `login`, and a
+ * `build` step that constructs a config-injected instance. The registry is a map
+ * of these; `buildRegistry` composes the selected ones into a {@link Sources}.
+ */
+export interface SourceDescriptor {
+  key: string;
+  label: string;
+  /** Declared per-source options — the config-validation + init-template surface, available without an instance. */
+  options: OptionSchema;
+  /** Whether the source has interactive `login()` — the static declaration read where no instance exists. */
+  interactive: boolean;
+  /** Construct the source with its resolved per-source config injected. */
+  build(options: Record<string, unknown>): Source;
+}
+
+/** The static registry: source key → descriptor. Consumed by config validation, `init`, and `buildRegistry`. */
+export type Descriptors = Record<string, SourceDescriptor>;

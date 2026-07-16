@@ -2,7 +2,7 @@ import { test, expect, describe } from "bun:test";
 import { untrusted, unwrap } from "../src/trust.ts";
 import type { NormalizedItem } from "../src/domain.ts";
 import type { Source } from "../src/sources/source.ts";
-import { LinearSource, type LinearRequest } from "../src/sources/linear/index.ts";
+import { LinearSource, LINEAR_OPTIONS, type LinearRequest } from "../src/sources/linear/index.ts";
 
 const WINDOW = { from: "2026-07-06T00:00:00.000Z", to: "2026-07-13T00:00:00.000Z" };
 
@@ -51,8 +51,8 @@ function fakeTransport(store: Record<string, { standing?: any[]; recent?: any[] 
   };
 }
 
-function source(transport: LinearRequest | null): LinearSource {
-  return new LinearSource({ transport: () => transport });
+function source(transport: LinearRequest | null, options: Record<string, unknown> = {}): LinearSource {
+  return new LinearSource(options, { transport: () => transport });
 }
 
 // `id` is now a real runtime box, never `===`-comparable across two
@@ -71,7 +71,7 @@ describe("LinearSource surface", () => {
     expect(s.key).toBe("linear");
     expect(s.label).toBe("Linear");
     expect(s.login).toBeUndefined(); // absence = non-interactive-auth declaration
-    expect(Object.keys(s.options).sort()).toEqual(["projects", "relationships", "states", "teams"]);
+    expect(Object.keys(LINEAR_OPTIONS).sort()).toEqual(["projects", "relationships", "states", "teams"]);
   });
 });
 
@@ -114,7 +114,7 @@ describe("LinearSource.read mapping", () => {
   test("open + dueDate → UTC end-of-day timestamp; end omitted", async () => {
     const items = await source(
       fakeTransport({ assigned: { standing: [issue({ id: "due", dueDate: "2026-07-20" })] } }),
-    ).read(WINDOW, {});
+    ).read(WINDOW);
     const item = byId(items, "due")!;
     expect(item.timestamp).toBe("2026-07-20T23:59:59Z");
     expect(item.end).toBeUndefined();
@@ -123,7 +123,7 @@ describe("LinearSource.read mapping", () => {
   test("open + undated → timestamp = updatedAt", async () => {
     const items = await source(
       fakeTransport({ assigned: { standing: [issue({ id: "nodue" })] } }),
-    ).read(WINDOW, {});
+    ).read(WINDOW);
     expect(byId(items, "nodue")!.timestamp).toBe("2026-07-10T00:00:00.000Z");
   });
 
@@ -133,7 +133,7 @@ describe("LinearSource.read mapping", () => {
       dueDate: "2026-07-20",
       state: { name: "Done", type: "completed" },
     });
-    const items = await source(fakeTransport({ assigned: { standing: [done] } })).read(WINDOW, {});
+    const items = await source(fakeTransport({ assigned: { standing: [done] } })).read(WINDOW);
     expect(byId(items, "done")!.timestamp).toBe("2026-07-10T00:00:00.000Z");
   });
 
@@ -148,7 +148,7 @@ describe("LinearSource.read mapping", () => {
       dueDate: "2026-07-20",
       labels: { nodes: [{ name: "Feature" }, { name: "Bug" }] },
     });
-    const item = byId(await source(fakeTransport({ assigned: { standing: [full] } })).read(WINDOW, {}), "full")!;
+    const item = byId(await source(fakeTransport({ assigned: { standing: [full] } })).read(WINDOW), "full")!;
     expect(item.source).toBe("linear"); // trusted structural
     expect(item.kind).toBe("issue");
     expect(item.id).toEqual(untrusted("full"));
@@ -173,7 +173,7 @@ describe("LinearSource.read mapping", () => {
   });
 
   test('omits "No priority", empty labels, and unset estimate/description', async () => {
-    const item = byId(await source(fakeTransport({ assigned: { standing: [issue({ id: "bare" })] } })).read(WINDOW, {}), "bare")!;
+    const item = byId(await source(fakeTransport({ assigned: { standing: [issue({ id: "bare" })] } })).read(WINDOW), "bare")!;
     const extras = unwrap(item.extras!) as any;
     expect(extras.priority).toBeUndefined();
     expect(extras.labels).toBeUndefined();
@@ -184,7 +184,7 @@ describe("LinearSource.read mapping", () => {
 
   test("estimate: 0 is a real estimate and survives compaction (accepted delta)", async () => {
     const zero = issue({ id: "zero", estimate: 0 });
-    const item = byId(await source(fakeTransport({ assigned: { standing: [zero] } })).read(WINDOW, {}), "zero")!;
+    const item = byId(await source(fakeTransport({ assigned: { standing: [zero] } })).read(WINDOW), "zero")!;
     expect((unwrap(item.extras!) as any).estimate).toBe(0);
   });
 });
@@ -198,7 +198,7 @@ describe("LinearSource.read union + dedup", () => {
     const C = issue({ id: "C" });
     const items = await source(
       fakeTransport({ assigned: { standing: [A, B], recent: [B, C] } }),
-    ).read(WINDOW, {});
+    ).read(WINDOW);
     // `id` boxes aren't string-coercible for a value-sort anymore (default
     // Array#sort would coerce via the redacted toString(), making it a no-op) — sort
     // by unwrapped value so this stays an order-independent comparison.
@@ -213,7 +213,8 @@ describe("LinearSource.read union + dedup", () => {
         assigned: { standing: [dup] },
         created: { standing: [issue({ ...dup })] },
       }),
-    ).read(WINDOW, { relationships: ["assigned", "created"] });
+      { relationships: ["assigned", "created"] },
+    ).read(WINDOW);
     expect(items).toHaveLength(1);
     expect((unwrap(byId(items, "dup")!.extras!) as any).relationship).toBe("assigned");
   });
@@ -225,12 +226,12 @@ describe("LinearSource.read union + dedup", () => {
       seen.push(relOf((variables as any).filter));
       return { issues: { pageInfo: { hasNextPage: false }, nodes: [] } };
     };
-    await source(transport).read(WINDOW, {});
+    await source(transport).read(WINDOW);
     expect([...new Set(seen)]).toEqual(["assigned"]);
   });
 
   test("read throws when unconfigured (null transport)", async () => {
-    await expect(source(null).read(WINDOW, {})).rejects.toThrow(/LINEAR_API_KEY/);
+    await expect(source(null).read(WINDOW)).rejects.toThrow(/LINEAR_API_KEY/);
   });
 });
 
@@ -244,7 +245,7 @@ describe("LinearSource.read filter", () => {
       filters.push((variables as any).filter);
       return { issues: { pageInfo: { hasNextPage: false }, nodes: [] } };
     };
-    await source(transport).read(WINDOW, {});
+    await source(transport).read(WINDOW);
     expect(filters).toHaveLength(2); // assigned × {standing, recent}
     const standing = filters.find((f) => !f.updatedAt)!;
     const recent = filters.find((f) => f.updatedAt)!;
@@ -260,12 +261,12 @@ describe("LinearSource.read filter", () => {
       filters.push((variables as any).filter);
       return { issues: { pageInfo: { hasNextPage: false }, nodes: [] } };
     };
-    await source(transport).read(WINDOW, {
+    await source(transport, {
       relationships: ["created", "subscribed"],
       states: ["backlog"],
       teams: ["OYV"],
       projects: ["rundown"],
-    });
+    }).read(WINDOW);
     expect(filters.every((f) => f.state.type.in[0] === "backlog")).toBe(true);
     expect(filters.every((f) => f.team.key.in[0] === "OYV")).toBe(true);
     expect(filters.every((f) => f.project.name.in[0] === "rundown")).toBe(true);
@@ -291,7 +292,7 @@ describe("LinearSource.read pagination", () => {
       }
       return { issues: { pageInfo: { hasNextPage: false }, nodes: [] } };
     };
-    const items = await source(transport).read(WINDOW, {});
+    const items = await source(transport).read(WINDOW);
     // Sort by unwrapped value (see the dedup test above for why).
     expect(items.map((i) => unwrap(i.id)).sort()).toEqual(["p1", "p2"]);
   });
