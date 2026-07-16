@@ -2,7 +2,7 @@
 // and own emission (Brief JSON → stdout, errors → stderr, exit codes). No domain
 // logic lives here.
 
-import { parseArgs } from "node:util";
+import { parseArgs, type ParseArgsConfig } from "node:util";
 import { existsSync } from "node:fs";
 import { mkdir, writeFile } from "node:fs/promises";
 import { dirname } from "node:path";
@@ -250,19 +250,25 @@ if (command === "--version" || command === "-v") {
   process.exit(0);
 }
 
-const { values, positionals } = parseArgs({
-  args: rest,
-  options: {
-    window: { type: "string" },
-    // Repeatable: `--source graph --source linear` narrows this run to a subset
-    // of the configured sources. Absent = run the full configured selection.
-    source: { type: "string", multiple: true },
-  },
-  allowPositionals: true,
-});
+// Options are parsed per command, not once globally: each command declares only
+// the flags it accepts, so a flag a command doesn't own is a hard error rather
+// than silently ignored (issue #30). parseArgs is strict, so it throws on any
+// undeclared flag; parseCommandArgs translates that into a clean fail() naming
+// the command. Only `brief` accepts flags today (--window, --source); the rest
+// accept none (login still takes its optional <source> positional).
+function parseCommandArgs<const T extends ParseArgsConfig["options"]>(name: string, options: T) {
+  try {
+    return parseArgs({ args: rest, options, allowPositionals: true });
+  } catch (e) {
+    if (e instanceof Error && "code" in e && typeof e.code === "string" && e.code.startsWith("ERR_PARSE_ARGS")) {
+      const m = /'(--?[^']+)'/.exec(e.message);
+      fail(m ? `rundown ${name}: option ${m[1]} is not valid here` : `rundown ${name}: ${e.message}`);
+    }
+    throw e;
+  }
+}
 
-function parseWindow(): WindowSelector | undefined {
-  const w = values.window;
+function parseWindow(w: string | undefined): WindowSelector | undefined {
   if (w === undefined) return undefined;
   try {
     return parseWindowSelector(w);
@@ -292,16 +298,27 @@ Source:
 
 try {
   switch (command) {
-    case "brief":
-      await cmdBrief(parseWindow(), values.source);
+    case "brief": {
+      // Repeatable --source (`--source graph --source linear`) narrows this run
+      // to a subset of the configured sources; absent = the full selection.
+      const { values } = parseCommandArgs("brief", {
+        window: { type: "string" },
+        source: { type: "string", multiple: true },
+      });
+      await cmdBrief(parseWindow(values.window), values.source);
       break;
-    case "login":
+    }
+    case "login": {
+      const { positionals } = parseCommandArgs("login", {});
       await cmdLogin(positionals[0]);
       break;
+    }
     case "status":
+      parseCommandArgs("status", {});
       await cmdStatus();
       break;
     case "init":
+      parseCommandArgs("init", {});
       await cmdInit();
       break;
     default:
