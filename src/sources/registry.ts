@@ -12,6 +12,7 @@ import type { Selection } from "../config.ts";
 import { GraphSource, GRAPH_OPTIONS } from "./graph/index.ts";
 import { ClaudeCodeLogsSource, CLAUDE_CODE_LOGS_OPTIONS } from "./claude-code-logs/index.ts";
 import { LinearSource, LINEAR_OPTIONS } from "./linear/index.ts";
+import { SlackSource, SLACK_OPTIONS } from "./slack/index.ts";
 
 export const descriptors: Descriptors = {
   graph: {
@@ -34,6 +35,13 @@ export const descriptors: Descriptors = {
     options: LINEAR_OPTIONS,
     interactive: false,
     build: (options) => new LinearSource(options),
+  },
+  slack: {
+    key: "slack",
+    label: "Slack",
+    options: SLACK_OPTIONS,
+    interactive: true,
+    build: (options) => new SlackSource(options),
   },
 };
 

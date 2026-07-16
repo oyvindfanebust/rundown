@@ -7,9 +7,9 @@ up, and what you've been working on. `rundown` reads your work systems, has a sa
 call summarize them, and prints a structured Brief as JSON on stdout. A coding agent installs the
 `rundown` skill and drives it on demand; landing and rendering the Brief are the agent's job.
 
-Today `rundown` reads three sources: Microsoft Graph (calendar and mail), Linear (issues you're
-involved in), and Claude Code logs (local session transcripts). Slack and Jira can be added later
-against the same abstraction.
+Today `rundown` reads four sources: Microsoft Graph (calendar and mail), Linear (issues you're
+involved in), Slack (messages you were part of), and Claude Code logs (local session transcripts).
+Jira can be added later against the same abstraction.
 
 ## The trust boundary
 
@@ -36,7 +36,7 @@ The full enforcement model — structural, in-code (`Untrusted<T>`), and behavio
 `rundown` is one bounded context with a single external surface, the CLI. Inside are four
 components (see [`CONTEXT.md`](CONTEXT.md)):
 
-- **Sources** — read-only adapters, one per backend/auth boundary (Graph, Linear, Claude Code logs).
+- **Sources** — read-only adapters, one per backend/auth boundary (Graph, Linear, Slack, Claude Code logs).
 - **Aggregator** — pulls the selected sources concurrently into one normalized, bucketed Bundle.
 - **Summarizer** — the tool-less Anthropic call; the only place untrusted content meets a model.
 - **Planner** — turns the Bundle into a plan-my-week Brief.
@@ -115,6 +115,26 @@ Linear doesn't use `rundown login`; the API key alone is the credential:
 Note that some workspaces disable personal API keys by policy. In that case the Linear source is
 unavailable until the policy allows it. OAuth (via the same `login()` interface Graph already
 uses) is the planned way around this.
+
+### Phase 1: Slack
+
+Slack uses `rundown login`, like Graph. Register one app once for the whole workspace:
+
+1. At [api.slack.com/apps](https://api.slack.com/apps), create an app in your workspace.
+2. Under **OAuth & Permissions**, add a **redirect URL** of `http://localhost:53912` — the loopback
+   address `rundown login` listens on.
+3. Under **User Token Scopes** (not bot scopes), add `search:read` and `users:read`. The optional
+   `threads` config option needs the `*:history` family (`channels:history`, `groups:history`,
+   `im:history`, `mpim:history`) as well — adding it later is a re-login, not an admin re-approval.
+4. From **Basic Information**, note the **Client ID** and **Client Secret**, and export them:
+
+   ```sh
+   export SLACK_CLIENT_ID=...
+   export SLACK_CLIENT_SECRET=...
+   ```
+
+Phase 2 is `rundown login`: it opens a browser to authorize the app once and caches your user
+token. `rundown` reads only what your own account can see, via `search.messages`.
 
 ### Phase 1: Claude Code logs
 

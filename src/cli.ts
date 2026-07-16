@@ -49,7 +49,8 @@ function initTemplate(): string {
     .join(",\n");
   return `{
   // rundown config — personalization only, zero secrets.
-  // Secrets (ANTHROPIC_API_KEY, AZURE_TENANT_ID, AZURE_CLIENT_ID, source tokens)
+  // Secrets (ANTHROPIC_API_KEY, AZURE_TENANT_ID, AZURE_CLIENT_ID, SLACK_CLIENT_ID,
+  // SLACK_CLIENT_SECRET, source tokens)
   // live in your environment, never here. Safe to copy or commit this file.
 
   // IANA timezone. Window spans + all-day items resolve against it. Omit to use the system tz.
