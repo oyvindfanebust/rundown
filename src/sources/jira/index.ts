@@ -13,6 +13,16 @@
 // not carry, and a raw-`fetch` transport over `POST /rest/api/3/search/jql` with
 // nextPageToken/isLast pagination (there is no first-party JS SDK).
 //
+// Transport routing (ADR-0013 §5): Atlassian scoped API tokens authenticate only
+// through the gateway `https://api.atlassian.com/ex/jira/{cloudId}/…`, not the
+// instance URL, which rejects them with 401 AUTHENTICATED_FAILED. The default
+// transport resolves `cloudId` once from the unauthenticated `/_edge/tenant_info`
+// endpoint, prefers the gateway, and falls back to the instance URL on a 401 so
+// classic-token support cannot regress. The permalink stays instance-based
+// (`https://<site>/browse/<key>`) — the gateway is an API host, not a browser URL.
+// `cloudId` is a non-secret structural identifier; its shape is validated and it
+// never enters an error or log body.
+//
 // All Jira backend content — summary, description, status/assignee/reporter/project/
 // issuetype names, `id`, the permalink — is Untrusted, branded at this boundary with
 // untrusted()/untrustedOpt() (mirror linear/index.ts). Only the structural fields
@@ -71,6 +81,38 @@ const FIELDS = [
  */
 export type JiraRequest = (path: string, init?: { method?: string; body?: unknown }) => Promise<any>;
 
+/**
+ * The minimal `fetch` shape the transport needs, injected so cloudId resolution and
+ * gateway routing are unit-testable offline. The global `fetch` satisfies it.
+ */
+export type FetchLike = (
+  url: string,
+  init?: { method?: string; headers?: Record<string, string>; body?: string },
+) => Promise<{ ok: boolean; status: number; json: () => Promise<any> }>;
+
+/** The scoped-token gateway origin; the REST path is prefixed with `/rest/api/3/…`. */
+const GATEWAY_ORIGIN = "https://api.atlassian.com/ex/jira";
+
+/** cloudId is a UUID; validate its shape before it feeds a request URL (ADR-0013 §5). */
+function isCloudId(value: unknown): value is string {
+  return typeof value === "string" && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(value);
+}
+
+/**
+ * Resolve the site's `cloudId` from the unauthenticated `/_edge/tenant_info`
+ * endpoint. The response is backend content: only a UUID-shaped `cloudId` is read
+ * out, and any failure (non-ok, or a malformed/absent cloudId) reduces to the
+ * shared status-only scrub — no body bytes cross into the thrown message
+ * (ADR-0004 §5, ADR-0013 §5). `origin` is the bare instance origin from `siteOrigin`.
+ */
+export async function resolveCloudId(origin: string, fetchImpl: FetchLike): Promise<string> {
+  const r = await fetchImpl(`${origin}/_edge/tenant_info`);
+  if (!r.ok) throw statusOnlyError("Jira", r);
+  const cloudId = (await r.json())?.cloudId;
+  if (!isCloudId(cloudId)) throw statusOnlyError("Jira", undefined);
+  return cloudId;
+}
+
 /** Injectable dependencies — the seam that makes the source unit-testable. */
 export interface JiraDeps {
   /**
@@ -94,15 +136,30 @@ export function siteOrigin(site: unknown): string | undefined {
   return withScheme.replace(/\/+$/, "");
 }
 
-/** The default transport: a real Basic-auth `fetch` against the resolved site. */
-function defaultTransport(site: unknown): JiraRequest | null {
+/**
+ * The default transport: a Basic-auth `fetch` that prefers the scoped-token gateway
+ * and falls back to the instance URL on a 401 (ADR-0013 §5). `cloudId` resolves at
+ * most once (cached in the closure), lazily on the first request, so both `status()`
+ * and `read()` reuse it. `fetchImpl` is injectable for tests; production uses the
+ * global `fetch`.
+ */
+export function defaultTransport(site: unknown, fetchImpl: FetchLike = fetch): JiraRequest | null {
   const origin = siteOrigin(site);
   const credentials = jiraCredentials();
   if (!origin || !credentials) return null;
   const authorization = basicAuthHeader(credentials.email, credentials.token);
-  return async (path, init) => {
+
+  // Resolve cloudId at most once per transport instance.
+  let cloudId: Promise<string> | undefined;
+  const gatewayBase = () => (cloudId ??= resolveCloudId(origin, fetchImpl)).then((id) => `${GATEWAY_ORIGIN}/${id}`);
+
+  // Prefer the gateway; a 401 there flips this to the instance URL for good (classic
+  // tokens authenticate against the instance, scoped tokens against the gateway).
+  let base: "gateway" | "instance" = "gateway";
+
+  const call = async (root: string, path: string, init?: { method?: string; body?: unknown }) => {
     const hasBody = init?.body !== undefined;
-    const r = await fetch(`${origin}${path}`, {
+    return fetchImpl(`${root}${path}`, {
       method: init?.method ?? "GET",
       headers: {
         Authorization: authorization,
@@ -111,9 +168,19 @@ function defaultTransport(site: unknown): JiraRequest | null {
       },
       body: hasBody ? JSON.stringify(init!.body) : undefined,
     });
-    // Scrub the backend response body: only the HTTP status crosses into the thrown
-    // message (ADR-0004 §5, ADR-0013 §6). A 429 fails cleanly through here with no
-    // retry loop. The shared statusOnlyError owns that rule (sources/errors.ts).
+  };
+
+  return async (path, init) => {
+    if (base === "gateway") {
+      const r = await call(await gatewayBase(), path, init);
+      if (r.ok) return r.json();
+      // A 401 means this token is not accepted at the gateway (a classic token);
+      // fall back to the instance URL and stay there. Any other status is a real
+      // failure, scrubbed to status-only (ADR-0004 §5, ADR-0013 §6).
+      if (r.status !== 401) throw statusOnlyError("Jira", r);
+      base = "instance";
+    }
+    const r = await call(origin, path, init);
     if (!r.ok) throw statusOnlyError("Jira", r);
     return r.json();
   };

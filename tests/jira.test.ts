@@ -1,4 +1,4 @@
-import { test, expect, describe } from "bun:test";
+import { test, expect, describe, beforeAll, afterAll } from "bun:test";
 import { untrusted, unwrap } from "../src/trust.ts";
 import type { NormalizedItem } from "../src/domain.ts";
 import type { Source } from "../src/sources/source.ts";
@@ -8,7 +8,10 @@ import {
   siteOrigin,
   adfToText,
   buildJql,
+  defaultTransport,
+  resolveCloudId,
   type JiraRequest,
+  type FetchLike,
 } from "../src/sources/jira/index.ts";
 
 const WINDOW = { from: "2026-07-06T00:00:00.000Z", to: "2026-07-13T00:00:00.000Z" };
@@ -318,3 +321,126 @@ describe("JiraSource.read pagination", () => {
 // (sources/errors.ts) and tested exhaustively there (tests/errors.test.ts) across the
 // Response (.status) shape. defaultTransport's non-ok branch is a one-liner over that
 // helper, so the scrub is not re-tested here (ADR-0004 §5, ADR-0013 §6).
+
+// ── cloudId resolution + gateway routing (ADR-0013 §5) ────────────────────────
+// Scoped API tokens authenticate only through the api.atlassian.com/ex/jira/{cloudId}
+// gateway, not the instance URL. The default transport resolves cloudId from the
+// unauthenticated /_edge/tenant_info endpoint, prefers the gateway, and falls back to
+// the instance URL on a 401 so classic-token support cannot regress. These exercise
+// the seam below the injected `deps.transport` used by the tests above, with a fake
+// `fetch` so the routing is unit-testable offline.
+
+const CLOUD_ID = "578ccb7d-3e4f-4d73-84ac-f25955e1e729"; // any UUID-shaped string
+const GATEWAY = `https://api.atlassian.com/ex/jira/${CLOUD_ID}`;
+const TENANT_INFO = `https://${SITE}/_edge/tenant_info`;
+
+interface FakeRoute {
+  ok?: boolean;
+  status?: number;
+  body?: unknown;
+}
+
+/** A fake `fetch`: `route(url, init)` decides the response; every call is recorded. */
+function fakeFetch(route: (url: string, init: any) => FakeRoute): {
+  fetch: FetchLike;
+  calls: { url: string; init: any }[];
+} {
+  const calls: { url: string; init: any }[] = [];
+  const fetch: FetchLike = async (url, init) => {
+    calls.push({ url, init });
+    const r = route(url, init);
+    const status = r.status ?? (r.ok === false ? 500 : 200);
+    return { ok: r.ok ?? (status >= 200 && status < 300), status, json: async () => r.body };
+  };
+  return { fetch, calls };
+}
+
+describe("resolveCloudId", () => {
+  test("parses a UUID cloudId from tenant_info", async () => {
+    const { fetch, calls } = fakeFetch(() => ({ body: { cloudId: CLOUD_ID } }));
+    expect(await resolveCloudId(`https://${SITE}`, fetch)).toBe(CLOUD_ID);
+    expect(calls[0]!.url).toBe(TENANT_INFO);
+  });
+
+  test("a malformed/missing cloudId fails clean, with no backend body bytes", async () => {
+    const { fetch } = fakeFetch(() => ({ body: { cloudId: "<b>not-a-uuid</b>" } }));
+    await expect(resolveCloudId(`https://${SITE}`, fetch)).rejects.toThrow(/^Jira request failed$/);
+    const missing = fakeFetch(() => ({ body: {} }));
+    await expect(resolveCloudId(`https://${SITE}`, missing.fetch)).rejects.toThrow(/^Jira request failed$/);
+  });
+
+  test("a non-ok tenant_info reduces to status only", async () => {
+    const { fetch } = fakeFetch(() => ({ ok: false, status: 503 }));
+    await expect(resolveCloudId(`https://${SITE}`, fetch)).rejects.toThrow("Jira request failed: 503");
+  });
+});
+
+describe("defaultTransport gateway routing", () => {
+  const saved = { email: process.env.JIRA_EMAIL, token: process.env.JIRA_API_TOKEN };
+  beforeAll(() => {
+    process.env.JIRA_EMAIL = "ada@example.com";
+    process.env.JIRA_API_TOKEN = "test-token";
+  });
+  afterAll(() => {
+    if (saved.email === undefined) delete process.env.JIRA_EMAIL;
+    else process.env.JIRA_EMAIL = saved.email;
+    if (saved.token === undefined) delete process.env.JIRA_API_TOKEN;
+    else process.env.JIRA_API_TOKEN = saved.token;
+  });
+
+  test("returns null when the site option is missing", () => {
+    expect(defaultTransport(undefined)).toBeNull();
+  });
+
+  test("resolves cloudId and targets the gateway base with the Basic-auth header", async () => {
+    const { fetch, calls } = fakeFetch((url) =>
+      url === TENANT_INFO ? { body: { cloudId: CLOUD_ID } } : { body: { displayName: "Ada" } },
+    );
+    const request = defaultTransport(SITE, fetch)!;
+    expect((await request("/rest/api/3/myself")).displayName).toBe("Ada");
+    expect(calls[0]!.url).toBe(TENANT_INFO);
+    expect(calls[1]!.url).toBe(`${GATEWAY}/rest/api/3/myself`);
+    expect(calls[1]!.init!.headers.Authorization).toMatch(/^Basic /);
+  });
+
+  test("resolves cloudId at most once across multiple requests", async () => {
+    let tenantHits = 0;
+    const { fetch } = fakeFetch((url) => {
+      if (url === TENANT_INFO) {
+        tenantHits++;
+        return { body: { cloudId: CLOUD_ID } };
+      }
+      return { body: { issues: [], isLast: true } };
+    });
+    const request = defaultTransport(SITE, fetch)!;
+    await request("/rest/api/3/myself");
+    await request("/rest/api/3/search/jql", { method: "POST", body: {} });
+    expect(tenantHits).toBe(1);
+  });
+
+  test("falls back to the instance URL on a gateway 401 and stays there", async () => {
+    const targets: string[] = [];
+    const { fetch } = fakeFetch((url) => {
+      if (url === TENANT_INFO) return { body: { cloudId: CLOUD_ID } };
+      targets.push(url);
+      if (url.startsWith(GATEWAY)) return { ok: false, status: 401 };
+      return { body: { displayName: "Classic" } };
+    });
+    const request = defaultTransport(SITE, fetch)!;
+    expect((await request("/rest/api/3/myself")).displayName).toBe("Classic");
+    expect(targets[0]!).toBe(`${GATEWAY}/rest/api/3/myself`); // gateway tried first
+    expect(targets[1]!).toBe(`https://${SITE}/rest/api/3/myself`); // retried on instance
+    expect((await request("/rest/api/3/myself")).displayName).toBe("Classic");
+    expect(targets[2]!).toBe(`https://${SITE}/rest/api/3/myself`); // sticky: no repeat gateway attempt
+    expect(targets).toHaveLength(3);
+  });
+
+  test("a non-401 gateway error scrubs to status only and does not fall back", async () => {
+    const { fetch, calls } = fakeFetch((url) =>
+      url === TENANT_INFO ? { body: { cloudId: CLOUD_ID } } : { ok: false, status: 500 },
+    );
+    const request = defaultTransport(SITE, fetch)!;
+    await expect(request("/rest/api/3/myself")).rejects.toThrow("Jira request failed: 500");
+    expect(calls.some((c) => c.url.startsWith(`https://${SITE}/rest`))).toBe(false); // instance never hit
+  });
+});
