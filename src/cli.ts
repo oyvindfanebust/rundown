@@ -261,6 +261,9 @@ function parseCommandArgs<const T extends ParseArgsConfig["options"]>(name: stri
     return parseArgs({ args: rest, options, allowPositionals: true });
   } catch (e) {
     if (e instanceof Error && "code" in e && typeof e.code === "string" && e.code.startsWith("ERR_PARSE_ARGS")) {
+      // parseArgs names no offending token structurally, so lift it from the
+      // message; if that wording ever changes we fall back to the raw message
+      // rather than crash. The pinned test string catches a wording drift in CI.
       const m = /'(--?[^']+)'/.exec(e.message);
       fail(m ? `rundown ${name}: option ${m[1]} is not valid here` : `rundown ${name}: ${e.message}`);
     }
