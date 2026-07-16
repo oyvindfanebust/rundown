@@ -128,6 +128,10 @@ separate from the untrusted work-source data the boundary defends against. The t
   `BREAKING CHANGE` → major) and keeps an open "release PR" that bumps `package.json`, updates the
   `.release-please-manifest.json` version, and writes the `CHANGELOG.md` entry. The version lives in
   the manifest as the source of truth; `package.json` mirrors it.
+- Only commit types that change the compiled binary cut a release: `feat`, `fix`, `perf`, `refactor`.
+  `docs`, `chore`, `ci`, and `test` are marked `hidden` in `release-please-config.json`, which in
+  release-please means both hidden from the changelog and non-release-triggering — a doc-only change
+  must not ship a new binary that is byte-identical bar the version stamp.
 - Merging that release PR creates the `vX.Y.Z` git tag, and that tag semver is what gets stamped into
   `rundown --version` (a build-time constant via `--define`). Source runs print `0.0.0-dev`.
 - Consumers who disable auto-update pin by vendoring their installed binary. `computedHash` on the
