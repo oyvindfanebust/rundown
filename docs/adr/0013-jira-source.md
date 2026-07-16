@@ -112,6 +112,36 @@ header, POSTs the JQL body to `/rest/api/3/search/jql`, and loops on `nextPageTo
 seam Linear uses is kept (`transport?: () => JiraRequest | null`, returning `null` when
 unconfigured) so the source stays unit-testable and auth stays an OAuth-swappable seam.
 
+The REST calls route through the Atlassian gateway `https://api.atlassian.com/ex/jira/{cloudId}`,
+not the instance URL `https://<site>/rest/api/3/…`. Atlassian scoped (least-privilege) API tokens
+authenticate only through the gateway; against the instance URL they get a 401 with
+`x-seraph-loginreason: AUTHENTICATED_FAILED` on `/myself`, and `/search/jql` returns 200 but treats
+the caller as anonymous (empty results). Classic (unscoped) tokens authenticate against the instance
+URL. Routing through the gateway makes scoped tokens work and is what a least-privilege setup
+requires.
+
+`cloudId` is not carried by the token or the config. The default transport resolves it once, lazily,
+from the unauthenticated `GET https://<site>/_edge/tenant_info` endpoint (`{"cloudId":"<uuid>"}`) and
+caches it in the transport closure, so `status()` and `read()` share one resolution. The response is
+backend content: only a UUID-shaped `cloudId` is read out, and any failure — non-ok response, or a
+malformed or absent `cloudId` — reduces to the shared status-only scrub (§6), so no body bytes enter
+an error or log. `cloudId` is a non-secret structural identifier, not a credential.
+
+The routing decision is prefer the gateway, fall back to the instance URL on a 401. The transport
+tries the gateway first; a 401 there flips it to the instance URL for the rest of the source's life,
+and any other non-ok status is a real failure scrubbed to status-only. This works for scoped tokens
+(proven: gateway returns 200) and cannot regress classic-token support (proven earlier by QA against
+the instance URL): if the gateway rejects a classic token with a 401, the source falls back to the
+instance URL, which classic tokens authenticate against. Whether the gateway also accepts classic
+tokens directly is untested here — no classic token was available — but the design does not depend on
+the answer: if the gateway accepts it, the gateway path serves it; if it 401s, the fallback serves
+it. An explicit `cloudId` config override to skip the resolver call is a possible later refinement;
+it is not needed while `/_edge/tenant_info` resolves reliably.
+
+The permalink stays instance-based (`https://<site>/browse/<key>`, §4). The gateway is an API host,
+not a browser URL, so the item `url` keeps using the human instance origin, derived separately from
+the gateway base.
+
 `status()` verifies the credential with a live `GET /rest/api/3/myself` call (Jira's `viewer`
 analog), reporting `identity` from `displayName`. It returns `not-configured` when either env secret
 or the `site` option is missing, and `not-configured` with a rejected-credential detail when the
