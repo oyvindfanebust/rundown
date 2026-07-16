@@ -9,7 +9,7 @@ import { dirname } from "node:path";
 import { buildBrief } from "./brief.ts";
 import { configPath, resolveConfig, ConfigError } from "./config.ts";
 import { parseWindowSelector, WindowError, WINDOW_SPANS, type WindowSelector } from "./temporal.ts";
-import { registry, registeredKeys } from "./sources/registry.ts";
+import { descriptors, registeredKeys, buildRegistry } from "./sources/registry.ts";
 import { narrateStatus, optionTemplateDefault, type Source } from "./sources/source.ts";
 
 // Build-time semver (ADR-0001 §7): the release workflow injects RUNDOWN_VERSION via
@@ -25,20 +25,21 @@ function fail(message: string): never {
 // ── init: write the annotated JSONC config template ──────────────────────────
 
 function renderSourceEntry(key: string): string {
-  const source = registry[key]!;
+  const descriptor = descriptors[key]!;
   const optionLines: string[] = [];
-  const names = Object.keys(source.options);
+  const names = Object.keys(descriptor.options);
   names.forEach((name, i) => {
-    const spec = source.options[name]!;
+    const spec = descriptor.options[name]!;
     const def = optionTemplateDefault(spec);
     const comma = i < names.length - 1 ? "," : "";
     optionLines.push(`      // ${spec.description}`);
     optionLines.push(`      ${JSON.stringify(name)}: ${def}${comma}`);
   });
   // Sources with interactive login need `rundown login`; no-auth sources (local
-  // logs) don't — say so rather than print a misleading auth hint.
-  const auth = source.login ? "Auth: rundown login" : "No auth required.";
-  return [`    // ${source.label}. ${auth}`, `    ${JSON.stringify(key)}: {`, ...optionLines, `    }`].join("\n");
+  // logs) don't — say so rather than print a misleading auth hint. `interactive`
+  // is the static declaration (#27), read here where no instance exists yet.
+  const auth = descriptor.interactive ? "Auth: rundown login" : "No auth required.";
+  return [`    // ${descriptor.label}. ${auth}`, `    ${JSON.stringify(key)}: {`, ...optionLines, `    }`].join("\n");
 }
 
 function initTemplate(): string {
@@ -96,7 +97,7 @@ async function cmdStatus(): Promise<void> {
 
   let config;
   try {
-    config = await resolveConfig(registry);
+    config = await resolveConfig(descriptors);
   } catch (e) {
     if (e instanceof ConfigError) {
       out.write(`config    ${path}   ✗ invalid\n\n    ${e.message}\n\n`);
@@ -116,10 +117,12 @@ async function cmdStatus(): Promise<void> {
   out.write(`summarizer  ${keyPresent ? "✓ ANTHROPIC_API_KEY present" : "✗ ANTHROPIC_API_KEY missing — export it"}\n`);
 
   out.write(`\nsources\n`);
+  // Build the selected sources (config injected) to query their live status (#27).
+  const sources = buildRegistry(config.selection);
   let ready = 0;
   const unauthed: string[] = [];
   for (const { sourceKey } of config.selection) {
-    const source = registry[sourceKey]!;
+    const source = sources[sourceKey]!;
     const st = await source.status();
     // The narration owns the glyph/phrase/identity wording; this line
     // just lays out the parts. Identity shows whenever a source reports one; a
@@ -192,8 +195,11 @@ async function cmdLogin(sourceKey?: string): Promise<void> {
   // selection — pre-authenticating a source before adding it to config.json is
   // legitimate, and the registry key is the only thing that needs resolving.
   if (sourceKey !== undefined) {
-    const source = registry[sourceKey];
-    if (!source) fail(`Unknown source "${sourceKey}". Registered sources: ${registeredKeys().join(", ")}`);
+    const descriptor = descriptors[sourceKey];
+    if (!descriptor) fail(`Unknown source "${sourceKey}". Registered sources: ${registeredKeys().join(", ")}`);
+    // Config-independent: build with empty config (#27). A source that needs config
+    // reports `not-configured` from status(), which the login paths already narrate.
+    const source = descriptor.build({});
     if (!source.login) fail(await nonInteractiveLoginError(sourceKey, source));
     const authenticated = await loginOne(out, sourceKey, source);
     out.write(authenticated ? `\nDone. Next: rundown status\n` : `\nAlready authenticated. Next: rundown status\n`);
@@ -203,11 +209,12 @@ async function cmdLogin(sourceKey?: string): Promise<void> {
   // Bare mode: walk every configured-but-unauthenticated interactive source —
   // and never claim success while a configured env-credential source (no
   // `login()`, but declared via a `not-configured` status) is unreadable.
-  const config = await resolveConfig(registry);
+  const config = await resolveConfig(descriptors);
+  const sources = buildRegistry(config.selection);
   let walked = 0;
   const unready: { key: string; hint: string }[] = [];
   for (const { sourceKey: key } of config.selection) {
-    const source = registry[key]!;
+    const source = sources[key]!;
     if (!source.login) {
       const st = await source.status();
       if (st.state !== "ready") {

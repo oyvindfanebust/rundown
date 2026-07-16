@@ -13,8 +13,17 @@
 import type { NormalizedItem, Window } from "../../domain.ts";
 import { normalizer, text } from "../normalize.ts";
 import { statusOnlyError } from "../errors.ts";
-import type { Source, SourceStatus } from "../source.ts";
+import type { OptionSchema, Source, SourceStatus } from "../source.ts";
 import { azureConfig, getToken, login as graphLogin, signedInAccount } from "./auth.ts";
+
+/** Graph's declared option schema — exposed on the static descriptor (registry.ts). */
+export const GRAPH_OPTIONS: OptionSchema = {
+  kinds: {
+    type: "string[]",
+    enum: ["event", "message"],
+    description: 'Which kinds to pull. Options: "event", "message". Omit for both.',
+  },
+};
 
 const BASE = "https://graph.microsoft.com/v1.0";
 
@@ -187,24 +196,19 @@ async function readMailFolder(
 export class GraphSource implements Source {
   readonly key = "graph";
   readonly label = "Microsoft Graph (calendar + mail)";
-  readonly options = {
-    kinds: {
-      type: "string[]" as const,
-      enum: ["event", "message"] as const,
-      description: 'Which kinds to pull. Options: "event", "message". Omit for both.',
-    },
-  };
 
+  private readonly config: Record<string, unknown>;
   private readonly fetchJson: FetchJson;
   private readonly auth: GraphAuth;
 
-  constructor(deps: GraphDeps = {}) {
+  constructor(options: Record<string, unknown> = {}, deps: GraphDeps = {}) {
+    this.config = options;
     this.fetchJson = deps.fetchJson ?? graphGet;
     this.auth = deps.auth ?? { azureConfig, signedInAccount, getToken, login: graphLogin };
   }
 
-  async read(window: Window, options: Record<string, unknown>): Promise<NormalizedItem[]> {
-    const kinds = (options.kinds as string[] | undefined) ?? ["event", "message"];
+  async read(window: Window): Promise<NormalizedItem[]> {
+    const kinds = (this.config.kinds as string[] | undefined) ?? ["event", "message"];
     const token = await this.auth.getToken();
     const items: NormalizedItem[] = [];
     if (kinds.includes("event")) items.push(...(await readCalendar(this.fetchJson, token, window)));

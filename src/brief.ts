@@ -6,7 +6,7 @@ import { resolveConfig } from "./config.ts";
 import type { WindowSelector } from "./temporal.ts";
 import { aggregate } from "./aggregate.ts";
 import { plan } from "./plan.ts";
-import { registry } from "./sources/registry.ts";
+import { descriptors, buildRegistry } from "./sources/registry.ts";
 import type { Brief } from "./domain.ts";
 
 export interface BuildBriefOptions {
@@ -23,15 +23,18 @@ export async function buildBrief(opts: BuildBriefOptions = {}): Promise<Brief> {
   // The one clock for the whole run: read `now` once here and thread it, so every
   // stage shares a single instant. Downstream stages have no `= new Date()`.
   const now = opts.now ?? new Date();
-  const config = await resolveConfig(registry, {
+  const config = await resolveConfig(descriptors, {
     windowOverride: opts.windowOverride,
     sourceFilter: opts.sourceFilter,
     now,
   });
 
+  // Build only the selected sources, with their resolved config injected (#27).
+  const sources = buildRegistry(config.selection);
+
   const keys = config.selection.map((s) => s.sourceKey).join(", ");
   progress(`Pulling ${config.selection.length} source(s) (${keys}) for ${config.windowSpan}…`);
-  const bundle = await aggregate(config.window, config.selection, registry, now);
+  const bundle = await aggregate(config.window, config.selection, sources, now);
 
   const total = bundle.sources.reduce((n, s) => n + s.itemCount, 0);
   if (total === 0) {

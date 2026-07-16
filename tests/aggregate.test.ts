@@ -42,7 +42,6 @@ describe("aggregate", () => {
     const fake: Source = {
       key: "fake",
       label: "Fake",
-      options: {},
       status: ready,
       async read() {
         return [
@@ -59,8 +58,8 @@ describe("aggregate", () => {
 
   test("tie-breaks equal timestamps by source", async () => {
     const ts = "2026-07-07T00:00:00Z";
-    const a: Source = { key: "aaa", label: "", options: {}, status: ready, async read() { return [item("aaa", "e", ts, "x")]; } };
-    const b: Source = { key: "zzz", label: "", options: {}, status: ready, async read() { return [item("zzz", "e", ts, "y")]; } };
+    const a: Source = { key: "aaa", label: "", status: ready, async read() { return [item("aaa", "e", ts, "x")]; } };
+    const b: Source = { key: "zzz", label: "", status: ready, async read() { return [item("zzz", "e", ts, "y")]; } };
     const bundle = await aggregate(
       window,
       [{ sourceKey: "zzz", options: {} }, { sourceKey: "aaa", options: {} }],
@@ -74,7 +73,6 @@ describe("aggregate", () => {
     const fake: Source = {
       key: "fake",
       label: "Fake",
-      options: {},
       async read() { return []; },
       async status() { return { state: "not-authenticated" }; },
     };
@@ -87,7 +85,6 @@ describe("aggregate", () => {
     const fake: Source = {
       key: "fake",
       label: "Fake",
-      options: {},
       async read() { return []; },
       async status() { return { state: "not-configured", detail: "set FOO" }; },
     };
@@ -100,7 +97,6 @@ describe("aggregate", () => {
     const fake: Source = {
       key: "fake",
       label: "Fake",
-      options: {},
       status: ready,
       async read() { return [item("fake", "e", "2026-07-07T00:00:00Z", "ok")]; },
     };
@@ -109,8 +105,8 @@ describe("aggregate", () => {
   });
 
   test("fails hard when a read errors — no partial bundle", async () => {
-    const good: Source = { key: "good", label: "", options: {}, status: ready, async read() { return [item("good", "e", "2026-07-07T00:00:00Z", "ok")]; } };
-    const bad: Source = { key: "bad", label: "", options: {}, status: ready, async read() { throw new Error("boom"); } };
+    const good: Source = { key: "good", label: "", status: ready, async read() { return [item("good", "e", "2026-07-07T00:00:00Z", "ok")]; } };
+    const bad: Source = { key: "bad", label: "", status: ready, async read() { throw new Error("boom"); } };
     expect(
       aggregate(
         window,

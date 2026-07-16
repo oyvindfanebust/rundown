@@ -2,7 +2,7 @@ import { test, expect, describe, afterEach } from "bun:test";
 import { untrusted, unwrap } from "../src/trust.ts";
 import type { NormalizedItem } from "../src/domain.ts";
 import type { Source } from "../src/sources/source.ts";
-import { GraphSource, type GraphAuth, type FetchJson, type GraphDeps } from "../src/sources/graph/index.ts";
+import { GraphSource, GRAPH_OPTIONS, type GraphAuth, type FetchJson, type GraphDeps } from "../src/sources/graph/index.ts";
 
 const WINDOW = { from: "2026-07-06T00:00:00.000Z", to: "2026-07-13T00:00:00.000Z" };
 
@@ -40,8 +40,8 @@ function fakeFetch(routes: Routes): { fetchJson: FetchJson; urls: string[] } {
   return { fetchJson, urls };
 }
 
-function graphSource(deps: GraphDeps): GraphSource {
-  return new GraphSource({ auth: fakeAuth(), ...deps });
+function graphSource(deps: GraphDeps, options: Record<string, unknown> = {}): GraphSource {
+  return new GraphSource(options, { auth: fakeAuth(), ...deps });
 }
 
 // `id` is now a real runtime box, never `===`-comparable across two
@@ -99,7 +99,7 @@ describe("GraphSource surface", () => {
     expect(s.key).toBe("graph");
     expect(s.label).toBe("Microsoft Graph (calendar + mail)");
     expect(typeof s.login).toBe("function"); // interactive-auth declaration
-    expect(Object.keys(s.options)).toEqual(["kinds"]);
+    expect(Object.keys(GRAPH_OPTIONS)).toEqual(["kinds"]);
   });
 });
 
@@ -107,7 +107,7 @@ describe("GraphSource surface", () => {
 
 describe("GraphSource.status", () => {
   test("not-configured when Azure config is absent", async () => {
-    const s = new GraphSource({ auth: fakeAuth({ azureConfig: () => null }) });
+    const s = new GraphSource({}, { auth: fakeAuth({ azureConfig: () => null }) });
     expect(await s.status()).toEqual({
       state: "not-configured",
       detail: "set AZURE_TENANT_ID and AZURE_CLIENT_ID",
@@ -115,12 +115,12 @@ describe("GraphSource.status", () => {
   });
 
   test("not-authenticated when configured but no signed-in account", async () => {
-    const s = new GraphSource({ auth: fakeAuth({ signedInAccount: async () => null }) });
+    const s = new GraphSource({}, { auth: fakeAuth({ signedInAccount: async () => null }) });
     expect(await s.status()).toEqual({ state: "not-authenticated" });
   });
 
   test("ready with identity when signed in", async () => {
-    const s = new GraphSource({ auth: fakeAuth({ signedInAccount: async () => "who@example.com" }) });
+    const s = new GraphSource({}, { auth: fakeAuth({ signedInAccount: async () => "who@example.com" }) });
     expect(await s.status()).toEqual({ state: "ready", identity: "who@example.com" });
   });
 });
@@ -130,7 +130,7 @@ describe("GraphSource.status", () => {
 describe("GraphSource.read calendar", () => {
   test("maps an event, normalizes UTC instants, filters resource attendees, brands untrusted", async () => {
     const { fetchJson } = fakeFetch({ calendar: { value: [event()] } });
-    const items = await graphSource({ fetchJson }).read(WINDOW, { kinds: ["event"] });
+    const items = await graphSource({ fetchJson }, { kinds: ["event"] }).read(WINDOW);
     const item = byId(items, "e1")!;
     expect(item.source).toBe("graph");
     expect(item.kind).toBe("event");
@@ -157,7 +157,7 @@ describe("GraphSource.read calendar", () => {
         value: [event({ id: "solo", attendees: [{ type: "resource", emailAddress: { name: "Room 1" } }] })],
       },
     });
-    const items = await graphSource({ fetchJson }).read(WINDOW, { kinds: ["event"] });
+    const items = await graphSource({ fetchJson }, { kinds: ["event"] }).read(WINDOW);
     // Unwrap before inspecting keys — `extras` is now a real box, so an
     // un-unwrapped `"attendees" in extras` would vacuously pass (the box never has
     // that key regardless of what the source produced).
@@ -174,7 +174,7 @@ describe("GraphSource.read calendar", () => {
         ],
       },
     });
-    const items = await graphSource({ fetchJson }).read(WINDOW, { kinds: ["event"] });
+    const items = await graphSource({ fetchJson }, { kinds: ["event"] }).read(WINDOW);
     expect(byId(items, "zed")!.timestamp).toBe("2026-07-08T09:00:00Z");
     expect(byId(items, "zed")!.end).toBeUndefined();
     expect(byId(items, "nostart")!.timestamp).toBe(WINDOW.from);
@@ -189,7 +189,7 @@ describe("GraphSource.read mail", () => {
       inbox: { value: [message()] },
       sent: { value: [message({ id: "s1", subject: "Sent one", receivedDateTime: undefined, sentDateTime: "2026-07-09T11:00:00Z", isRead: true, importance: "normal" })] },
     });
-    const items = await graphSource({ fetchJson }).read(WINDOW, { kinds: ["message"] });
+    const items = await graphSource({ fetchJson }, { kinds: ["message"] }).read(WINDOW);
 
     const inbox = byId(items, "m1")!;
     expect(inbox.kind).toBe("message");
@@ -220,7 +220,7 @@ describe("GraphSource.read mail", () => {
 
   test("empty recipient list vanishes — presence is signal (accepted delta)", async () => {
     const { fetchJson } = fakeFetch({ inbox: { value: [message({ id: "noto", toRecipients: [] })] } });
-    const items = await graphSource({ fetchJson }).read(WINDOW, { kinds: ["message"] });
+    const items = await graphSource({ fetchJson }, { kinds: ["message"] }).read(WINDOW);
     // Unwrap before inspecting keys (see the sibling "attendees" test above).
     const extras = unwrap(byId(items, "noto")!.extras!);
     expect("to" in extras).toBe(false);
@@ -232,14 +232,14 @@ describe("GraphSource.read mail", () => {
 describe("GraphSource.read kinds", () => {
   test('kinds:["event"] pulls the calendar only — no mail request', async () => {
     const { fetchJson, urls } = fakeFetch({ calendar: { value: [event()] } });
-    await graphSource({ fetchJson }).read(WINDOW, { kinds: ["event"] });
+    await graphSource({ fetchJson }, { kinds: ["event"] }).read(WINDOW);
     expect(urls.every((u) => u.includes("/calendarView"))).toBe(true);
     expect(urls.some((u) => u.includes("/mailFolders/"))).toBe(false);
   });
 
   test('kinds:["message"] pulls mail only — no calendar request', async () => {
     const { fetchJson, urls } = fakeFetch({});
-    await graphSource({ fetchJson }).read(WINDOW, { kinds: ["message"] });
+    await graphSource({ fetchJson }, { kinds: ["message"] }).read(WINDOW);
     expect(urls.some((u) => u.includes("/calendarView"))).toBe(false);
     expect(urls.some((u) => u.includes("/mailFolders/Inbox/"))).toBe(true);
     expect(urls.some((u) => u.includes("/mailFolders/SentItems/"))).toBe(true);
@@ -250,7 +250,7 @@ describe("GraphSource.read kinds", () => {
       calendar: { value: [event()] },
       inbox: { value: [message()] },
     });
-    const items = await graphSource({ fetchJson }).read(WINDOW, {});
+    const items = await graphSource({ fetchJson }, {}).read(WINDOW);
     expect(items.map((i) => i.kind).sort()).toEqual(["event", "message"]);
   });
 });
@@ -277,9 +277,9 @@ describe("GraphSource.read error scrubbing", () => {
 
   async function readError(kinds: string[]): Promise<Error> {
     // No fetchJson injected → the real graphGet runs against the mocked fetch.
-    const s = new GraphSource({ auth: fakeAuth() });
+    const s = new GraphSource({ kinds }, { auth: fakeAuth() });
     try {
-      await s.read(WINDOW, { kinds });
+      await s.read(WINDOW);
       throw new Error("expected read() to throw");
     } catch (e) {
       return e as Error;
@@ -312,7 +312,7 @@ describe("GraphSource.read pagination", () => {
       url.includes("$skiptoken")
         ? { value: [event({ id: "p2" })] }
         : { value: [event({ id: "p1" })], "@odata.nextLink": nextLink };
-    const items = await graphSource({ fetchJson }).read(WINDOW, { kinds: ["event"] });
+    const items = await graphSource({ fetchJson }, { kinds: ["event"] }).read(WINDOW);
     // `id` boxes aren't string-coercible for a value-sort anymore (default
     // Array#sort would coerce via the redacted toString(), making it a no-op) — sort
     // by unwrapped value so this stays an order-independent comparison.

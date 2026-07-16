@@ -74,7 +74,7 @@ src/
   domain.ts         shared vocabulary types: NormalizedItem, Bundle, bucket, Brief, ExtractedItem
   sources/
     source.ts       the Source interface (read, optional login/status) + option-schema declaration
-    registry.ts     static map: source name → Source instance
+    registry.ts     static map: source name → descriptor; buildRegistry(selection) → Sources
     graph/
       index.ts      the Graph reference source (calendar + mail kinds)
       auth.ts       device-code / MSAL auth
@@ -101,13 +101,24 @@ Rationale for the structure:
   place rather than colocated with each producer. `trust.ts` is separate because `Untrusted<T>` is a
   cross-cutting security primitive, not a domain noun.
 
-### 5. Sources register via a static map
+### 5. Sources register via a static descriptor map
 
-`sources/registry.ts` holds a static map literal, `{ graph: new GraphSource() }`. Adding a source
-later is one import plus one entry: explicit, typed, and greppable. There are no self-registration
-side-effects and no dynamic discovery. This matches ADR-0002's in-process modules in the one binary.
-The serialization-friendly `read` contract already reserves the subprocess-plugin future for when
-third-party sources arrive, so dynamic registration buys nothing now.
+`sources/registry.ts` holds a static map literal of source key → `SourceDescriptor`. A descriptor
+holds everything true of a source before any config exists — its key/label, its option schema,
+whether it has interactive `login`, and a `build(options)` step that constructs a config-injected
+instance. Adding a source later is one import plus one entry: explicit, typed, and greppable. There
+are no self-registration side-effects and no dynamic discovery. This matches ADR-0002's in-process
+modules in the one binary. The serialization-friendly `read` contract already reserves the
+subprocess-plugin future for when third-party sources arrive, so dynamic registration buys nothing
+now.
+
+The registry is a map of descriptors rather than live instances (its earlier form) because the
+static fields — the option schema and the interactive flag — must be readable before any config
+exists: `init` renders the template and config validation checks the per-source options with no
+instance in hand. `buildRegistry(selection)` is the composition step at the composition root: it
+turns the validated config selection into the live, config-injected `Sources` the Aggregator
+consumes, so each instance's `status()`/`read()` close over its own resolved config (ADR-0002 §5,
+#27).
 
 ### 6. The CLI surface — five agent-facing commands, nothing else
 

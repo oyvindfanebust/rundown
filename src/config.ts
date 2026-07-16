@@ -8,7 +8,7 @@ import { existsSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { homedir } from "node:os";
 import type { Window } from "./domain.ts";
-import { validateOptionValue, type OptionSpec, type Sources } from "./sources/source.ts";
+import { validateOptionValue, type OptionSpec, type Descriptors } from "./sources/source.ts";
 import { WINDOW_SPANS, resolveSelector, type WindowSpan, type WindowSelector } from "./temporal.ts";
 
 export interface Selection {
@@ -141,8 +141,8 @@ function validateOption(sourceKey: string, name: string, spec: OptionSpec, value
   if (err) throw new ConfigError(err);
 }
 
-/** Parse + validate raw config text (strict fail-hard) against the injected source lookup. Returns the checked config. */
-export function parseConfig(text: string, sources: Sources): {
+/** Parse + validate raw config text (strict fail-hard) against the injected descriptor map. Returns the checked config. */
+export function parseConfig(text: string, descriptors: Descriptors): {
   timezone?: string;
   window?: WindowSpan;
   selection: Selection[];
@@ -201,18 +201,18 @@ export function parseConfig(text: string, sources: Sources): {
 
   const selection: Selection[] = [];
   for (const key of keys) {
-    const source = sources[key];
-    if (!source) {
-      throw new ConfigError(`Unknown source "${key}"${suggest(key, Object.keys(sources))}.`);
+    const descriptor = descriptors[key];
+    if (!descriptor) {
+      throw new ConfigError(`Unknown source "${key}"${suggest(key, Object.keys(descriptors))}.`);
     }
     const entry = configSources[key];
     if (typeof entry !== "object" || entry === null || Array.isArray(entry)) {
       throw new ConfigError(`Source "${key}" options must be an object.`);
     }
     const options = entry as Record<string, unknown>;
-    const declared = Object.keys(source.options);
+    const declared = Object.keys(descriptor.options);
     for (const optName of Object.keys(options)) {
-      const spec = source.options[optName];
+      const spec = descriptor.options[optName];
       if (!spec) {
         throw new ConfigError(`Unknown ${`option "${optName}" for source "${key}"`}${suggest(optName, declared)}.`);
       }
@@ -261,13 +261,13 @@ function applySourceFilter(selection: Selection[], filter: string[]): Selection[
   return narrowed;
 }
 
-/** Load, validate, and resolve the config file into a ResolvedConfig against the injected source lookup. Fail-hard. */
-export async function resolveConfig(sources: Sources, opts: ResolveOptions = {}): Promise<ResolvedConfig> {
+/** Load, validate, and resolve the config file into a ResolvedConfig against the injected descriptor map. Fail-hard. */
+export async function resolveConfig(descriptors: Descriptors, opts: ResolveOptions = {}): Promise<ResolvedConfig> {
   const path = configPath();
   if (!existsSync(path)) {
     throw new ConfigError(`No config at ${path}. Run \`rundown init\` to create one.`);
   }
-  const parsed = parseConfig(await readFile(path, "utf-8"), sources);
+  const parsed = parseConfig(await readFile(path, "utf-8"), descriptors);
   const selection =
     opts.sourceFilter && opts.sourceFilter.length > 0
       ? applySourceFilter(parsed.selection, opts.sourceFilter)

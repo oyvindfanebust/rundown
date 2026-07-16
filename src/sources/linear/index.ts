@@ -19,7 +19,7 @@
 import type { NormalizedItem, Window } from "../../domain.ts";
 import { normalizer, text } from "../normalize.ts";
 import { statusOnlyError } from "../errors.ts";
-import type { Source, SourceStatus } from "../source.ts";
+import type { OptionSchema, Source, SourceStatus } from "../source.ts";
 import { linearClient } from "./auth.ts";
 
 const KEY = "linear";
@@ -152,35 +152,39 @@ function buildFilter(
   return filter;
 }
 
+/** Linear's declared option schema — exposed on the static descriptor (registry.ts). */
+export const LINEAR_OPTIONS: OptionSchema = {
+  relationships: {
+    type: "string[]",
+    enum: RELATIONSHIPS,
+    description:
+      'Which relationships to pull. Options: "assigned", "created", "subscribed". Omit for "assigned" only.',
+  },
+  states: {
+    type: "string[]",
+    enum: STATE_TYPES,
+    description:
+      'Which workflow state types to include. Omit for active + recently-completed ("unstarted", "started", "completed").',
+  },
+  teams: {
+    type: "string[]",
+    description: 'Restrict to these team keys (e.g. "OYV"). Omit for all teams.',
+  },
+  projects: {
+    type: "string[]",
+    description: "Restrict to these project names. Omit for all projects.",
+  },
+};
+
 export class LinearSource implements Source {
   readonly key = KEY;
   readonly label = "Linear";
-  readonly options = {
-    relationships: {
-      type: "string[]" as const,
-      enum: RELATIONSHIPS,
-      description:
-        'Which relationships to pull. Options: "assigned", "created", "subscribed". Omit for "assigned" only.',
-    },
-    states: {
-      type: "string[]" as const,
-      enum: STATE_TYPES,
-      description:
-        'Which workflow state types to include. Omit for active + recently-completed ("unstarted", "started", "completed").',
-    },
-    teams: {
-      type: "string[]" as const,
-      description: 'Restrict to these team keys (e.g. "OYV"). Omit for all teams.',
-    },
-    projects: {
-      type: "string[]" as const,
-      description: "Restrict to these project names. Omit for all projects.",
-    },
-  };
 
+  private readonly config: Record<string, unknown>;
   private readonly transport: () => LinearRequest | null;
 
-  constructor(deps: LinearDeps = {}) {
+  constructor(options: Record<string, unknown> = {}, deps: LinearDeps = {}) {
+    this.config = options;
     this.transport = deps.transport ?? defaultTransport;
   }
 
@@ -196,16 +200,16 @@ export class LinearSource implements Source {
     }
   }
 
-  async read(window: Window, options: Record<string, unknown> = {}): Promise<NormalizedItem[]> {
+  async read(window: Window): Promise<NormalizedItem[]> {
     const request = this.transport();
     if (!request) throw new Error("Linear is not configured. Set LINEAR_API_KEY in your environment.");
 
-    const relationships = ((options.relationships as string[] | undefined) ?? DEFAULT_RELATIONSHIPS).filter(
+    const relationships = ((this.config.relationships as string[] | undefined) ?? DEFAULT_RELATIONSHIPS).filter(
       (r): r is Relationship => (RELATIONSHIPS as readonly string[]).includes(r),
     );
-    const states = (options.states as string[] | undefined) ?? DEFAULT_STATES;
-    const teams = options.teams as string[] | undefined;
-    const projects = options.projects as string[] | undefined;
+    const states = (this.config.states as string[] | undefined) ?? DEFAULT_STATES;
+    const teams = this.config.teams as string[] | undefined;
+    const projects = this.config.projects as string[] | undefined;
 
     // For each (relationship × {standing, recent}) run a paginated query, tagging
     // each node with the relationship that surfaced it, then union + dedup by id.
