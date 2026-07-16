@@ -11,6 +11,8 @@ import type { Brief } from "./domain.ts";
 
 export interface BuildBriefOptions {
   windowOverride?: WindowSelector;
+  /** Per-run `--source` narrowing: run only these configured sources (empty/undefined = all). */
+  sourceFilter?: string[];
   now?: Date;
   /** Optional progress sink (trusted status only) — cli.ts routes this to stderr for TTYs. */
   onProgress?: (message: string) => void;
@@ -21,7 +23,11 @@ export async function buildBrief(opts: BuildBriefOptions = {}): Promise<Brief> {
   // The one clock for the whole run: read `now` once here and thread it, so every
   // stage shares a single instant. Downstream stages have no `= new Date()`.
   const now = opts.now ?? new Date();
-  const config = await resolveConfig(registry, { windowOverride: opts.windowOverride, now });
+  const config = await resolveConfig(registry, {
+    windowOverride: opts.windowOverride,
+    sourceFilter: opts.sourceFilter,
+    now,
+  });
 
   const keys = config.selection.map((s) => s.sourceKey).join(", ");
   progress(`Pulling ${config.selection.length} source(s) (${keys}) for ${config.windowSpan}…`);

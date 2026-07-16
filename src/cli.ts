@@ -230,13 +230,13 @@ async function cmdLogin(sourceKey?: string): Promise<void> {
 
 // ── brief: the composed pipeline; emit one Brief as JSON on stdout ───────────
 
-async function cmdBrief(windowOverride?: WindowSelector): Promise<void> {
+async function cmdBrief(windowOverride?: WindowSelector, sourceFilter?: string[]): Promise<void> {
   // Progress goes to stderr, and only when it's a terminal — a piped/agent run
   // gets clean silent streams; stdout stays reserved for the Brief JSON (ADR-0006).
   const onProgress = process.stderr.isTTY
     ? (message: string) => process.stderr.write(`${message}\n`)
     : undefined;
-  const brief = await buildBrief({ windowOverride, onProgress });
+  const brief = await buildBrief({ windowOverride, sourceFilter, onProgress });
   // Bun.write awaits the flush, so the JSON is fully emitted before we exit.
   await Bun.write(Bun.stdout, JSON.stringify(brief) + "\n");
 }
@@ -252,7 +252,12 @@ if (command === "--version" || command === "-v") {
 
 const { values, positionals } = parseArgs({
   args: rest,
-  options: { window: { type: "string" } },
+  options: {
+    window: { type: "string" },
+    // Repeatable: `--source graph --source linear` narrows this run to a subset
+    // of the configured sources. Absent = run the full configured selection.
+    source: { type: "string", multiple: true },
+  },
   allowPositionals: true,
 });
 
@@ -270,7 +275,7 @@ function parseWindow(): WindowSelector | undefined {
 const USAGE = `rundown — a readout of where you stand across your work sources
 
 Usage:
-  rundown brief [--window <span|date|range>]   compose and emit the Brief as JSON on stdout
+  rundown brief [--window <span|date|range>] [--source <name>]…   compose and emit the Brief as JSON on stdout
   rundown login [<source>]                     authenticate every configured source, or just <source>
   rundown status                               per-source configured/authed diagnostic
   rundown init                                 write the annotated config template
@@ -279,12 +284,16 @@ Usage:
 Window:
   spans:  ${WINDOW_SPANS.join(" | ")}
   date:   YYYY-MM-DD                 (a single calendar day)
-  range:  YYYY-MM-DD..YYYY-MM-DD     (explicit, end-inclusive)`;
+  range:  YYYY-MM-DD..YYYY-MM-DD     (explicit, end-inclusive)
+
+Source:
+  --source narrows this run to a subset of the configured sources; repeat it to
+  keep several (--source graph --source linear). Omit it to run them all.`;
 
 try {
   switch (command) {
     case "brief":
-      await cmdBrief(parseWindow());
+      await cmdBrief(parseWindow(), values.source);
       break;
     case "login":
       await cmdLogin(positionals[0]);

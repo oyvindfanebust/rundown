@@ -115,7 +115,7 @@ The agent-facing surface is exactly five commands, and no more:
 
 | Command | Purpose |
 |---|---|
-| `rundown brief [--window <span>]` | the composed pipeline; emits one Brief as JSON on stdout |
+| `rundown brief [--window <span>] [--source <name>]…` | the composed pipeline; emits one Brief as JSON on stdout. `--source` narrows the run to a subset of the configured sources |
 | `rundown login` | interactive auth (the one command where interactivity is allowed, ADR-0007 §7) |
 | `rundown status` | one readiness phrase per source (`ready` / `not-authenticated` / `not-configured`) — the converging onboarding diagnostic |
 | `rundown init` | write the annotated JSONC config template (only if absent) |
