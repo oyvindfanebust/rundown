@@ -128,6 +128,26 @@ describe("cli", () => {
     });
   });
 
+  // Flags are parsed per command (issue #30): a brief-only flag on any other
+  // command is a hard error, not silently ignored. Each command declares only
+  // the flags it accepts, so this covers --window and --source on all three.
+  describe("brief-only flags rejected on other commands", () => {
+    const brief_only: Array<[string, string]> = [
+      ["--source", "graph"],
+      ["--window", "today"],
+    ];
+    for (const cmd of ["status", "login", "init"]) {
+      for (const [flag, value] of brief_only) {
+        test(`${cmd} ${flag} fails hard on stderr`, () => {
+          const r = run([cmd, flag, value], missing());
+          expect(r.stderr).toContain(`rundown ${cmd}: option ${flag} is not valid here`);
+          expect(r.stdout).toBe("");
+          expect(r.exitCode).toBe(1);
+        });
+      }
+    }
+  });
+
   describe("init", () => {
     test("writes the annotated template, then leaves an existing file untouched", () => {
       const path = missing();
