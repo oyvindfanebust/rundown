@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.2.1](https://github.com/oyvindfanebust/rundown/compare/v0.2.0...v0.2.1) (2026-07-16)
+
+
+### Bug Fixes
+
+* parse CLI flags per command so brief-only flags error elsewhere ([#32](https://github.com/oyvindfanebust/rundown/issues/32)) ([88bf79a](https://github.com/oyvindfanebust/rundown/commit/88bf79a2c2ec1e4449954a9467e39701ddb26452))
+
 ## [0.2.0](https://github.com/oyvindfanebust/rundown/compare/v0.1.5...v0.2.0) (2026-07-16)
 
 
