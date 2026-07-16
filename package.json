@@ -1,6 +1,6 @@
 {
   "name": "rundown",
-  "version": "0.2.3",
+  "version": "0.3.0",
   "type": "module",
   "description": "A plain, honest readout of where you stand across every work source, synthesized to help you plan.",
   "bin": {

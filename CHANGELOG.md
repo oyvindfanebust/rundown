@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.3.0](https://github.com/oyvindfanebust/rundown/compare/v0.2.3...v0.3.0) (2026-07-16)
+
+
+### Features
+
+* **jira:** add the Jira Cloud source (ADR-0013) ([#42](https://github.com/oyvindfanebust/rundown/issues/42)) ([fc2e360](https://github.com/oyvindfanebust/rundown/commit/fc2e360f53a32491f4d2c7731594cb67ea6f7dce))
+
 ## [0.2.3](https://github.com/oyvindfanebust/rundown/compare/v0.2.2...v0.2.3) (2026-07-16)
 
 
