@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.4.0](https://github.com/oyvindfanebust/rundown/compare/v0.3.0...v0.4.0) (2026-07-16)
+
+
+### Features
+
+* **jira:** scoped-token support via the api.atlassian.com gateway ([#46](https://github.com/oyvindfanebust/rundown/issues/46)) ([b1a3735](https://github.com/oyvindfanebust/rundown/commit/b1a3735b4024cb98a9394dc668bcfb092bf86b5b))
+
 ## [0.3.0](https://github.com/oyvindfanebust/rundown/compare/v0.2.3...v0.3.0) (2026-07-16)
 
 
