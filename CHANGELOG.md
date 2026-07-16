@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.2.2](https://github.com/oyvindfanebust/rundown/compare/v0.2.1...v0.2.2) (2026-07-16)
+
+
+### Documentation
+
+* add ADR-0013 for the Jira source design ([#17](https://github.com/oyvindfanebust/rundown/issues/17)) ([#28](https://github.com/oyvindfanebust/rundown/issues/28)) ([f7c4ab5](https://github.com/oyvindfanebust/rundown/commit/f7c4ab5647d164ebe1e3af8e58901c08fe677b9c))
+* ADR-0014 — Slack source design ([#21](https://github.com/oyvindfanebust/rundown/issues/21)) ([#34](https://github.com/oyvindfanebust/rundown/issues/34)) ([6eac610](https://github.com/oyvindfanebust/rundown/commit/6eac610a6d0a8b1f07e179f6cfa34bd7d0d397a8))
+
 ## [0.2.1](https://github.com/oyvindfanebust/rundown/compare/v0.2.0...v0.2.1) (2026-07-16)
 
 
