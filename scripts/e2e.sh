@@ -2,7 +2,7 @@
 # End-to-end acceptance gate (ADR/hand-off): drive the real CLI against live
 # Graph and assert a schema-valid Brief. Needs live credentials + a completed
 # `rundown login`, so it is NOT run in CI — run it locally to dogfood before
-# going public. Usage: scripts/e2e.sh [window-span]
+# going public. Usage: scripts/e2e.sh [window-span] [source-key]
 set -e
 
 cd "$(dirname "$0")/.."
@@ -16,6 +16,24 @@ echo
 echo "== rundown brief --window $SPAN =="
 ./rundown brief --window "$SPAN" | "$BUN" scripts/validate-brief.ts
 echo
+
+# --source narrowing: a run scoped to a single configured source still emits a
+# schema-valid Brief, and an unconfigured source name fails hard rather than
+# silently running everything. SRC defaults to graph (the source this live gate
+# targets); override with the 2nd arg if your config selects something else.
+SRC="${2:-graph}"
+echo "== rundown brief --window $SPAN --source $SRC =="
+./rundown brief --window "$SPAN" --source "$SRC" | "$BUN" scripts/validate-brief.ts
+echo
+
+echo "== rundown brief --source __no_such_source__ (must fail hard) =="
+if ./rundown brief --source __no_such_source__ >/dev/null 2>&1; then
+  echo "E2E acceptance: FAIL — an unconfigured --source did not error" >&2
+  exit 1
+fi
+echo "unconfigured --source rejected as expected"
+echo
+
 echo "E2E acceptance: PASS"
 
 # ─────────────────────────────────────────────────────────────────────────────

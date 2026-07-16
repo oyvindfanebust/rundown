@@ -26,10 +26,12 @@ instructions:
 Run the installed CLI and read its stdout as one JSON Brief:
 
 ```
-rundown brief                                # this week
+rundown brief                                # this week, every configured source
 rundown brief --window today                 # a symbolic span
 rundown brief --window 2026-07-14            # a single calendar day
 rundown brief --window 2026-07-06..2026-07-12   # an explicit, end-inclusive range
+rundown brief --source linear                # only Linear this run
+rundown brief --source graph --source linear # only these two
 ```
 
 `--window` takes one of three forms:
@@ -51,6 +53,12 @@ against today's date (given in context) and the user's timezone, make the end da
 last day the user means), and pass it. A single named day takes the single-date form. If the
 translation is ambiguous (e.g. "recently", or a month without a year), ask the user before
 running rather than guessing.
+
+`--source` narrows a run to a subset of the configured sources. Repeat it to keep several
+(`--source graph --source linear`); omit it to run them all. Use it when the user asks for a
+rundown scoped to one source ("just Linear", "only my calendar and email"). Each name must be one
+the config selects — an unconfigured name is a fail-hard error, not a silent skip. It only narrows
+what is already configured; it can't add a source the user hasn't set up.
 
 stdout is either a valid Brief or empty. Errors and refusals go to stderr with a non-zero exit —
 if that happens, tell the user what the error said; do not fabricate a rundown.

@@ -229,7 +229,36 @@ export function parseConfig(text: string, sources: Sources): {
 export interface ResolveOptions {
   /** Per-invocation `--window` override (span or explicit range); overrides config's symbolic default. */
   windowOverride?: WindowSelector;
+  /**
+   * Per-invocation `--source` narrowing: run only these configured sources this run.
+   * Each name must be present in the config's `sources` map — the flag narrows the
+   * configured selection, it never reaches past config to the registry. Empty/undefined
+   * means "no narrowing" (run the full configured selection).
+   */
+  sourceFilter?: string[];
   now?: Date;
+}
+
+/**
+ * Narrow a resolved selection to the `--source` names, fail-hard. A name absent from
+ * the configured selection is an error (the flag can only narrow what config selects,
+ * never add a source), as is a filter that would leave nothing to run.
+ */
+function applySourceFilter(selection: Selection[], filter: string[]): Selection[] {
+  const configured = selection.map((s) => s.sourceKey);
+  for (const name of filter) {
+    if (!configured.includes(name)) {
+      throw new ConfigError(
+        `--source "${name}" is not a configured source${suggest(name, configured)}. ` +
+          `Configured: ${configured.join(", ")}.`,
+      );
+    }
+  }
+  const narrowed = selection.filter((s) => filter.includes(s.sourceKey));
+  if (narrowed.length === 0) {
+    throw new ConfigError(`--source selected no sources. Configured: ${configured.join(", ")}.`);
+  }
+  return narrowed;
 }
 
 /** Load, validate, and resolve the config file into a ResolvedConfig against the injected source lookup. Fail-hard. */
@@ -239,6 +268,10 @@ export async function resolveConfig(sources: Sources, opts: ResolveOptions = {})
     throw new ConfigError(`No config at ${path}. Run \`rundown init\` to create one.`);
   }
   const parsed = parseConfig(await readFile(path, "utf-8"), sources);
+  const selection =
+    opts.sourceFilter && opts.sourceFilter.length > 0
+      ? applySourceFilter(parsed.selection, opts.sourceFilter)
+      : parsed.selection;
   const now = opts.now ?? new Date();
   const timezone = parsed.timezone ?? Intl.DateTimeFormat().resolvedOptions().timeZone;
   // Config's `window` is symbolic-only (ADR-0007); an explicit range comes only from `--window`.
@@ -247,5 +280,5 @@ export async function resolveConfig(sources: Sources, opts: ResolveOptions = {})
   const windowSpan = selector.kind === "span" ? selector.span : selector.label;
   // Reconcile `now` against the resolved window once, here — so the Planner never needs a clock.
   const windowIsPast = Date.parse(window.to) <= now.getTime();
-  return { timezone, windowSpan, window, windowIsPast, selection: parsed.selection, guidance: parsed.guidance };
+  return { timezone, windowSpan, window, windowIsPast, selection, guidance: parsed.guidance };
 }

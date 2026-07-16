@@ -52,9 +52,12 @@ entry in the static `registry.ts` (see [ADR-0008](docs/adr/0008-bounded-context-
 
 Exactly five agent-facing commands, and no more (see [ADR-0008](docs/adr/0008-bounded-context-and-component-architecture.md) §6):
 
-- `rundown brief [--window <span|date|range>]` — the composed pipeline; emits one Brief as JSON on
-  stdout. `--window` takes a symbolic span, a single `YYYY-MM-DD` date, or an explicit
-  end-inclusive `YYYY-MM-DD..YYYY-MM-DD` range ([ADR-0010](docs/adr/0010-explicit-date-windows.md)).
+- `rundown brief [--window <span|date|range>] [--source <name>]…` — the composed pipeline; emits one
+  Brief as JSON on stdout. `--window` takes a symbolic span, a single `YYYY-MM-DD` date, or an
+  explicit end-inclusive `YYYY-MM-DD..YYYY-MM-DD` range ([ADR-0010](docs/adr/0010-explicit-date-windows.md)).
+  `--source` narrows this run to a subset of the configured sources (repeatable); each name must be
+  one the config selects — the flag only narrows the configured selection, it never reaches past
+  config to the registry. Omit it to run every configured source.
 - `rundown login` — interactive auth (the only command where interactivity is allowed).
 - `rundown status` — one readiness phrase per source (`ready` / `not authenticated` /
   `not configured`, with identity or a fix-it detail), plus the global summarizer

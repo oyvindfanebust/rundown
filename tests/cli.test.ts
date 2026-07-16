@@ -118,6 +118,16 @@ describe("cli", () => {
     });
   });
 
+  describe("brief --source", () => {
+    test("a --source not in the config fails cleanly on stderr before summarizing", () => {
+      const path = written(`{"timezone":"UTC","sources":{"graph":{}}}`);
+      const r = run(["brief", "--source", "linear"], path);
+      expect(r.stderr).toContain(`--source "linear" is not a configured source`);
+      expect(r.stdout).toBe("");
+      expect(r.exitCode).toBe(1);
+    });
+  });
+
   describe("init", () => {
     test("writes the annotated template, then leaves an existing file untouched", () => {
       const path = missing();
