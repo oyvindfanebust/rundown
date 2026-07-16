@@ -2,7 +2,7 @@
 // and own emission (Brief JSON → stdout, errors → stderr, exit codes). No domain
 // logic lives here.
 
-import { parseArgs } from "node:util";
+import { parseArgs, type ParseArgsConfig } from "node:util";
 import { existsSync } from "node:fs";
 import { mkdir, writeFile } from "node:fs/promises";
 import { dirname } from "node:path";
@@ -230,13 +230,13 @@ async function cmdLogin(sourceKey?: string): Promise<void> {
 
 // ── brief: the composed pipeline; emit one Brief as JSON on stdout ───────────
 
-async function cmdBrief(windowOverride?: WindowSelector): Promise<void> {
+async function cmdBrief(windowOverride?: WindowSelector, sourceFilter?: string[]): Promise<void> {
   // Progress goes to stderr, and only when it's a terminal — a piped/agent run
   // gets clean silent streams; stdout stays reserved for the Brief JSON (ADR-0006).
   const onProgress = process.stderr.isTTY
     ? (message: string) => process.stderr.write(`${message}\n`)
     : undefined;
-  const brief = await buildBrief({ windowOverride, onProgress });
+  const brief = await buildBrief({ windowOverride, sourceFilter, onProgress });
   // Bun.write awaits the flush, so the JSON is fully emitted before we exit.
   await Bun.write(Bun.stdout, JSON.stringify(brief) + "\n");
 }
@@ -250,14 +250,28 @@ if (command === "--version" || command === "-v") {
   process.exit(0);
 }
 
-const { values, positionals } = parseArgs({
-  args: rest,
-  options: { window: { type: "string" } },
-  allowPositionals: true,
-});
+// Options are parsed per command, not once globally: each command declares only
+// the flags it accepts, so a flag a command doesn't own is a hard error rather
+// than silently ignored (issue #30). parseArgs is strict, so it throws on any
+// undeclared flag; parseCommandArgs translates that into a clean fail() naming
+// the command. Only `brief` accepts flags today (--window, --source); the rest
+// accept none (login still takes its optional <source> positional).
+function parseCommandArgs<const T extends ParseArgsConfig["options"]>(name: string, options: T) {
+  try {
+    return parseArgs({ args: rest, options, allowPositionals: true });
+  } catch (e) {
+    if (e instanceof Error && "code" in e && typeof e.code === "string" && e.code.startsWith("ERR_PARSE_ARGS")) {
+      // parseArgs names no offending token structurally, so lift it from the
+      // message; if that wording ever changes we fall back to the raw message
+      // rather than crash. The pinned test string catches a wording drift in CI.
+      const m = /'(--?[^']+)'/.exec(e.message);
+      fail(m ? `rundown ${name}: option ${m[1]} is not valid here` : `rundown ${name}: ${e.message}`);
+    }
+    throw e;
+  }
+}
 
-function parseWindow(): WindowSelector | undefined {
-  const w = values.window;
+function parseWindow(w: string | undefined): WindowSelector | undefined {
   if (w === undefined) return undefined;
   try {
     return parseWindowSelector(w);
@@ -270,7 +284,7 @@ function parseWindow(): WindowSelector | undefined {
 const USAGE = `rundown — a readout of where you stand across your work sources
 
 Usage:
-  rundown brief [--window <span|date|range>]   compose and emit the Brief as JSON on stdout
+  rundown brief [--window <span|date|range>] [--source <name>]…   compose and emit the Brief as JSON on stdout
   rundown login [<source>]                     authenticate every configured source, or just <source>
   rundown status                               per-source configured/authed diagnostic
   rundown init                                 write the annotated config template
@@ -279,20 +293,35 @@ Usage:
 Window:
   spans:  ${WINDOW_SPANS.join(" | ")}
   date:   YYYY-MM-DD                 (a single calendar day)
-  range:  YYYY-MM-DD..YYYY-MM-DD     (explicit, end-inclusive)`;
+  range:  YYYY-MM-DD..YYYY-MM-DD     (explicit, end-inclusive)
+
+Source:
+  --source narrows this run to a subset of the configured sources; repeat it to
+  keep several (--source graph --source linear). Omit it to run them all.`;
 
 try {
   switch (command) {
-    case "brief":
-      await cmdBrief(parseWindow());
+    case "brief": {
+      // Repeatable --source (`--source graph --source linear`) narrows this run
+      // to a subset of the configured sources; absent = the full selection.
+      const { values } = parseCommandArgs("brief", {
+        window: { type: "string" },
+        source: { type: "string", multiple: true },
+      });
+      await cmdBrief(parseWindow(values.window), values.source);
       break;
-    case "login":
+    }
+    case "login": {
+      const { positionals } = parseCommandArgs("login", {});
       await cmdLogin(positionals[0]);
       break;
+    }
     case "status":
+      parseCommandArgs("status", {});
       await cmdStatus();
       break;
     case "init":
+      parseCommandArgs("init", {});
       await cmdInit();
       break;
     default:

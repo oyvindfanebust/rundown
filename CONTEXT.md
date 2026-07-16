@@ -52,9 +52,12 @@ entry in the static `registry.ts` (see [ADR-0008](docs/adr/0008-bounded-context-
 
 Exactly five agent-facing commands, and no more (see [ADR-0008](docs/adr/0008-bounded-context-and-component-architecture.md) §6):
 
-- `rundown brief [--window <span|date|range>]` — the composed pipeline; emits one Brief as JSON on
-  stdout. `--window` takes a symbolic span, a single `YYYY-MM-DD` date, or an explicit
-  end-inclusive `YYYY-MM-DD..YYYY-MM-DD` range ([ADR-0010](docs/adr/0010-explicit-date-windows.md)).
+- `rundown brief [--window <span|date|range>] [--source <name>]…` — the composed pipeline; emits one
+  Brief as JSON on stdout. `--window` takes a symbolic span, a single `YYYY-MM-DD` date, or an
+  explicit end-inclusive `YYYY-MM-DD..YYYY-MM-DD` range ([ADR-0010](docs/adr/0010-explicit-date-windows.md)).
+  `--source` narrows this run to a subset of the configured sources (repeatable); each name must be
+  one the config selects — the flag only narrows the configured selection, it never reaches past
+  config to the registry. Omit it to run every configured source.
 - `rundown login` — interactive auth (the only command where interactivity is allowed).
 - `rundown status` — one readiness phrase per source (`ready` / `not authenticated` /
   `not configured`, with identity or a fix-it detail), plus the global summarizer
@@ -370,6 +373,12 @@ unwrap site. Behavioral — the summarizer's output (the brief) is
 [untrusted-derived](#untrusted-derived), so the consuming agent treats it as data, never
 instructions. The only trusted data anywhere is the structural fields (`source`, `kind`,
 `timestamp`, `end`, derived `bucket`, manifest scalars).
+
+The output-side corollary — a failed remote request must throw only its HTTP status, never a
+backend-authored body byte, since the message reaches stderr, an agent-readable channel (ADR-0004
+§5) — is centralized in `statusOnlyError` (`src/sources/errors.ts`); every remote source throws
+through it. The OAuth-redirect scrub (`redirectError` in `sources/graph/auth.ts`) shares the motive
+but validates a code against an allowlist rather than extracting a status, so it stays local.
 
 ### Untrusted&lt;T&gt;
 

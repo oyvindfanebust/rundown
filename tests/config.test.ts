@@ -25,7 +25,18 @@ const fakeGraph: Source = {
     return { state: "ready" };
   },
 };
-const sources: Sources = { graph: fakeGraph };
+const fakeLinear: Source = {
+  key: "linear",
+  label: "Fake Linear",
+  options: {},
+  async read() {
+    return [];
+  },
+  async status() {
+    return { state: "ready" };
+  },
+};
+const sources: Sources = { graph: fakeGraph, linear: fakeLinear };
 
 describe("stripJsonc", () => {
   test("removes line and block comments", () => {
@@ -190,5 +201,45 @@ describe("resolveConfig", () => {
       windowOverride,
     });
     expect(justBefore.windowIsPast).toBe(false); // to > now → still open by 1ms
+  });
+
+  // --source narrows the configured selection for one run; it can only subset what
+  // config selects, never reach past config to the registry.
+  describe("--source narrowing", () => {
+    const BOTH = `{"timezone":"UTC","sources":{"graph":{},"linear":{}}}`;
+
+    test("absent filter runs the full configured selection", async () => {
+      writeConfig(BOTH);
+      const cfg = await resolveConfig(sources, { now: NOW });
+      expect(cfg.selection.map((s) => s.sourceKey)).toEqual(["graph", "linear"]);
+    });
+
+    test("empty filter is treated as no narrowing", async () => {
+      writeConfig(BOTH);
+      const cfg = await resolveConfig(sources, { now: NOW, sourceFilter: [] });
+      expect(cfg.selection.map((s) => s.sourceKey)).toEqual(["graph", "linear"]);
+    });
+
+    test("narrows to the named subset", async () => {
+      writeConfig(BOTH);
+      const cfg = await resolveConfig(sources, { now: NOW, sourceFilter: ["linear"] });
+      expect(cfg.selection.map((s) => s.sourceKey)).toEqual(["linear"]);
+    });
+
+    test("a name not in the configured selection is a hard error", async () => {
+      writeConfig(`{"timezone":"UTC","sources":{"graph":{}}}`);
+      await expect(resolveConfig(sources, { now: NOW, sourceFilter: ["linear"] })).rejects.toThrow(
+        /not a configured source/,
+      );
+    });
+
+    test("a filter mixing a configured and an unconfigured name is rejected", async () => {
+      // linear is registry-known but not in this config's selection → still an error:
+      // the flag narrows the configured selection, it never reaches past config.
+      writeConfig(`{"timezone":"UTC","sources":{"graph":{}}}`);
+      await expect(resolveConfig(sources, { now: NOW, sourceFilter: ["graph", "linear"] })).rejects.toThrow(
+        /"linear" is not a configured source/,
+      );
+    });
   });
 });
