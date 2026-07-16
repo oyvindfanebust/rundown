@@ -124,12 +124,42 @@ describe("adfToText", () => {
 // ── status() ────────────────────────────────────────────────────────────────
 
 describe("JiraSource.status", () => {
-  test("not-configured, listing the missing site option, when transport is null", async () => {
-    const st = await source(null).status();
-    expect(st.state).toBe("not-configured");
-    // SITE is set in `source()`; env secrets are not, so the detail names them.
-    expect((st as any).detail).toContain("set");
-    expect((st as any).detail).toContain("JIRA_EMAIL");
+  // `missingConfigDetail` (ADR-0013 §7) reads process.env directly to name exactly
+  // the missing pieces, so these two cases control the env themselves — deleting or
+  // setting the secrets and restoring in a finally — to stay deterministic wherever
+  // JIRA_EMAIL/JIRA_API_TOKEN happen to live (the user keeps them in .zshenv).
+  function withSecrets(secrets: { email?: string; token?: string }, run: () => Promise<void>): Promise<void> {
+    const saved = { email: process.env.JIRA_EMAIL, token: process.env.JIRA_API_TOKEN };
+    const apply = (key: "JIRA_EMAIL" | "JIRA_API_TOKEN", value: string | undefined) => {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    };
+    apply("JIRA_EMAIL", secrets.email);
+    apply("JIRA_API_TOKEN", secrets.token);
+    return run().finally(() => {
+      apply("JIRA_EMAIL", saved.email);
+      apply("JIRA_API_TOKEN", saved.token);
+    });
+  }
+
+  test("not-configured names the missing secrets when both are absent", async () => {
+    await withSecrets({ email: undefined, token: undefined }, async () => {
+      const st = await source(null).status(); // SITE is set; only the secrets are missing
+      expect(st.state).toBe("not-configured");
+      expect((st as any).detail).toContain("set");
+      expect((st as any).detail).toContain("JIRA_EMAIL");
+      expect((st as any).detail).toContain("JIRA_API_TOKEN");
+    });
+  });
+
+  test("not-configured names only the site option when secrets are set but site is missing", async () => {
+    await withSecrets({ email: "ada@example.com", token: "test-token" }, async () => {
+      const noSite = new JiraSource({}, { transport: () => null }); // half-configured: secrets set, site missing
+      const st = await noSite.status();
+      expect(st.state).toBe("not-configured");
+      expect((st as any).detail).toContain(`the "site" option`);
+      expect((st as any).detail).not.toContain("JIRA_EMAIL");
+    });
   });
 
   test("ready with myself.displayName identity when the credential works", async () => {
