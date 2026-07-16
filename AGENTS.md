@@ -29,11 +29,13 @@ Releases are automated by release-please (ADR-0001 §7–§8): it reads commit m
 version bump and write `CHANGELOG.md`, so **commits must follow
 [Conventional Commits](https://www.conventionalcommits.org)**.
 
-- `feat:` → minor, `fix:` → patch, a `!` (`feat!:`) or a `BREAKING CHANGE:` footer → major.
-- `chore:`, `docs:`, `ci:`, `refactor:`, `test:`, `perf:` trigger no release (recorded, most hidden
-  from the changelog). A commit whose prefix isn't in the convention is invisible to versioning, so
-  the release can stall or under-bump. Choose `feat` vs `fix` vs breaking by user-facing impact, not
-  code size.
+- `feat:` → minor; `fix:`, `perf:`, `refactor:` → patch; a `!` (`feat!:`) or a `BREAKING CHANGE:`
+  footer → major. `perf` and `refactor` change the compiled binary, so they cut a release and show
+  in the changelog.
+- `docs:`, `chore:`, `ci:`, `test:` trigger no release (recorded but hidden from the changelog);
+  they do not change the binary. A commit whose prefix isn't in the convention is invisible to
+  versioning, so the release can stall or under-bump. Choose `feat` vs `fix` vs breaking by
+  user-facing impact, not code size.
 - This repo squash-merges PRs, so the **PR title** becomes the commit on `main` — that title is the
   line release-please reads. Give every PR a Conventional Commit title.
 
