@@ -162,14 +162,17 @@ function createApp(): PublicClientApplication {
   return new PublicClientApplication(config);
 }
 
-/** Interactive login via auth-code flow. Only needed once; tokens refresh silently after. */
-export async function login(): Promise<string> {
-  const pca = createApp();
-  const port = 53682;
+/**
+ * Run the localhost OAuth redirect capture: open `authUrl` in the browser, listen
+ * on `port` for the redirect, and resolve the `code` param — rejecting on an error
+ * redirect (via {@link redirectError}, so no hostile `error_description` reaches the
+ * rejected message), a listener failure, or a 5-minute timeout. The provider-neutral
+ * half of an interactive login; Graph and Slack share it rather than each copying
+ * the same listener/timeout dance.
+ */
+export function awaitAuthCode(port: number, authUrl: string): Promise<string> {
   const redirectUri = `http://localhost:${port}`;
-  const authUrl = await pca.getAuthCodeUrl({ scopes: GRAPH_SCOPES, redirectUri });
-
-  const code = await new Promise<string>((resolve, reject) => {
+  return new Promise<string>((resolve, reject) => {
     let timeout: ReturnType<typeof setTimeout>;
     let server: ReturnType<typeof Bun.serve>;
     const handler = (req: Request): Response => {
@@ -203,7 +206,15 @@ export async function login(): Promise<string> {
       reject(new Error("Timed out waiting for sign-in (5 min)"));
     }, 5 * 60_000);
   });
+}
 
+/** Interactive login via auth-code flow. Only needed once; tokens refresh silently after. */
+export async function login(): Promise<string> {
+  const pca = createApp();
+  const port = 53682;
+  const redirectUri = `http://localhost:${port}`;
+  const authUrl = await pca.getAuthCodeUrl({ scopes: GRAPH_SCOPES, redirectUri });
+  const code = await awaitAuthCode(port, authUrl);
   const result = await pca.acquireTokenByCode({ code, scopes: GRAPH_SCOPES, redirectUri });
   if (!result) throw new Error("Token exchange returned no result");
   return result.account?.username ?? "unknown";

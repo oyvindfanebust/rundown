@@ -134,7 +134,7 @@ Interface (see [ADR-0002](docs/adr/0002-source-abstraction.md)):
   `{ state: "ready" | "not-authenticated" | "not-configured" }` (identity on `ready`, a fix-it
   `detail` on `not-configured`). Every source has a total answer — a local source is always
   `ready`.
-- `login()` — optional; only sources with interactive auth (Graph) implement it. Its presence is
+- `login()` — optional; only sources with interactive auth (Graph, Slack) implement it. Its presence is
   the source's interactive-auth declaration; there is no separate flag.
 
 A Source owns a stable name/key (its registry key) and declares its config/credential needs. It
