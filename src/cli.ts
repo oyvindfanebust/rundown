@@ -35,10 +35,15 @@ function renderSourceEntry(key: string): string {
     optionLines.push(`      // ${spec.description}`);
     optionLines.push(`      ${JSON.stringify(name)}: ${def}${comma}`);
   });
-  // Sources with interactive login need `rundown login`; no-auth sources (local
-  // logs) don't — say so rather than print a misleading auth hint. `interactive`
-  // is the static declaration (#27), read here where no instance exists yet.
-  const auth = descriptor.interactive ? "Auth: rundown login" : "No auth required.";
+  // Interactive sources need `rundown login`; credential-only sources name the env
+  // secrets to set; genuinely no-auth local sources say so — rather than print a
+  // misleading hint. `interactive` and `credentials` are static declarations (#27),
+  // read here where no instance exists yet.
+  const auth = descriptor.interactive
+    ? "Auth: rundown login"
+    : descriptor.credentials?.length
+      ? `Auth: set ${descriptor.credentials.join(", ")} in your environment.`
+      : "No auth required.";
   return [`    // ${descriptor.label}. ${auth}`, `    ${JSON.stringify(key)}: {`, ...optionLines, `    }`].join("\n");
 }
 
