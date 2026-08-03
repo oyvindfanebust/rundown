@@ -1,6 +1,6 @@
 # ADR 0015 — The debug logging channel
 
-**Status:** Proposed
+**Status:** Accepted
 
 This ADR fixes the design of a debug logging channel for the CLI: an opt-in `--debug` /
 `RUNDOWN_DEBUG` switch that emits structural diagnostic signal to stderr, carried by a closed,
