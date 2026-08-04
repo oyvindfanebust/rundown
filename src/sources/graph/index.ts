@@ -155,6 +155,19 @@ async function readCalendar(fetchJson: FetchJson, token: string, window: Window)
       id: e.id,
       title: e.subject,
       url: e.webLink,
+      // An event has no honest container, so it carries no `where` (#54). `location` is
+      // a physical place, not the thing the item lives in, and a calendar title
+      // describes itself — the asymmetry with a chat message that #54 opens with.
+      // Filling the slot anyway would make the caption lie about what it means.
+      // Organizer leads `who`: they own the meeting, attendees are context.
+      attribution: {
+        who: [
+          e.organizer?.emailAddress?.name,
+          ...(e.attendees ?? [])
+            .filter((a) => a.type !== "resource")
+            .map((a) => a.emailAddress?.name),
+        ],
+      },
       extras: {
         organizer: e.organizer?.emailAddress?.name,
         attendees: (e.attendees ?? [])
@@ -185,24 +198,34 @@ async function readMailFolder(
     $top: "50",
   })) as GraphMessage[];
   const direction = folder === "Inbox" ? "inbox" : "sent";
-  return messages.map((m): NormalizedItem =>
-    normalize({
+  return messages.map((m): NormalizedItem => {
+    const from = m.from?.emailAddress?.name ?? m.from?.emailAddress?.address;
+    const to = (m.toRecipients ?? []).map((r) => r.emailAddress?.name ?? r.emailAddress?.address);
+    return normalize({
       kind: "message",
       timestamp: String(m[timeField]),
       id: m.id,
       title: m.subject,
       url: m.webLink,
+      // Mail's wording for the uniform slot (#54). `extras.folder` is a DIRECTION
+      // ("inbox"/"sent"), not a folder name, so it is written out as a reader-facing
+      // label rather than passed through. `who` leads with whoever is not the user:
+      // the sender on received mail, the recipients on mail the user sent.
+      attribution: {
+        where: direction === "inbox" ? "Inbox" : "Sent",
+        who: direction === "inbox" ? [from, ...to] : [...to, from],
+      },
       extras: {
         folder: direction,
-        from: m.from?.emailAddress?.name ?? m.from?.emailAddress?.address,
-        to: (m.toRecipients ?? []).map((r) => r.emailAddress?.name ?? r.emailAddress?.address),
+        from,
+        to,
         preview: text(m.bodyPreview),
         // Domain judgment stays caller-side: "normal" importance is the default, not signal.
         importance: m.importance !== "normal" ? m.importance : undefined,
         unread: m.isRead === false,
       },
-    }),
-  );
+    });
+  });
 }
 
 export class GraphSource implements Source {

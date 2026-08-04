@@ -255,6 +255,12 @@ describe("JiraSource.read mapping", () => {
         description: "D".repeat(200), // truncated ~200
       }),
     );
+    // Attribution (#54): the project is Jira's container, named "KEY — Name" since the
+    // key alone is opaque to a reader and the name alone is ambiguous across sites.
+    // Assignee leads `who` — the person who owes the work outranks the one who filed it.
+    expect(item.attribution).toEqual(
+      untrusted({ where: "OYV — rundown", who: ["Me"], relationship: "assigned" }),
+    );
   });
 
   test("omits empty labels and absent description", async () => {

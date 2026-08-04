@@ -63,9 +63,22 @@ export const Evidence = z.strictObject({
   quote: z.string().max(300),
 });
 
-/** What the CLI emits per evidence entry: `source` code-filled from the resolved item. */
+/**
+ * What the CLI emits per evidence entry. Every field except `quote` is code-filled from
+ * the resolved item, so none of it can be fabricated by the model (#54): `source` is
+ * the item's `source/kind`, and `where`/`who` are its `Attribution`.
+ *
+ * The caps are as load-bearing here as everywhere else, and for one extra reason —
+ * code-filled fields never pass through the model-output `.parse()`, so plan.ts
+ * re-parses the assembled Brief against {@link BriefOutputSchema} to enforce them.
+ * Sizes: `where` is one container label, `who` a short caption list, not a roster.
+ */
 export const BriefEvidence = z.strictObject({
   source: z.string(),
+  /** Container label ("#flow-mgmt", "DM with Ada Lovelace", "Inbox"), when the source has an honest one. */
+  where: z.string().max(120).optional(),
+  /** People involved, most salient first. */
+  who: z.array(z.string().max(120)).max(8).optional(),
   quote: z.string().max(300),
 });
 

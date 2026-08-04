@@ -1,5 +1,5 @@
 import { test, expect, describe } from "bun:test";
-import { untrusted } from "../src/trust.ts";
+import { untrusted, unwrap } from "../src/trust.ts";
 import type { Bundle } from "../src/domain.ts";
 import { plan, renderBundle, type PlanDeps } from "../src/plan.ts";
 import type { SummarizerOutput } from "../src/brief-contract.ts";
@@ -290,5 +290,127 @@ describe("plan — evidence-quote verification", () => {
     expect(quotes).toContain("Board meeting for Q3 planning"); // wrapped quote normalizes to the same text
     expect(quotes).not.toContain("This was never said by anyone.");
     expect(brief.items[0]!.evidence).toHaveLength(2);
+  });
+
+  // ── per-item resolution (#54) ──
+  //
+  // Verification used to be a substring test against the WHOLE rendered bundle, so a
+  // quote passed regardless of which item the model attached it to. It now runs against
+  // the cited item's own rendered text. That is deliberately stricter: a real quote
+  // citing the wrong item is dropped rather than passing. The pay-off is that a
+  // surviving quote and its code-copied attribution cannot disagree.
+  describe("resolves each quote against the item it cites, not the whole bundle", () => {
+    const first = {
+      source: "slack",
+      kind: "message",
+      timestamp: "2026-07-07T09:00:00Z",
+      bucket: "recent",
+      id: untrusted("m1"),
+      title: untrusted("Sounds good, I'll take a look this afternoon"),
+      attribution: untrusted({ where: "#flow-mgmt", who: ["Ada Lovelace"], relationship: "mentions" }),
+    } as const;
+    const second = {
+      source: "graph",
+      kind: "message",
+      timestamp: "2026-07-07T11:00:00Z",
+      bucket: "recent",
+      id: untrusted("m2"),
+      title: untrusted("Q3 budget figures — need your numbers by Friday"),
+      attribution: untrusted({ where: "Inbox", who: ["Kari Nord"] }),
+    } as const;
+
+    test("copies the cited item's attribution and code-fills source", async () => {
+      const output: SummarizerOutput = {
+        summary: "s",
+        items: [
+          {
+            kind: "task",
+            summary: "Ada is reviewing",
+            evidence: [{ ref: 1, quote: "take a look this afternoon" }],
+          },
+        ],
+      };
+      const { summarize } = fakeSummarizer(output);
+      const brief = await plan(bundle([first, second]), false, undefined, { summarize });
+
+      expect(brief.items[0]!.evidence).toEqual([
+        {
+          source: "slack/message",
+          where: "#flow-mgmt",
+          who: ["Ada Lovelace"],
+          quote: "take a look this afternoon",
+        },
+      ]);
+    });
+
+    test("drops a real quote that cites the wrong item (the behaviour change)", async () => {
+      const output: SummarizerOutput = {
+        summary: "s",
+        items: [
+          {
+            kind: "task",
+            // Verbatim from item 2, but attributed to item 1. Under the old
+            // whole-bundle check this passed; now it cannot borrow item 1's caption.
+            summary: "Budget numbers",
+            evidence: [{ ref: 1, quote: "need your numbers by Friday" }],
+          },
+        ],
+      };
+      const { summarize } = fakeSummarizer(output);
+      const brief = await plan(bundle([first, second]), false, undefined, { summarize });
+
+      expect(brief.items).toHaveLength(1); // the item survives, its evidence does not
+      expect(brief.items[0]!.evidence).toEqual([]);
+    });
+
+    test("drops an entry citing a ref that does not exist", async () => {
+      const output: SummarizerOutput = {
+        summary: "s",
+        items: [
+          {
+            kind: "fyi",
+            summary: "Out of range",
+            evidence: [
+              { ref: 99, quote: "take a look this afternoon" },
+              { ref: 0, quote: "take a look this afternoon" },
+              { ref: -1, quote: "take a look this afternoon" },
+            ],
+          },
+        ],
+      };
+      const { summarize } = fakeSummarizer(output);
+      const brief = await plan(bundle([first, second]), false, undefined, { summarize });
+
+      expect(brief.items[0]!.evidence).toEqual([]);
+    });
+
+    test("omits where/who when the cited item carries no attribution", async () => {
+      const bare = { ...first, attribution: undefined };
+      const output: SummarizerOutput = {
+        summary: "s",
+        items: [{ kind: "fyi", summary: "x", evidence: [{ ref: 1, quote: "Sounds good" }] }],
+      };
+      const { summarize } = fakeSummarizer(output);
+      const brief = await plan(bundle([bare]), false, undefined, { summarize });
+
+      expect(brief.items[0]!.evidence).toEqual([{ source: "slack/message", quote: "Sounds good" }]);
+    });
+
+    // Refs are assigned in render order across the whole bundle, and the bundle renders
+    // standing → recent → upcoming — so numbering crosses bucket-section boundaries.
+    test("numbers items across buckets in render order, not per bucket", async () => {
+      const standing = { ...second, bucket: "standing" as const, title: untrusted("Standing item") };
+      const rendered = renderBundle(bundle([first, standing]));
+      expect(rendered.data).toContain("- [1] [graph/message]"); // standing renders first
+      expect(rendered.data).toContain("- [2] [slack/message]");
+      expect(unwrap(rendered.index.get(1)!.item.title)).toBe("Standing item");
+    });
+
+    test("renders attribution for the model alongside extras", () => {
+      const rendered = renderBundle(bundle([first]));
+      expect(rendered.data).toContain("  where: #flow-mgmt");
+      expect(rendered.data).toContain("  who: Ada Lovelace");
+      expect(rendered.data).toContain("  relationship: mentions");
+    });
   });
 });

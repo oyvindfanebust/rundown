@@ -103,6 +103,25 @@ exactly `{source, kind, timestamp}`. Everything else is branded `Untrusted<T>` a
   | `counterpart` | display name | The other party in a 1:1 DM, giving a DM the human label a channel gets from `channel.name`. `search.messages` returns the target user's id in `channel.name` for IM results, and `users.info` resolves it. Absent when unresolvable, and for group DMs, whose `mpdm-…` composite the search docs do not specify — an absent label beats a wrong one. |
   | `fromMe` | boolean, present only when true | Whether the user wrote the message, by comparing the author id to the authenticated user's. Makes §1's participation anchor explicit rather than something the summarizer infers from a name. |
 
+  **Second amendment (execution, [#54](https://github.com/oyvindfanebust/rundown/issues/54)).** The
+  amendment above fixed the *inputs* but left the summarizer to assemble the label. It gave the model
+  `channel`, `counterpart`, `author`, and `fromMe` and expected a correct caption to be inferred from
+  them — which is the same class of mistake one level down, since an inference the model makes is one
+  it can get wrong, and nothing verified the result.
+
+  Slack now writes the label itself, into the uniform `attribution` field (ADR-0002 §4 amendment),
+  and the Planner copies it into Brief evidence by code (ADR-0005 §4 amendment):
+
+  | Field | Value |
+  |---|---|
+  | `where` | `#<name>` for a channel, `DM with <counterpart>` for a 1:1, `Group DM` for an `mpdm`. Absent when a DM's counterpart is unresolvable — the author is deliberately NOT a fallback, since on the user's own outgoing DM the author is the user, which is the exact bug the first amendment was written for. An absent label beats a wrong one. |
+  | `who` | Most-salient-first. On a DM that is the counterpart, not the author, who is usually the user; on a channel it is the author. The normalizer dedupes, so an incoming DM whose author and counterpart are the same person yields one name. |
+  | `relationship` | Unchanged, carried through as-is. |
+
+  The `extras` keys above all stay exactly as they are. They are the model's clustering material —
+  `channel.id` groups a conversation, `fromMe` marks participation — while `attribution` is the
+  human-facing caption. No new fetching is involved: every value was already computed.
+
   `author` keeps its plain meaning: whoever wrote the message. The IM behavior of `channel.name` is
   documented on a method Slack now marks legacy, and it contradicts the response schema on the same
   page, so the source treats it as a shape to test for rather than a guarantee: a value shaped like

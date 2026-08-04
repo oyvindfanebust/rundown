@@ -420,6 +420,17 @@ function normalizeIssue(issue: JiraIssue, relationship: Relationship, origin: st
     title: f.summary,
     // There is no permalink field; construct it from the site + key (ADR-0013 §4).
     url: origin && issue.key ? `${origin}/browse/${issue.key}` : undefined,
+    // Jira's wording for the uniform slot (#54): the project is the container, named
+    // "KEY — Name" when both are present since the key alone is opaque to a reader and
+    // the name alone is ambiguous across sites. Assignee leads `who` — on an issue the
+    // person who owes the work is more salient than the person who filed it.
+    attribution: {
+      where: f.project
+        ? [f.project.key, f.project.name].filter(Boolean).join(" — ") || undefined
+        : undefined,
+      who: [f.assignee?.displayName, f.reporter?.displayName],
+      relationship,
+    },
     extras: {
       key: issue.key,
       status: f.status ? { name: f.status.name, category: f.status.statusCategory?.key } : undefined,

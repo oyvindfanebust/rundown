@@ -13,6 +13,38 @@ export interface Window {
 }
 
 /**
+ * Who and where — the attribution every source has, under a different name each time
+ * (#54). Before this, `where`/`who` were buried in `extras` under five vocabularies
+ * (`folder`, `project`+`team`, `channel`+`counterpart`, `projectPath`+`gitBranch`),
+ * so the Brief had nothing uniform to carry and the model was asked for attribution
+ * prose it could get wrong.
+ *
+ * Two ideas make it work:
+ *
+ * 1. Uniform slot, source-specific wording. Each source writes its own honest label
+ *    into `where` — Slack decides between "#flow-mgmt" and "DM with Ada Lovelace",
+ *    Linear decides whether the locus is the project or the team. The container is
+ *    not forced into a shared vocabulary it does not have.
+ * 2. It splits the two audiences `extras` used to serve at once. `attribution` is
+ *    human-facing: pre-formatted labels, code-copied into Brief evidence, never
+ *    model-supplied. `extras` stays the summarizer's clustering material — ids,
+ *    states, flags, roles. A `channel.id` in `extras` and a `where` of "#flow-mgmt"
+ *    are not duplication: one is a join key, the other is a caption.
+ *
+ * Untrusted like every other backend-controlled field: display names and channel
+ * names are source bytes, so they are branded here and defanged on the way out.
+ * Code-copied means unfabricated, not trusted.
+ */
+export interface Attribution {
+  /** Human label for the container this item lives in. Omitted when there is no honest one. */
+  where?: string;
+  /** People involved, most salient first. Roles stay in `extras` — this is caption text. */
+  who?: string[];
+  /** Why this item is the user's: authored | mentions | dms | assigned | created | … */
+  relationship?: string;
+}
+
+/**
  * The common shape every Source emits (ADR-0002 §4). A thin structural-trusted
  * core the Aggregator groups/orders/attributes by, plus untrusted backend content.
  */
@@ -31,6 +63,8 @@ export interface NormalizedItem {
   id: Untrusted<string>;
   title: Untrusted<string>;
   url?: Untrusted<string>;
+  /** Who and where, uniform across sources — the Brief's evidence attribution. */
+  attribution?: Untrusted<Attribution>;
   /** All source-specific fields: people/roles, body/preview, status, … */
   extras?: Untrusted<Record<string, unknown>>;
 }

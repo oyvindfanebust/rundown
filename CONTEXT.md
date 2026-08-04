@@ -155,11 +155,11 @@ group, order, and attribute, plus an `extras` bag of source-specific fields for 
 - Structural (trusted) — `source`, `kind` (`event` | `message` | `issue` | `session` | …),
   `timestamp` (primary instant, the ordering key), `end?` (interval end). Produced by rundown's
   own source module; safe to surface structurally.
-- Untrusted (backend content) — `id`, `title`, `url?`, and everything in `extras` (people/roles,
-  body/preview, status, importance, channel, location, …). Only the summarizer reasons over these;
-  tool-capable code treats them as opaque. See the trust rule in `CLAUDE.md`; enforcement is the
-  [`Untrusted<T>`](#untrustedt) brand, applied by the normalizer
-  ([ADR-0004](docs/adr/0004-trust-boundary-enforcement.md) §3).
+- Untrusted (backend content) — `id`, `title`, `url?`, [`attribution?`](#attribution), and
+  everything in `extras` (people/roles, body/preview, status, importance, channel, location, …).
+  Only the summarizer reasons over these; tool-capable code treats them as opaque. See the trust
+  rule in `CLAUDE.md`; enforcement is the [`Untrusted<T>`](#untrustedt) brand, applied by the
+  normalizer ([ADR-0004](docs/adr/0004-trust-boundary-enforcement.md) §3).
 
 Standing / recent / upcoming is derived by the Aggregator by comparing `timestamp` to the
 requested window, not stored as a field.
@@ -170,7 +170,35 @@ makes one via `normalizer(source, {untitled})` and hands it each item's extracte
 brands the backend content Untrusted, truncates every title, falls back on absent titles, and
 compacts `extras` by the union policy — presence is signal: `undefined`/`null`/`""`/`false`/empty
 arrays vanish, `0`/`true` stay. The `text()` marker (truncate to 200, empty → absent) is applied
-by sources to free-text extras; only domain judgment stays at call sites.
+by sources to free-text extras; only domain judgment stays at call sites. `attribution` goes through
+the same funnel: branded, label-truncated, `who` deduplicated, and collapsed to absent when nothing
+in it carries information.
+
+### Attribution
+
+Who and where — the one attribution every source has, under a different name each time. An optional
+untrusted field on a [NormalizedItem](#normalizeditem): `{ where?, who?, relationship? }`. It exists
+because the two universal notions were scattered across five source vocabularies (`folder`,
+`project` + `team`, `channel` + `counterpart`, `projectPath` + `gitBranch`), leaving the
+[Brief](#brief) nothing uniform to carry — so evidence reached the agent as `slack/message`, with no
+way to tell which channel or which person ([ADR-0002](docs/adr/0002-source-abstraction.md) §4
+amendment).
+
+- `where` — a human label for the container the item lives in: `#flow-mgmt`, `DM with Ada Lovelace`,
+  `Inbox`, `rundown (OYV)`. A uniform slot with source-specific wording: each source writes its own
+  honest label, so "is Linear's locus the project or the team?" is that source's wording decision
+  rather than an abstraction problem. Absent when a source has no honest container — a calendar
+  event has none, since `location` is a physical place, not the thing the item lives in.
+- `who` — people involved, most salient first, as a flat label list. Roles (organizer vs attendee,
+  assignee vs reporter) deliberately stay in `extras`: this is caption text for a human, not
+  clustering material for the model.
+- `relationship` — why the item is the user's (`authored`, `mentions`, `dms`, `assigned`, …).
+
+It splits the two audiences `extras` used to serve at once: `attribution` is human-facing,
+pre-formatted, and code-copied into Brief evidence, while `extras` stays the summarizer's clustering
+material (ids, states, flags, roles). A `channel.id` in `extras` beside a `where` of `#flow-mgmt` is
+not duplication — one is a join key, the other is a caption. Untrusted like every other backend
+value: code-copied means unfabricated, not trusted, so it is defanged and cap-checked on the way out.
 
 ### Aggregator
 
@@ -268,10 +296,16 @@ reproduction of the Bundle. Shape: `{ kind, summary, when?, evidence }` (see
 - `when?` — optional, human-phrased timing ("Thu 9am", "due Fri"). Free-text, not a machine
   timestamp (there is no clean trusted linkage back to the sealed Bundle times), so it is
   approximate, not authoritative.
-- `evidence` — a list of `{ source, quote }` attributed snippets. The list is where cross-source
-  correlation surfaces (one item can cite a mail, a Slack thread, and an issue) without the
-  Aggregator ever reading content. `quote` (verbatim source text, framed as quoted evidence) is
+- `evidence` — a list of `{ source, where?, who?, quote }` attributed snippets. The list is where
+  cross-source correlation surfaces (one item can cite a mail, a Slack thread, and an issue) without
+  the Aggregator ever reading content. `quote` (verbatim source text, framed as quoted evidence) is
   the injection quarantine: an injected imperative in a meeting title lands there labeled as data.
+  Everything except `quote` is filled by code from the item the quote came from, never written by the
+  model: the Summarizer emits `{ref, quote}`, where `ref` points at one rendered Bundle item, and the
+  [Planner](#planner) resolves it, verifies the quote against that item alone, and copies the item's
+  [attribution](#attribution) across ([ADR-0005](docs/adr/0005-planning-layer.md) §4 amendment). So
+  attribution cannot be fabricated — though it is still untrusted-derived, since the labels
+  themselves are source bytes. A quote that cannot be placed in the item it cites is dropped.
 
 The distinct typed fields — rather than one free-text blob — are deliberate: a leaked instruction
 arrives as "a quote from an email titled X", never a bare imperative (ADR-0004, the output-side
