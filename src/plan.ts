@@ -21,12 +21,23 @@ import { summarize } from "./summarize.ts";
 // schema enum cannot drift (ADR-0011): the kinds and their meanings are spelled once.
 const KIND_BULLETS = KINDS.map((k) => `    * "${k}" — ${KIND_DESCRIPTIONS[k]}`).join("\n");
 
+// `source` on an evidence entry asks for attribution, not just the source key: a
+// message body is often unreadable without knowing which channel it came from or who
+// wrote it (a calendar title describes itself; "give me a shout when you're free"
+// does not). The rendered item carries those fields, so the model has them. Note this
+// is model-supplied free text — verifyEvidence checks the quote, not the attribution —
+// so a wrong channel name is possible. The durable fix is a structural, code-copied
+// attribution field on Evidence, which is a Brief-contract change (see issue #54).
 const ITEM_RULES = `- "items": the salient work-items worth attention — curated, not every item.
   Classify each by "kind":
 ${KIND_BULLETS}
   For each item: a concise "summary" in your own words; optional "when" as human-phrased
   timing ("Thu 9am", "due Fri"); and "evidence" — a list of {source, quote} where "quote"
-  is a short verbatim snippet from the source data and "source" is its source key.`;
+  is a short verbatim snippet from the source data and "source" attributes that quote:
+  the source key, plus where it came from when the item's rendered fields carry it, as in
+  "slack/#eng-platform", "slack/DM with Ada Lovelace", or "graph/inbox".
+  When an item's own text does not show who or where, say it in "summary" — a message
+  body on its own rarely shows who is waiting on whom.`;
 
 const PLAN_TASK = `You are preparing a "plan my week" rundown from the user's work sources.
 Read the data below and produce a curated planning brief:
