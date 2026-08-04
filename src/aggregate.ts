@@ -7,6 +7,7 @@
 import type { AnnotatedItem, Bucket, Bundle, NormalizedItem, Window } from "./domain.ts";
 import type { Selection } from "./config.ts";
 import { narrateStatus, type Sources } from "./sources/source.ts";
+import { noDebug, type DebugSink } from "./debug.ts";
 
 export class AggregateError extends Error {
   constructor(message: string) {
@@ -40,6 +41,7 @@ export async function aggregate(
   selection: Selection[],
   sources: Sources,
   now: Date,
+  debug: DebugSink = noDebug,
 ): Promise<Bundle> {
   // Pre-flight status() before any read (ADR-0003 §6): abort early with an
   // actionable error rather than pulling a partial set.
@@ -71,7 +73,11 @@ export async function aggregate(
   const perSource = await Promise.all(
     selection.map(async ({ sourceKey }) => {
       const source = sources[sourceKey]!;
+      // Per-source wall time + count: which source is slow, and which returned
+      // nothing (ADR-0015 §6). Both are trusted structural scalars.
+      const started = Date.now();
       const items = await source.read(window);
+      debug({ kind: "source-run", source: sourceKey, ms: Date.now() - started, itemCount: items.length });
       return { sourceKey, items };
     }),
   );

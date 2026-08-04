@@ -13,6 +13,7 @@
 import type { NormalizedItem, Window } from "../../domain.ts";
 import { normalizer, text } from "../normalize.ts";
 import { statusOnlyError } from "../errors.ts";
+import { noDebug, type DebugSink } from "../../debug.ts";
 import type { OptionSchema, Source, SourceStatus } from "../source.ts";
 import { azureConfig, getToken, login as graphLogin, signedInAccount } from "./auth.ts";
 
@@ -47,17 +48,28 @@ export interface GraphDeps {
   fetchJson?: FetchJson;
   /** The auth bundle (default: the real auth.ts functions). */
   auth?: GraphAuth;
+  /** Structural diagnostics sink (ADR-0015); defaults to the no-op. */
+  debug?: DebugSink;
 }
 
-/** The default `fetchJson`: a real bearer GET that throws on a non-2xx Graph response. */
-async function graphGet(token: string, url: string): Promise<any> {
-  const r = await fetch(url, {
-    headers: { Authorization: `Bearer ${token}`, Prefer: 'outlook.timezone="UTC"' },
-  });
-  // Scrub the backend response body: only the HTTP status crosses into the thrown
-  // message (ADR-0004 §5). The shared statusOnlyError owns that rule (sources/errors.ts).
-  if (!r.ok) throw statusOnlyError("Graph", r);
-  return r.json();
+/**
+ * The default `fetchJson`: a real bearer GET that throws on a non-2xx Graph
+ * response. A factory rather than a bare function so it can close over the debug
+ * sink and emit one `http` event per request (ADR-0015 §6) — host and path shape
+ * only, never the populated URL, which carries `$filter`/`$select` query content.
+ */
+function graphGet(debug: DebugSink = noDebug): FetchJson {
+  return async (token: string, url: string): Promise<any> => {
+    const r = await fetch(url, {
+      headers: { Authorization: `Bearer ${token}`, Prefer: 'outlook.timezone="UTC"' },
+    });
+    const u = new URL(url);
+    debug({ kind: "http", source: "graph", method: "GET", host: u.host, pathShape: u.pathname, status: r.status });
+    // Scrub the backend response body: only the HTTP status crosses into the thrown
+    // message (ADR-0004 §5). The shared statusOnlyError owns that rule (sources/errors.ts).
+    if (!r.ok) throw statusOnlyError("Graph", r);
+    return r.json();
+  };
 }
 
 // ── Graph row shapes (the external HTTP contract, mirrored for mapping + fixtures) ──
@@ -200,10 +212,12 @@ export class GraphSource implements Source {
   private readonly config: Record<string, unknown>;
   private readonly fetchJson: FetchJson;
   private readonly auth: GraphAuth;
+  private readonly debug: DebugSink;
 
   constructor(options: Record<string, unknown> = {}, deps: GraphDeps = {}) {
     this.config = options;
-    this.fetchJson = deps.fetchJson ?? graphGet;
+    this.debug = deps.debug ?? noDebug;
+    this.fetchJson = deps.fetchJson ?? graphGet(this.debug);
     this.auth = deps.auth ?? { azureConfig, signedInAccount, getToken, login: graphLogin };
   }
 

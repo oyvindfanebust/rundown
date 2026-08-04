@@ -4,6 +4,7 @@
 // answer); `login` is the opt-in interactive-auth capability a source declares.
 
 import type { NormalizedItem, Window } from "../domain.ts";
+import type { DebugSink } from "../debug.ts";
 
 /** A single declared config option for a source (drives validation + the init template). */
 export interface OptionSpec {
@@ -163,8 +164,14 @@ export interface SourceDescriptor {
    * genuinely no-auth local sources.
    */
   credentials?: readonly string[];
-  /** Construct the source with its resolved per-source config injected. */
-  build(options: Record<string, unknown>): Source;
+  /**
+   * Construct the source with its resolved per-source config injected, plus the
+   * debug sink it emits structural diagnostics into (ADR-0015 §4). Both are
+   * per-invocation values known at composition time, so they arrive by
+   * construction and `read`/`status` keep their argument-free shape (#27).
+   * `debug` defaults to the no-op, so a source that emits nothing ignores it.
+   */
+  build(options: Record<string, unknown>, debug?: DebugSink): Source;
 }
 
 /** The static registry: source key → descriptor. Consumed by config validation, `init`, and `buildRegistry`. */
