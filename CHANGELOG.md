@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.5.0](https://github.com/oyvindfanebust/rundown/compare/v0.4.0...v0.5.0) (2026-08-04)
+
+
+### Features
+
+* add the debug logging channel (ADR-0015) ([#53](https://github.com/oyvindfanebust/rundown/issues/53)) ([765bd40](https://github.com/oyvindfanebust/rundown/commit/765bd40276f8c3161cdb0f31b2dd6da03b0648a3))
+* **slack:** Slack source (ADR-0014) ([#43](https://github.com/oyvindfanebust/rundown/issues/43)) ([3d86d9e](https://github.com/oyvindfanebust/rundown/commit/3d86d9e26d6e644e73dae6164b01d9de99ef8afd))
+
+
+### Bug Fixes
+
+* surface the HTTP status in rejected-credential status() details ([#51](https://github.com/oyvindfanebust/rundown/issues/51)) ([f57e535](https://github.com/oyvindfanebust/rundown/commit/f57e5356140ee6e48e95ee919c7552c40221baf9)), closes [#49](https://github.com/oyvindfanebust/rundown/issues/49)
+
 ## [0.4.0](https://github.com/oyvindfanebust/rundown/compare/v0.3.0...v0.4.0) (2026-07-16)
 
 
