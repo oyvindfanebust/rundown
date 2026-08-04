@@ -3,6 +3,7 @@ import { aggregate, bucketOf, AggregateError } from "../src/aggregate.ts";
 import { untrusted } from "../src/trust.ts";
 import type { NormalizedItem, Window } from "../src/domain.ts";
 import type { Source, Sources } from "../src/sources/source.ts";
+import type { DebugEvent } from "../src/debug.ts";
 
 const window: Window = { from: "2026-07-06T00:00:00.000Z", to: "2026-07-13T00:00:00.000Z" };
 const now = new Date("2026-07-08T12:00:00Z");
@@ -115,5 +116,38 @@ describe("aggregate", () => {
         now,
       ),
     ).rejects.toThrow("boom");
+  });
+});
+
+describe("aggregate debug events (ADR-0015)", () => {
+  test("emits one source-run per source with its item count", async () => {
+    const events: DebugEvent[] = [];
+    const a: Source = {
+      key: "a",
+      label: "A",
+      status: ready,
+      read: async () => [item("a", "event", "2026-07-07T00:00:00Z", "x")],
+    };
+    const b: Source = { key: "b", label: "B", status: ready, read: async () => [] };
+    await aggregate(
+      window,
+      [
+        { sourceKey: "a", options: {} },
+        { sourceKey: "b", options: {} },
+      ],
+      sourcesOf(a, b),
+      now,
+      (e) => events.push(e),
+    );
+    const runs = events.filter((e) => e.kind === "source-run");
+    expect(runs.map((r) => (r as any).source).sort()).toEqual(["a", "b"]);
+    // The zero-count source is the diagnostic payoff: "why is nothing here?"
+    expect(runs.find((r) => (r as any).source === "b")).toMatchObject({ itemCount: 0 });
+    expect(runs.find((r) => (r as any).source === "a")).toMatchObject({ itemCount: 1 });
+  });
+
+  test("defaults to the no-op sink when none is passed", async () => {
+    const a: Source = { key: "a", label: "A", status: ready, read: async () => [] };
+    await expect(aggregate(window, [{ sourceKey: "a", options: {} }], sourcesOf(a), now)).resolves.toBeDefined();
   });
 });

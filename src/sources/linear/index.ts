@@ -18,7 +18,8 @@
 
 import type { NormalizedItem, Window } from "../../domain.ts";
 import { normalizer, text } from "../normalize.ts";
-import { statusOnlyError } from "../errors.ts";
+import { httpStatusNote, statusOnlyError, statusOf } from "../errors.ts";
+import { noDebug, type DebugSink } from "../../debug.ts";
 import type { OptionSchema, Source, SourceStatus } from "../source.ts";
 import { linearClient } from "./auth.ts";
 
@@ -57,6 +58,8 @@ export interface LinearDeps {
    * "not-configured" signal `status()` reads. Default: the real Linear client.
    */
   transport?: () => LinearRequest | null;
+  /** Structural diagnostics sink (ADR-0015); defaults to the no-op. */
+  debug?: DebugSink;
 }
 
 /** The default transport: the real SDK client, used purely as a raw-GraphQL pipe. */
@@ -182,10 +185,12 @@ export class LinearSource implements Source {
 
   private readonly config: Record<string, unknown>;
   private readonly transport: () => LinearRequest | null;
+  private readonly debug: DebugSink;
 
   constructor(options: Record<string, unknown> = {}, deps: LinearDeps = {}) {
     this.config = options;
     this.transport = deps.transport ?? defaultTransport;
+    this.debug = deps.debug ?? noDebug;
   }
 
   // Non-interactive auth (no login()): verify the credential with a live viewer call.
@@ -194,9 +199,13 @@ export class LinearSource implements Source {
     if (!request) return { state: "not-configured", detail: "set LINEAR_API_KEY" };
     try {
       const data = await request(VIEWER_QUERY);
+      this.debug({ kind: "auth-verify", source: KEY, outcome: "ready" });
       return { state: "ready", identity: data?.viewer?.name };
-    } catch {
-      return { state: "not-configured", detail: "LINEAR_API_KEY was rejected — check the key" };
+    } catch (e) {
+      // Surface the HTTP status the transport error already carries (ADR-0015 §1);
+      // only the status scalar is read — never a body byte.
+      this.debug({ kind: "auth-verify", source: KEY, outcome: "rejected", httpStatus: statusOf(e) });
+      return { state: "not-configured", detail: `LINEAR_API_KEY was rejected${httpStatusNote(e)} — check the key` };
     }
   }
 

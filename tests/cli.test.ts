@@ -20,7 +20,7 @@ interface Run {
 
 // Every run pins RUNDOWN_CONFIG at a caller-chosen path, so a dispatch test never
 // reads the developer's real ~/.config/rundown/config.json.
-function run(args: string[], configPath: string, entrypoint = "src/cli.ts"): Run {
+function run(args: string[], configPath: string, entrypoint = "src/cli.ts", extraEnv: Record<string, string> = {}): Run {
   const env: Record<string, string> = {};
   for (const [k, v] of Object.entries(process.env)) if (v !== undefined) env[k] = v;
   env.RUNDOWN_CONFIG = configPath;
@@ -32,6 +32,7 @@ function run(args: string[], configPath: string, entrypoint = "src/cli.ts"): Run
   delete env.LINEAR_API_KEY;
   delete env.JIRA_EMAIL;
   delete env.JIRA_API_TOKEN;
+  Object.assign(env, extraEnv);
   const proc = Bun.spawnSync([process.execPath, entrypoint, ...args], { cwd: ROOT, env });
   return { stdout: proc.stdout.toString(), stderr: proc.stderr.toString(), exitCode: proc.exitCode ?? 0 };
 }
@@ -271,6 +272,68 @@ describe("cli", () => {
       expect(r.stdout).not.toContain("All configured sources already authenticated.");
       expect(r.stdout).not.toContain("Done. Next: rundown status");
       expect(r.exitCode).toBe(0);
+    });
+  });
+
+  // ── debug channel (ADR-0015) ───────────────────────────────────────────────
+
+  describe("--debug", () => {
+    const CONFIG = JSON.stringify({ timezone: "UTC", window: "this-week", sources: { "claude-code-logs": {} } });
+
+    test("is off by default — no debug lines on stderr", () => {
+      const r = run(["status"], written(CONFIG));
+      expect(r.stderr).not.toContain("[debug]");
+      expect(r.stdout).not.toContain("[debug]");
+    });
+
+    test("--debug emits the config-path event on stderr, naming the env provenance", () => {
+      const r = run(["status", "--debug"], written(CONFIG));
+      expect(r.stderr).toContain("[debug] config  path=");
+      // The harness sets RUNDOWN_CONFIG, so provenance must read `env`.
+      expect(r.stderr).toContain("provenance=env");
+    });
+
+    test("RUNDOWN_DEBUG=1 turns it on without the flag", () => {
+      const r = run(["status"], written(CONFIG), "src/cli.ts", { RUNDOWN_DEBUG: "1" });
+      expect(r.stderr).toContain("[debug]");
+    });
+
+    test("RUNDOWN_DEBUG=0 leaves it off", () => {
+      const r = run(["status"], written(CONFIG), "src/cli.ts", { RUNDOWN_DEBUG: "0" });
+      expect(r.stderr).not.toContain("[debug]");
+    });
+
+    test("all four config-touching commands accept the flag", () => {
+      // A command that does not declare --debug fails with "option --debug is not
+      // valid here" (issue #30), so a clean run proves the flag is declared.
+      // A missing config makes every command fail fast at config resolution —
+      // which happens AFTER flag parsing, so this still proves the flag parsed.
+      // (brief especially: a valid config would run the real pipeline.)
+      for (const cmd of ["status", "init", "login", "brief"]) {
+        const r = run([cmd, "--debug"], missing());
+        expect(r.stderr).not.toContain("is not valid here");
+      }
+    });
+
+    test("--version rejects the flag (it reads no config and does no I/O)", () => {
+      const r = run(["--version", "--debug"], missing());
+      // --version short-circuits before parsing, so it simply prints the version
+      // rather than growing a debug surface.
+      expect(r.stdout).not.toContain("[debug]");
+    });
+
+    test("debug goes to stderr only — stdout stays the command's own output", () => {
+      const r = run(["init", "--debug"], missing());
+      expect(r.stderr).toContain("[debug]");
+      expect(r.stdout).not.toContain("[debug]");
+      expect(r.stdout).toContain("Wrote ");
+    });
+
+    test("debug is not TTY-gated: a piped run still captures it", () => {
+      // Bun.spawnSync pipes both streams, so stderr is not a TTY here. Progress is
+      // suppressed in that case by design; debug must not be (ADR-0015 §4).
+      const r = run(["status", "--debug"], written(CONFIG));
+      expect(r.stderr).toContain("[debug]");
     });
   });
 });

@@ -68,6 +68,9 @@ Exactly five agent-facing commands, and no more (see [ADR-0008](docs/adr/0008-bo
 - `rundown --version` — the CLI version (today a hardcoded constant; tag-stamped semver arrives
   with the release workflow).
 
+Every command except `--version` also accepts `--debug`, the [debug channel](#debug-channel) switch
+([ADR-0015](docs/adr/0015-debug-logging.md)).
+
 Internal components are never subcommands — there is no `fetch`, `aggregate`, or `summarize`
 command. Raw source-fetch, aggregation, and summarization are internal steps of `brief`. The
 release binary contains no command, flag, or code path that emits pre-summarizer source content
@@ -290,6 +293,27 @@ post-summarizer Brief — no `extras`, no Bundle, no raw source content.
 Emission is composition-root plumbing, not a component
 ([ADR-0008](docs/adr/0008-bounded-context-and-component-architecture.md) §2); it lives at the
 `cli.ts` process edge. The domain term is *emission*; there is nothing pluggable to name.
+
+### debug channel
+
+The opt-in diagnostic stream (see [ADR-0015](docs/adr/0015-debug-logging.md)): `--debug` on any
+command, or `RUNDOWN_DEBUG` in the environment, writes structural signal about what rundown did to
+stderr. It answers the questions the normal output cannot — which config file was read, which host
+and path a request went to and what status came back, whether a credential verified, how long each
+source took and how many items it returned, and which directory a local source scanned.
+
+It is a [trust boundary](#trust-boundary) surface, so what it may carry is fixed rather than
+freeform: a closed set of events whose every field is a trusted structural scalar. Untrusted content
+cannot enter it — [`Untrusted<T>`](#untrustedt) is not assignable to a scalar field, so a leak is a
+compile error, and the channel never unwraps. Two rules keep that true as the event set grows: no
+free-text error or message field (the numeric HTTP status goes through the same scrub as
+`statusOnlyError`), and host plus path shape only, never a populated URL. The channel is a
+leak-path audit surface alongside the [`unwrap()`](#untrustedt) sites.
+
+Distinct from progress narration, which is human-facing prose shown only on a terminal: debug is
+typed, explicitly requested, and emitted whether or not stderr is a terminal, so a piped or CI run
+can capture it. Neither ever touches stdout, which stays the [Brief](#brief) alone
+([ADR-0006](docs/adr/0006-output-emission.md)).
 
 ### planning-guidance
 

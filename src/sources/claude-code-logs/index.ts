@@ -28,6 +28,7 @@ import { homedir } from "node:os";
 import type { NormalizedItem, Window } from "../../domain.ts";
 import { normalizer, text } from "../normalize.ts";
 import type { OptionSchema, Source, SourceStatus } from "../source.ts";
+import { noDebug, type DebugSink } from "../../debug.ts";
 
 const KEY = "claude-code-logs";
 
@@ -45,6 +46,8 @@ export interface ClaudeCodeLogsDeps {
    * be set from a test fixture.
    */
   birthtimeOf?: (absPath: string) => Date;
+  /** Structural diagnostics sink (ADR-0015); defaults to the no-op. */
+  debug?: DebugSink;
 }
 
 function defaultRoot(): string {
@@ -186,10 +189,12 @@ export class ClaudeCodeLogsSource implements Source {
 
   private readonly root: string;
   private readonly birthtimeOf: (absPath: string) => Date;
+  private readonly debug: DebugSink;
 
   constructor(root: string = defaultRoot(), deps: ClaudeCodeLogsDeps = {}) {
     this.root = root;
     this.birthtimeOf = deps.birthtimeOf ?? ((p) => statSync(p).birthtime);
+    this.debug = deps.debug ?? noDebug;
   }
 
   // Local + no-auth: always ready to read.
@@ -198,18 +203,30 @@ export class ClaudeCodeLogsSource implements Source {
   }
 
   async read(window: Window): Promise<NormalizedItem[]> {
-    if (!existsSync(this.root)) return [];
+    // A local source has no HTTP or auth to trace, so its diagnostic question is
+    // "why zero items?" — a wrong root or an empty window. The scan event answers
+    // the first half; source-run's itemCount answers the second (ADR-0015 §6). The
+    // root is a control-plane filesystem path, not backend content.
+    if (!existsSync(this.root)) {
+      this.debug({ kind: "scan", source: KEY, path: this.root, fileCount: 0 });
+      return [];
+    }
     const items: NormalizedItem[] = [];
+    let fileCount = 0;
     for (const entry of readdirSync(this.root, { withFileTypes: true })) {
       if (!entry.isDirectory()) continue;
       const dir = join(this.root, entry.name);
       const indexPath = join(dir, "sessions-index.json");
       if (existsSync(indexPath)) {
+        fileCount++;
         items.push(...readIndexedDir(indexPath, window)); // per-dir either/or: no double count
       } else {
+        const before = items.length;
         items.push(...this.readParsedDir(dir, window));
+        fileCount += items.length - before;
       }
     }
+    this.debug({ kind: "scan", source: KEY, path: this.root, fileCount });
     return items;
   }
 
