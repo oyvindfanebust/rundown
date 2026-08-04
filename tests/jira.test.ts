@@ -176,6 +176,17 @@ describe("JiraSource.status", () => {
     });
   });
 
+  test("surfaces the HTTP status in the rejected detail (ADR-0015 §1)", async () => {
+    // The scoped-token case that motivated this: a 401 must be distinguishable
+    // from a 403 (missing scope) without dropping to curl.
+    const s = source(async () => {
+      throw Object.assign(new Error("Unauthorized"), { status: 401, errorMessages: ["INJECTED backend text"] });
+    });
+    const st = await s.status();
+    expect((st as any).detail).toBe("JIRA_EMAIL/JIRA_API_TOKEN was rejected (HTTP 401) — check the credentials");
+    expect((st as any).detail).not.toContain("INJECTED");
+  });
+
   test("never emits not-authenticated", async () => {
     for (const t of [null, fakeTransport({})]) {
       const st = await source(t).status();

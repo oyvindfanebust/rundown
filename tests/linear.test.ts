@@ -100,6 +100,18 @@ describe("LinearSource.status", () => {
     });
   });
 
+  test("surfaces the HTTP status in the rejected detail (ADR-0015 §1)", async () => {
+    const s = source(async () => {
+      throw Object.assign(new Error("Authentication failed"), {
+        status: 401,
+        errors: [{ message: "INJECTED backend text" }],
+      });
+    });
+    const st = await s.status();
+    expect((st as any).detail).toBe("LINEAR_API_KEY was rejected (HTTP 401) — check the key");
+    expect((st as any).detail).not.toContain("INJECTED");
+  });
+
   test("never emits not-authenticated", async () => {
     for (const t of [null, fakeTransport({})]) {
       const st = await source(t).status();

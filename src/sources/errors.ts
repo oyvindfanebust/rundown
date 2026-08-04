@@ -36,5 +36,28 @@ function statusOf(source: unknown): number | undefined {
  */
 export function statusOnlyError(name: string, err: unknown): Error {
   const status = statusOf(err);
-  return new Error(`${name} request failed${status !== undefined ? `: ${status}` : ""}`);
+  const error = new Error(`${name} request failed${status !== undefined ? `: ${status}` : ""}`);
+  // Re-expose the status as a trusted numeric scalar on the thrown error. Without
+  // it the code survives only inside the message string, so a downstream
+  // trusted-only channel (a `status()` detail, ADR-0015 §1) would have to parse
+  // prose to recover it — or, as it did, silently lose it. Nothing else is
+  // attached, so the error still carries no backend-authored bytes.
+  if (status !== undefined) (error as Error & { status?: number }).status = status;
+  return error;
+}
+
+/**
+ * The ` (HTTP <status>)` fragment a source appends to a rejected-credential
+ * `status()` detail, or `""` when the caught error carries no status (a DNS
+ * failure, a timeout). A `status()` catch would otherwise discard the code the
+ * transport error already carries, which is what made a scoped-token 401 read the
+ * same as a 403 or a 5xx (ADR-0015 §1).
+ *
+ * Like {@link statusOnlyError} it reads only the status scalar via {@link statusOf}
+ * — never a message or body — so a `status()` detail can never carry backend bytes
+ * (ADR-0004 §5). Shared rather than formatted per source so the wording cannot drift.
+ */
+export function httpStatusNote(err: unknown): string {
+  const status = statusOf(err);
+  return status !== undefined ? ` (HTTP ${status})` : "";
 }

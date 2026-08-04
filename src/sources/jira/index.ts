@@ -31,7 +31,7 @@
 
 import type { NormalizedItem, Window } from "../../domain.ts";
 import { normalizer, text } from "../normalize.ts";
-import { statusOnlyError } from "../errors.ts";
+import { httpStatusNote, statusOnlyError } from "../errors.ts";
 import type { OptionSchema, Source, SourceStatus } from "../source.ts";
 import { basicAuthHeader, jiraCredentials } from "./auth.ts";
 
@@ -329,8 +329,14 @@ export class JiraSource implements Source {
     try {
       const me = await request("/rest/api/3/myself");
       return { state: "ready", identity: me?.displayName };
-    } catch {
-      return { state: "not-configured", detail: "JIRA_EMAIL/JIRA_API_TOKEN was rejected — check the credentials" };
+    } catch (e) {
+      // Surface the HTTP status the transport error already carries (ADR-0015 §1):
+      // 401 (bad credential) vs 403 (missing scope) vs 5xx are the same sentence
+      // without it. Only the status scalar is read — never a body byte.
+      return {
+        state: "not-configured",
+        detail: `JIRA_EMAIL/JIRA_API_TOKEN was rejected${httpStatusNote(e)} — check the credentials`,
+      };
     }
   }
 
