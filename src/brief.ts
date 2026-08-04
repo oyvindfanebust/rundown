@@ -8,6 +8,7 @@ import { aggregate } from "./aggregate.ts";
 import { plan } from "./plan.ts";
 import { descriptors, buildRegistry } from "./sources/registry.ts";
 import type { Brief } from "./domain.ts";
+import { noDebug, type DebugSink } from "./debug.ts";
 
 export interface BuildBriefOptions {
   windowOverride?: WindowSelector;
@@ -16,10 +17,17 @@ export interface BuildBriefOptions {
   now?: Date;
   /** Optional progress sink (trusted status only) — cli.ts routes this to stderr for TTYs. */
   onProgress?: (message: string) => void;
+  /**
+   * Structural debug sink (ADR-0015). Distinct from `onProgress`: that one carries
+   * human-facing strings and is TTY-gated, this one carries typed trusted-scalar
+   * events and is emitted whenever debug is on, piped or not.
+   */
+  onDebug?: DebugSink;
 }
 
 export async function buildBrief(opts: BuildBriefOptions = {}): Promise<Brief> {
   const progress = opts.onProgress ?? (() => {});
+  const debug = opts.onDebug ?? noDebug;
   // The one clock for the whole run: read `now` once here and thread it, so every
   // stage shares a single instant. Downstream stages have no `= new Date()`.
   const now = opts.now ?? new Date();
@@ -30,11 +38,11 @@ export async function buildBrief(opts: BuildBriefOptions = {}): Promise<Brief> {
   });
 
   // Build only the selected sources, with their resolved config injected (#27).
-  const sources = buildRegistry(config.selection);
+  const sources = buildRegistry(config.selection, debug);
 
   const keys = config.selection.map((s) => s.sourceKey).join(", ");
   progress(`Pulling ${config.selection.length} source(s) (${keys}) for ${config.windowSpan}…`);
-  const bundle = await aggregate(config.window, config.selection, sources, now);
+  const bundle = await aggregate(config.window, config.selection, sources, now, debug);
 
   const total = bundle.sources.reduce((n, s) => n + s.itemCount, 0);
   if (total === 0) {

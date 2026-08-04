@@ -8,6 +8,7 @@
 // greppable. No self-registration, no dynamic discovery.
 
 import type { Descriptors, Sources } from "./source.ts";
+import { noDebug, type DebugSink } from "../debug.ts";
 import type { Selection } from "../config.ts";
 import { GraphSource, GRAPH_OPTIONS } from "./graph/index.ts";
 import { ClaudeCodeLogsSource, CLAUDE_CODE_LOGS_OPTIONS } from "./claude-code-logs/index.ts";
@@ -20,14 +21,14 @@ export const descriptors: Descriptors = {
     label: "Microsoft Graph (calendar + mail)",
     options: GRAPH_OPTIONS,
     interactive: true,
-    build: (options) => new GraphSource(options),
+    build: (options, debug) => new GraphSource(options, { debug }),
   },
   "claude-code-logs": {
     key: "claude-code-logs",
     label: "Claude Code session logs",
     options: CLAUDE_CODE_LOGS_OPTIONS,
     interactive: false,
-    build: () => new ClaudeCodeLogsSource(),
+    build: (_options, debug) => new ClaudeCodeLogsSource(undefined, { debug }),
   },
   linear: {
     key: "linear",
@@ -35,7 +36,7 @@ export const descriptors: Descriptors = {
     options: LINEAR_OPTIONS,
     interactive: false,
     credentials: ["LINEAR_API_KEY"],
-    build: (options) => new LinearSource(options),
+    build: (options, debug) => new LinearSource(options, { debug }),
   },
   jira: {
     key: "jira",
@@ -43,7 +44,7 @@ export const descriptors: Descriptors = {
     options: JIRA_OPTIONS,
     interactive: false,
     credentials: ["JIRA_EMAIL", "JIRA_API_TOKEN"],
-    build: (options) => new JiraSource(options),
+    build: (options, debug) => new JiraSource(options, { debug }),
   },
 };
 
@@ -56,12 +57,13 @@ export function registeredKeys(): string[] {
  * The composition step (ADR-0008 §5): build the selected sources with their
  * resolved per-source config injected, keyed by source key. `status()`/`read()`
  * on each instance then close over `this.config` (#27). The output is the
- * {@link Sources} the Aggregator consumes.
+ * {@link Sources} the Aggregator consumes. `debug` is the per-invocation debug
+ * sink (ADR-0015 §4), injected the same way and defaulting to the no-op.
  */
-export function buildRegistry(selection: Selection[]): Sources {
+export function buildRegistry(selection: Selection[], debug: DebugSink = noDebug): Sources {
   const out: Sources = {};
   for (const { sourceKey, options } of selection) {
-    out[sourceKey] = descriptors[sourceKey]!.build(options);
+    out[sourceKey] = descriptors[sourceKey]!.build(options, debug);
   }
   return out;
 }

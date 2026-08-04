@@ -31,7 +31,8 @@
 
 import type { NormalizedItem, Window } from "../../domain.ts";
 import { normalizer, text } from "../normalize.ts";
-import { httpStatusNote, statusOnlyError } from "../errors.ts";
+import { httpStatusNote, statusOnlyError, statusOf } from "../errors.ts";
+import { hostOf, noDebug, type DebugSink } from "../../debug.ts";
 import type { OptionSchema, Source, SourceStatus } from "../source.ts";
 import { basicAuthHeader, jiraCredentials } from "./auth.ts";
 
@@ -121,6 +122,8 @@ export interface JiraDeps {
    * `status()` reads. Default: a real Basic-auth `fetch` against the site.
    */
   transport?: () => JiraRequest | null;
+  /** Structural diagnostics sink (ADR-0015); defaults to the no-op. */
+  debug?: DebugSink;
 }
 
 /**
@@ -143,7 +146,11 @@ export function siteOrigin(site: unknown): string | undefined {
  * and `read()` reuse it. `fetchImpl` is injectable for tests; production uses the
  * global `fetch`.
  */
-export function defaultTransport(site: unknown, fetchImpl: FetchLike = fetch): JiraRequest | null {
+export function defaultTransport(
+  site: unknown,
+  fetchImpl: FetchLike = fetch,
+  debug: DebugSink = noDebug,
+): JiraRequest | null {
   const origin = siteOrigin(site);
   const credentials = jiraCredentials();
   if (!origin || !credentials) return null;
@@ -159,8 +166,9 @@ export function defaultTransport(site: unknown, fetchImpl: FetchLike = fetch): J
 
   const call = async (root: string, path: string, init?: { method?: string; body?: unknown }) => {
     const hasBody = init?.body !== undefined;
-    return fetchImpl(`${root}${path}`, {
-      method: init?.method ?? "GET",
+    const method = init?.method ?? "GET";
+    const r = await fetchImpl(`${root}${path}`, {
+      method,
       headers: {
         Authorization: authorization,
         Accept: "application/json",
@@ -168,6 +176,9 @@ export function defaultTransport(site: unknown, fetchImpl: FetchLike = fetch): J
       },
       body: hasBody ? JSON.stringify(init!.body) : undefined,
     });
+    // Host + path shape + status only — never the populated URL (ADR-0015 §5).
+    debug({ kind: "http", source: KEY, method, host: hostOf(root), pathShape: path, status: r.status });
+    return r;
   };
 
   return async (path, init) => {
@@ -178,6 +189,9 @@ export function defaultTransport(site: unknown, fetchImpl: FetchLike = fetch): J
       // fall back to the instance URL and stay there. Any other status is a real
       // failure, scrubbed to status-only (ADR-0004 §5, ADR-0013 §6).
       if (r.status !== 401) throw statusOnlyError("Jira", r);
+      // The distinction that cost a long manual diagnosis: a 401 at the gateway
+      // means a classic token, so routing flips to the instance URL for good.
+      debug({ kind: "route", source: KEY, via: "instance", reason: "fallback" });
       base = "instance";
     }
     const r = await call(origin, path, init);
@@ -316,10 +330,12 @@ export class JiraSource implements Source {
 
   private readonly config: Record<string, unknown>;
   private readonly transport: () => JiraRequest | null;
+  private readonly debug: DebugSink;
 
   constructor(options: Record<string, unknown> = {}, deps: JiraDeps = {}) {
     this.config = options;
-    this.transport = deps.transport ?? (() => defaultTransport(options.site));
+    this.debug = deps.debug ?? noDebug;
+    this.transport = deps.transport ?? (() => defaultTransport(options.site, fetch, this.debug));
   }
 
   // Non-interactive auth (no login()): verify the credential with a live myself call.
@@ -328,11 +344,13 @@ export class JiraSource implements Source {
     if (!request) return { state: "not-configured", detail: missingConfigDetail(this.config.site) };
     try {
       const me = await request("/rest/api/3/myself");
+      this.debug({ kind: "auth-verify", source: KEY, outcome: "ready" });
       return { state: "ready", identity: me?.displayName };
     } catch (e) {
       // Surface the HTTP status the transport error already carries (ADR-0015 §1):
       // 401 (bad credential) vs 403 (missing scope) vs 5xx are the same sentence
       // without it. Only the status scalar is read — never a body byte.
+      this.debug({ kind: "auth-verify", source: KEY, outcome: "rejected", httpStatus: statusOf(e) });
       return {
         state: "not-configured",
         detail: `JIRA_EMAIL/JIRA_API_TOKEN was rejected${httpStatusNote(e)} — check the credentials`,
@@ -374,11 +392,14 @@ export class JiraSource implements Source {
   private async paginate(request: JiraRequest, jql: string): Promise<JiraIssue[]> {
     const issues: JiraIssue[] = [];
     let nextPageToken: string | undefined;
+    let page = 0;
     do {
       const body: Record<string, unknown> = { jql, fields: FIELDS, maxResults: PAGE_SIZE };
       if (nextPageToken) body.nextPageToken = nextPageToken;
       const data = await request("/rest/api/3/search/jql", { method: "POST", body });
-      issues.push(...(data?.issues ?? []));
+      const batch: JiraIssue[] = data?.issues ?? [];
+      this.debug({ kind: "pagination", source: KEY, page: ++page, items: batch.length });
+      issues.push(...batch);
       nextPageToken = data?.isLast === false ? data?.nextPageToken : undefined;
     } while (nextPageToken);
     return issues;

@@ -2,6 +2,7 @@ import { test, expect, describe, beforeAll, afterAll } from "bun:test";
 import { untrusted, unwrap } from "../src/trust.ts";
 import type { NormalizedItem } from "../src/domain.ts";
 import type { Source } from "../src/sources/source.ts";
+import type { DebugEvent } from "../src/debug.ts";
 import {
   JiraSource,
   JIRA_OPTIONS,
@@ -483,5 +484,105 @@ describe("defaultTransport gateway routing", () => {
     const request = defaultTransport(SITE, fetch)!;
     await expect(request("/rest/api/3/myself")).rejects.toThrow("Jira request failed: 500");
     expect(calls.some((c) => c.url.startsWith(`https://${SITE}/rest`))).toBe(false); // instance never hit
+  });
+});
+
+// ── debug channel (ADR-0015) ───────────────────────────────────────────────────
+
+describe("jira debug events", () => {
+  /** Collect events emitted by a source built with an injected debug sink. */
+  function withDebug(transport: JiraRequest | null, options: Record<string, unknown> = {}) {
+    const events: DebugEvent[] = [];
+    const src = new JiraSource({ site: SITE, ...options }, { transport: () => transport, debug: (e) => events.push(e) });
+    return { src, events };
+  }
+
+  test("auth-verify ready on a working credential", async () => {
+    const { src, events } = withDebug(fakeTransport({}));
+    await src.status();
+    expect(events).toContainEqual({ kind: "auth-verify", source: "jira", outcome: "ready" });
+  });
+
+  test("auth-verify rejected carries the HTTP status", async () => {
+    const { src, events } = withDebug(async () => {
+      throw Object.assign(new Error("Unauthorized"), { status: 401, errorMessages: ["INJECTED"] });
+    });
+    await src.status();
+    expect(events).toContainEqual({ kind: "auth-verify", source: "jira", outcome: "rejected", httpStatus: 401 });
+    expect(JSON.stringify(events)).not.toContain("INJECTED");
+  });
+
+  test("pagination events count the pages a read walked", async () => {
+    const { src, events } = withDebug(fakeTransport({ assigned: { standing: [issue({ id: "1" }), issue({ id: "2" })] } }));
+    await src.read(WINDOW);
+    const pages = events.filter((e) => e.kind === "pagination");
+    expect(pages.length).toBeGreaterThan(0);
+  });
+
+  test("emits nothing when no sink is injected", async () => {
+    // The default is the no-op, so a source built without a sink must not throw.
+    await expect(source(fakeTransport({})).status()).resolves.toBeDefined();
+  });
+});
+
+describe("jira transport debug events", () => {
+  // defaultTransport reads JIRA_EMAIL/JIRA_API_TOKEN from the env and returns null
+  // without them, so these tests set both and restore after. Without this they pass
+  // on a machine that happens to export real credentials and fail in CI, which is
+  // exactly what happened.
+  function withCredentials<T>(run: () => Promise<T>): Promise<T> {
+    const saved = { email: process.env.JIRA_EMAIL, token: process.env.JIRA_API_TOKEN };
+    process.env.JIRA_EMAIL = "ada@example.com";
+    process.env.JIRA_API_TOKEN = "test-token";
+    const restore = (key: "JIRA_EMAIL" | "JIRA_API_TOKEN", value: string | undefined) => {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    };
+    return run().finally(() => {
+      restore("JIRA_EMAIL", saved.email);
+      restore("JIRA_API_TOKEN", saved.token);
+    });
+  }
+
+  test("http events carry host + path shape + status, never the full URL", async () => {
+   await withCredentials(async () => {
+    const events: DebugEvent[] = [];
+    const fetchImpl: FetchLike = async (url) => {
+      if (url.endsWith("/_edge/tenant_info")) {
+        return { ok: true, status: 200, json: async () => ({ cloudId: "11111111-2222-3333-4444-555555555555" }) };
+      }
+      return { ok: true, status: 200, json: async () => ({ displayName: "Ada" }) };
+    };
+    const t = defaultTransport(SITE, fetchImpl, (e) => events.push(e))!;
+    await t("/rest/api/3/myself");
+    const http = events.filter((e) => e.kind === "http");
+    expect(http).toContainEqual({
+      kind: "http",
+      source: "jira",
+      method: "GET",
+      host: "api.atlassian.com",
+      pathShape: "/rest/api/3/myself",
+      status: 200,
+    });
+    // The gateway URL embeds the cloudId; the event must carry only the host.
+    expect(JSON.stringify(http)).not.toContain("11111111-2222");
+   });
+  });
+
+  test("a gateway 401 emits the instance-fallback route event", async () => {
+   await withCredentials(async () => {
+    const events: DebugEvent[] = [];
+    const fetchImpl: FetchLike = async (url) => {
+      if (url.endsWith("/_edge/tenant_info")) {
+        return { ok: true, status: 200, json: async () => ({ cloudId: "11111111-2222-3333-4444-555555555555" }) };
+      }
+      // Gateway rejects (classic token), instance accepts.
+      if (url.startsWith("https://api.atlassian.com")) return { ok: false, status: 401, json: async () => ({}) };
+      return { ok: true, status: 200, json: async () => ({ displayName: "Ada" }) };
+    };
+    const t = defaultTransport(SITE, fetchImpl, (e) => events.push(e))!;
+    await t("/rest/api/3/myself");
+    expect(events).toContainEqual({ kind: "route", source: "jira", via: "instance", reason: "fallback" });
+   });
   });
 });

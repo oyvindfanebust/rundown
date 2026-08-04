@@ -19,8 +19,11 @@ interface StatusBearing {
  * `GraphQLClientError`) — both trusted structural scalars. It never touches a
  * message, body, or any other field, so no externally-authorable bytes can be
  * read out, whatever else the object carries.
+ *
+ * Exported so the debug channel's numeric `httpStatus` fields go through this one
+ * audited extraction too, rather than a second reimplementation (ADR-0015 §5).
  */
-function statusOf(source: unknown): number | undefined {
+export function statusOf(source: unknown): number | undefined {
   const s = source as StatusBearing | null | undefined;
   const candidate = s?.status ?? s?.response?.status;
   return typeof candidate === "number" ? candidate : undefined;

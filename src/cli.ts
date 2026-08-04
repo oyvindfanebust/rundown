@@ -11,11 +11,33 @@ import { configPath, resolveConfig, ConfigError } from "./config.ts";
 import { parseWindowSelector, WindowError, WINDOW_SPANS, type WindowSelector } from "./temporal.ts";
 import { descriptors, registeredKeys, buildRegistry } from "./sources/registry.ts";
 import { narrateStatus, optionTemplateDefault, type Source } from "./sources/source.ts";
+import { debugEnabled, makeDebugSink, type DebugSink } from "./debug.ts";
 
 // Build-time semver (ADR-0001 §7): the release workflow injects RUNDOWN_VERSION via
 // `bun build --define` from the git tag; running from source falls back to the dev marker.
 declare const RUNDOWN_VERSION: string;
 const VERSION = typeof RUNDOWN_VERSION === "string" ? RUNDOWN_VERSION : "0.0.0-dev";
+
+/**
+ * Build this invocation's debug sink (ADR-0015 §2, §4) and emit the one event
+ * every command shares. Debug goes to stderr unconditionally — unlike the
+ * TTY-gated progress sink — because its whole purpose is capturing signal from a
+ * piped or CI run. stdout stays reserved for the Brief (ADR-0006).
+ *
+ * The config-path event is emitted here rather than per command: which file was
+ * read, and whether `RUNDOWN_CONFIG` chose it, is the first question every
+ * config-touching command raises — including `init`, whose "already exists" can
+ * otherwise be baffling when an override is set in a forgotten shell profile.
+ */
+function startDebug(flag: boolean | undefined): DebugSink {
+  const debug = makeDebugSink(debugEnabled(flag), (s) => process.stderr.write(s));
+  debug({
+    kind: "config-path",
+    path: configPath(),
+    provenance: process.env.RUNDOWN_CONFIG ? "env" : "default",
+  });
+  return debug;
+}
 
 function fail(message: string): never {
   process.stderr.write(`${message}\n`);
@@ -96,7 +118,7 @@ async function cmdInit(): Promise<void> {
 
 // ── status: converging per-source diagnostic ────────────────────────────────
 
-async function cmdStatus(): Promise<void> {
+async function cmdStatus(debug: DebugSink): Promise<void> {
   const path = configPath();
   const out = process.stdout;
 
@@ -123,7 +145,7 @@ async function cmdStatus(): Promise<void> {
 
   out.write(`\nsources\n`);
   // Build the selected sources (config injected) to query their live status (#27).
-  const sources = buildRegistry(config.selection);
+  const sources = buildRegistry(config.selection, debug);
   let ready = 0;
   const unauthed: string[] = [];
   for (const { sourceKey } of config.selection) {
@@ -193,7 +215,7 @@ async function nonInteractiveLoginError(key: string, source: Source): Promise<st
   return `${key} requires no authentication — nothing to log in`;
 }
 
-async function cmdLogin(sourceKey?: string): Promise<void> {
+async function cmdLogin(debug: DebugSink, sourceKey?: string): Promise<void> {
   const out = process.stdout;
 
   // Targeted mode: one registered source, independent of the user's config
@@ -204,7 +226,7 @@ async function cmdLogin(sourceKey?: string): Promise<void> {
     if (!descriptor) fail(`Unknown source "${sourceKey}". Registered sources: ${registeredKeys().join(", ")}`);
     // Config-independent: build with empty config (#27). A source that needs config
     // reports `not-configured` from status(), which the login paths already narrate.
-    const source = descriptor.build({});
+    const source = descriptor.build({}, debug);
     if (!source.login) fail(await nonInteractiveLoginError(sourceKey, source));
     const authenticated = await loginOne(out, sourceKey, source);
     out.write(authenticated ? `\nDone. Next: rundown status\n` : `\nAlready authenticated. Next: rundown status\n`);
@@ -215,7 +237,7 @@ async function cmdLogin(sourceKey?: string): Promise<void> {
   // and never claim success while a configured env-credential source (no
   // `login()`, but declared via a `not-configured` status) is unreadable.
   const config = await resolveConfig(descriptors);
-  const sources = buildRegistry(config.selection);
+  const sources = buildRegistry(config.selection, debug);
   let walked = 0;
   const unready: { key: string; hint: string }[] = [];
   for (const { sourceKey: key } of config.selection) {
@@ -242,13 +264,13 @@ async function cmdLogin(sourceKey?: string): Promise<void> {
 
 // ── brief: the composed pipeline; emit one Brief as JSON on stdout ───────────
 
-async function cmdBrief(windowOverride?: WindowSelector, sourceFilter?: string[]): Promise<void> {
+async function cmdBrief(debug: DebugSink, windowOverride?: WindowSelector, sourceFilter?: string[]): Promise<void> {
   // Progress goes to stderr, and only when it's a terminal — a piped/agent run
   // gets clean silent streams; stdout stays reserved for the Brief JSON (ADR-0006).
   const onProgress = process.stderr.isTTY
     ? (message: string) => process.stderr.write(`${message}\n`)
     : undefined;
-  const brief = await buildBrief({ windowOverride, sourceFilter, onProgress });
+  const brief = await buildBrief({ windowOverride, sourceFilter, onProgress, onDebug: debug });
   // Bun.write awaits the flush, so the JSON is fully emitted before we exit.
   await Bun.write(Bun.stdout, JSON.stringify(brief) + "\n");
 }
@@ -307,6 +329,11 @@ Window:
   date:   YYYY-MM-DD                 (a single calendar day)
   range:  YYYY-MM-DD..YYYY-MM-DD     (explicit, end-inclusive)
 
+Debug:
+  --debug on any command (or RUNDOWN_DEBUG=1) writes structural diagnostics to
+  stderr: config path, HTTP method/host/path/status, auth outcomes, per-source
+  timings and counts. Never source content. stdout stays the Brief.
+
 Source:
   --source narrows this run to a subset of the configured sources; repeat it to
   keep several (--source graph --source linear). Omit it to run them all.`;
@@ -319,23 +346,29 @@ try {
       const { values } = parseCommandArgs("brief", {
         window: { type: "string" },
         source: { type: "string", multiple: true },
+        debug: { type: "boolean" },
       });
-      await cmdBrief(parseWindow(values.window), values.source);
+      await cmdBrief(startDebug(values.debug), parseWindow(values.window), values.source);
       break;
     }
     case "login": {
-      const { positionals } = parseCommandArgs("login", {});
-      await cmdLogin(positionals[0]);
+      const { values, positionals } = parseCommandArgs("login", { debug: { type: "boolean" } });
+      await cmdLogin(startDebug(values.debug), positionals[0]);
       break;
     }
-    case "status":
-      parseCommandArgs("status", {});
-      await cmdStatus();
+    case "status": {
+      const { values } = parseCommandArgs("status", { debug: { type: "boolean" } });
+      await cmdStatus(startDebug(values.debug));
       break;
-    case "init":
-      parseCommandArgs("init", {});
+    }
+    case "init": {
+      const { values } = parseCommandArgs("init", { debug: { type: "boolean" } });
+      // init writes a template and does no I/O worth tracing; the shared
+      // config-path event startDebug emits is its entire debug surface.
+      startDebug(values.debug);
       await cmdInit();
       break;
+    }
     default:
       process.stderr.write(USAGE + "\n");
       process.exit(command ? 1 : 0);
