@@ -18,7 +18,7 @@
 
 import type { NormalizedItem, Window } from "../../domain.ts";
 import { normalizer, text } from "../normalize.ts";
-import { statusOnlyError } from "../errors.ts";
+import { httpStatusNote, statusOnlyError } from "../errors.ts";
 import type { OptionSchema, Source, SourceStatus } from "../source.ts";
 import { linearClient } from "./auth.ts";
 
@@ -195,8 +195,10 @@ export class LinearSource implements Source {
     try {
       const data = await request(VIEWER_QUERY);
       return { state: "ready", identity: data?.viewer?.name };
-    } catch {
-      return { state: "not-configured", detail: "LINEAR_API_KEY was rejected — check the key" };
+    } catch (e) {
+      // Surface the HTTP status the transport error already carries (ADR-0015 §1);
+      // only the status scalar is read — never a body byte.
+      return { state: "not-configured", detail: `LINEAR_API_KEY was rejected${httpStatusNote(e)} — check the key` };
     }
   }
 
