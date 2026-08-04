@@ -4,7 +4,7 @@
 // primitive, not a domain noun.
 
 import type { Untrusted } from "./trust.ts";
-import type { ExtractedItem } from "./brief-contract.ts";
+import type { BriefItem } from "./brief-contract.ts";
 
 /** An absolute time window: two ISO-8601 instants. `to` is exclusive. */
 export interface Window {
@@ -64,7 +64,7 @@ export interface Bundle {
 // the `SummarizerOutput` pair — is defined once in brief-contract.ts (a Zod source
 // of truth; ADR-0011); import it from there directly. `Brief` itself stays here —
 // it wraps the summarizer's output in the trusted envelope, so it composes the
-// contract's `ExtractedItem` with the domain's Window/manifest.
+// contract's `BriefItem` (post-resolution) with the domain's Window/manifest.
 
 /**
  * The Planner's output: a trusted envelope around an untrusted-derived core
@@ -74,5 +74,5 @@ export interface Bundle {
 export interface Brief {
   envelope: { window: Window; sources: SourceManifestEntry[] };
   summary: string;
-  items: ExtractedItem[];
+  items: BriefItem[];
 }

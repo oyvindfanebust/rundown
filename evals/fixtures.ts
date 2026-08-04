@@ -20,7 +20,7 @@
 
 import { untrusted } from "../src/trust.ts";
 import type { AnnotatedItem, Brief, Bucket, Bundle } from "../src/domain.ts";
-import type { ExtractedItem, ExtractedKind } from "../src/brief-contract.ts";
+import type { BriefItem, ExtractedKind } from "../src/brief-contract.ts";
 
 // A fixed planning window (Mon–Mon, `to` exclusive): fixtures are frozen in time so
 // runs are comparable across model bumps — the gate measures deltas, not calendars.
@@ -77,7 +77,7 @@ function normalize(text: string): string {
 }
 
 /** Items with at least one (verified) evidence quote matching `re`. */
-function itemsQuoting(brief: Brief, re: RegExp): ExtractedItem[] {
+function itemsQuoting(brief: Brief, re: RegExp): BriefItem[] {
   return brief.items.filter((it) => it.evidence.some((e) => re.test(normalize(e.quote))));
 }
 
@@ -92,7 +92,7 @@ function briefText(brief: Brief): string {
   return parts.join("\n");
 }
 
-function kindsOf(items: ExtractedItem[]): ExtractedKind[] {
+function kindsOf(items: BriefItem[]): ExtractedKind[] {
   return items.map((i) => i.kind);
 }
 

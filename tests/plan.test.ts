@@ -24,6 +24,10 @@ function fakeSummarizer(output: SummarizerOutput = CANNED) {
 
 const window = { from: "2026-07-06T00:00:00.000Z", to: "2026-07-13T00:00:00.000Z" };
 
+// renderBundle returns {data, index} (the ref index feeds evidence resolution, #54);
+// these tests assert on the rendered text.
+const renderText = (b: Bundle) => renderBundle(b).data;
+
 function bundle(items: Bundle["items"]): Bundle {
   return { window, sources: [{ source: "graph", itemCount: items.length }], items };
 }
@@ -39,7 +43,7 @@ const item = {
 
 describe("renderBundle", () => {
   test("groups by bucket and unwraps untrusted fields", () => {
-    const rendered = renderBundle(
+    const rendered = renderText(
       bundle([
         {
           source: "graph",
@@ -62,7 +66,7 @@ describe("renderBundle", () => {
 describe("renderBundle — length caps", () => {
   test("truncates an oversized rendered field with a visible marker at 2,000 chars", () => {
     const oversizedTitle = "x".repeat(2_500);
-    const rendered = renderBundle(
+    const rendered = renderText(
       bundle([
         {
           source: "graph",
@@ -92,7 +96,7 @@ describe("renderBundle — length caps", () => {
 
   test("leaves a field at or under the cap untouched", () => {
     const title = "x".repeat(2_000);
-    const rendered = renderBundle(
+    const rendered = renderText(
       bundle([
         {
           source: "graph",
@@ -193,7 +197,7 @@ describe("plan — defang transform", () => {
         kind: "task",
         summary: "Reply to thread [details](https://evil.example/?q=item-summary).",
         when: "Thu 9am, see https://evil.example/?q=when",
-        evidence: [{ source: "graph", quote: "click here ![img](https://evil.example/?q=quote)" }],
+        evidence: [{ ref: 1, quote: "click here ![img](https://evil.example/?q=quote)" }],
       },
     ],
   };
@@ -234,7 +238,7 @@ describe("plan — defang transform", () => {
           kind: "commitment",
           summary: "Board meeting on Thursday.",
           when: "Thu 9am",
-          evidence: [{ source: "graph", quote: "Board meeting" }],
+          evidence: [{ ref: 1, quote: "Board meeting" }],
         },
       ],
     };
@@ -269,9 +273,9 @@ describe("plan — evidence-quote verification", () => {
           summary: "Board meeting",
           when: "Thu 9am",
           evidence: [
-            { source: "graph", quote: "Board meeting for Q3 planning" }, // verbatim
-            { source: "graph", quote: "This was never said by anyone." }, // fabricated
-            { source: "graph", quote: "Board meeting\n  for   Q3\nplanning" }, // honest, wrapped
+            { ref: 1, quote: "Board meeting for Q3 planning" }, // verbatim
+            { ref: 1, quote: "This was never said by anyone." }, // fabricated
+            { ref: 1, quote: "Board meeting\n  for   Q3\nplanning" }, // honest, wrapped
           ],
         },
       ],

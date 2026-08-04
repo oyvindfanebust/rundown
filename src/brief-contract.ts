@@ -41,8 +41,30 @@ export const KIND_DESCRIPTIONS: Record<ExtractedKind, string> = {
 // constraint is best-effort, same reasoning as the shape check it rides along with).
 // Settled numbers: top-level summary 4,000; item summary 500; when 100; quote 300.
 
-/** An attributed verbatim snippet. `quote` is the Layer-2 injection quarantine. */
+// ── The two evidence shapes: what the model emits vs what the CLI emits ──
+//
+// SPIKE (#54): the model is asked for a POINTER, not prose. `ref` is the
+// rundown-generated item number rendered into the bundle (`- [7] [slack/message] …`),
+// so plan.ts can resolve the quote back to the exact item that produced it and fill
+// attribution by code. The model never names its source, so it cannot fabricate one.
+
+/** What the Summarizer emits per evidence entry: an item pointer and a snippet. */
 export const Evidence = z.strictObject({
+  /**
+   * The bracketed item number from the rendered bundle. Resolved and stripped in plan.ts.
+   *
+   * No `.min(1)`: the structured-output API rejects `minimum`/`maximum` on an integer
+   * node ("For 'integer' type, properties maximum, minimum are not supported"), and
+   * this schema is generated straight into that request. The bound is not lost — an
+   * out-of-range ref simply misses the render index and the entry is dropped, which is
+   * a stronger guard than a schema hint anyway.
+   */
+  ref: z.number().int(),
+  quote: z.string().max(300),
+});
+
+/** What the CLI emits per evidence entry: `source` code-filled from the resolved item. */
+export const BriefEvidence = z.strictObject({
   source: z.string(),
   quote: z.string().max(300),
 });
@@ -56,17 +78,29 @@ export const ExtractedItem = z.strictObject({
   evidence: z.array(Evidence),
 });
 
+/** An ExtractedItem after evidence resolution — what lands in the Brief. */
+export const BriefItem = ExtractedItem.extend({ evidence: z.array(BriefEvidence) });
+
 /** The `{summary, items}` pair the Summarizer emits — its structured-output schema. */
 export const SummarizerOutputSchema = z.strictObject({
   summary: z.string().max(4_000),
   items: z.array(ExtractedItem),
 });
 
+/** The post-resolution `{summary, items}` pair — parsed in plan.ts so caps stay enforced. */
+export const BriefOutputSchema = z.strictObject({
+  summary: z.string().max(4_000),
+  items: z.array(BriefItem),
+});
+
 // ── Inferred TypeScript types (the second half of "single source of truth") ──
 
 export type Evidence = z.infer<typeof Evidence>;
+export type BriefEvidence = z.infer<typeof BriefEvidence>;
 export type ExtractedItem = z.infer<typeof ExtractedItem>;
+export type BriefItem = z.infer<typeof BriefItem>;
 export type SummarizerOutput = z.infer<typeof SummarizerOutputSchema>;
+export type BriefOutput = z.infer<typeof BriefOutputSchema>;
 
 /**
  * The generated JSON Schema handed to the Summarizer's structured-output API. Built
@@ -81,5 +115,34 @@ export const BRIEF_OUTPUT_SCHEMA: Record<string, unknown> = (() => {
     unknown
   >;
   const { $schema, ...rest } = generated;
+  stripIntegerBounds(rest);
   return rest;
 })();
+
+/**
+ * Delete `minimum`/`maximum` from every `"integer"` node, in place.
+ *
+ * Zod's `.int()` records the JS safe-integer range, so `z.number().int()` generates
+ * `{type: "integer", minimum: -9007199254740991, maximum: 9007199254740991}` — and the
+ * structured-output API rejects the request outright: "For 'integer' type, properties
+ * maximum, minimum are not supported". Found by running the eval corpus live; no unit
+ * test could have caught it, since the constraint lives in the API, not the generator.
+ *
+ * Dropping them costs nothing real. They were never a meaningful bound (they are the
+ * language's own integer range, not a domain rule), the runtime `.parse()` still
+ * enforces them locally, and `evidence.ref`'s actual validity is decided by whether it
+ * hits plan.ts's render index.
+ */
+function stripIntegerBounds(node: unknown): void {
+  if (Array.isArray(node)) {
+    for (const child of node) stripIntegerBounds(child);
+    return;
+  }
+  if (node === null || typeof node !== "object") return;
+  const record = node as Record<string, unknown>;
+  if (record.type === "integer") {
+    delete record.minimum;
+    delete record.maximum;
+  }
+  for (const value of Object.values(record)) stripIntegerBounds(value);
+}

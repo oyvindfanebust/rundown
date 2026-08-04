@@ -28,10 +28,15 @@ describe("BRIEF_OUTPUT_SCHEMA (generated)", () => {
     expect(item.required).not.toContain("when");
   });
 
-  test("evidence item schema seals additional properties; requires source+quote", () => {
+  // The model is asked for a POINTER (`ref`) plus a snippet, never for attribution
+  // prose: plan.ts resolves the ref and code-fills `source` on the emitted Brief, so
+  // `source` is deliberately absent from the model-facing schema (#54).
+  test("evidence item schema seals additional properties; requires ref+quote", () => {
     const evidence = schema.properties.items.items.properties.evidence.items;
     expect(evidence.additionalProperties).toBe(false);
-    expect([...evidence.required].sort()).toEqual(["quote", "source"]);
+    expect([...evidence.required].sort()).toEqual(["quote", "ref"]);
+    expect(evidence.properties.ref.type).toBe("integer");
+    expect(evidence.properties.source).toBeUndefined();
   });
 
   test("kind is a closed string enum matching KINDS", () => {
@@ -63,7 +68,7 @@ describe("SummarizerOutputSchema (length caps)", () => {
   // the caps, not the rest of the shape.
   const base = () => ({
     summary: "ok",
-    items: [{ kind: "task" as const, summary: "ok", evidence: [{ source: "graph", quote: "ok" }] }],
+    items: [{ kind: "task" as const, summary: "ok", evidence: [{ ref: 1, quote: "ok" }] }],
   });
 
   test("top-level summary over 4,000 chars fails the parse", () => {
