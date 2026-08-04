@@ -305,19 +305,28 @@ export class SlackSource implements Source {
 
 /**
  * Resolves a user id to a display name via `users.info` (the `users:read` scope),
- * caching each id so a busy channel doesn't re-resolve the same author. Falls back
- * to the search-supplied `username`, then the raw id, when resolution fails.
+ * caching each id — including the misses — so a busy channel resolves each author
+ * at most once.
  */
 class AuthorCache {
   private readonly cache = new Map<string, string | undefined>();
   constructor(private readonly request: SlackRequest) {}
 
+  /** The display name for a user id, or undefined when it cannot be resolved. */
+  async name(userId: string): Promise<string | undefined> {
+    if (!this.cache.has(userId)) this.cache.set(userId, await this.fetchName(userId));
+    return this.cache.get(userId);
+  }
+
+  /**
+   * The `author` extra: a display name (ADR-0014 §4), falling back to the
+   * search-supplied `username`. When neither yields a name the key is left
+   * undefined so compaction drops it — a raw Slack id is not a display name, and
+   * emitting one put an unresolved id into a Brief summary as if it were a person.
+   */
   async resolve(userId: string | undefined, fallback: string | undefined): Promise<string | undefined> {
     if (!userId) return fallback;
-    if (!this.cache.has(userId)) {
-      this.cache.set(userId, await this.fetchName(userId));
-    }
-    return this.cache.get(userId) ?? fallback ?? userId;
+    return (await this.name(userId)) ?? fallback;
   }
 
   private async fetchName(userId: string): Promise<string | undefined> {
@@ -325,11 +334,54 @@ class AuthorCache {
       const body = await this.request("users.info", { user: userId });
       if (!body?.ok) return undefined;
       const u = body.user ?? {};
-      return u.profile?.real_name || u.real_name || u.name || undefined;
+      return u.profile?.real_name || u.profile?.display_name || u.real_name || u.name || undefined;
     } catch {
       return undefined;
     }
   }
+}
+
+// ── Slack reference tokens in message text ──
+//
+// Slack encodes references inside message text as angle-bracket tokens: `<@U123>`
+// for a user, `<#C123|general>` for a channel, `<!here>`, `<!subteam^S1|@leads>`,
+// and `<https://url|label>` for a link. The message body IS the item's content line
+// (ADR-0014 §4), so left raw a mention reaches the summarizer as an id where a name
+// belongs. Rewriting happens before the body is handed to the normalizer, so the
+// substituted names are branded Untrusted with the rest of the title — this is a
+// transform over raw backend bytes, not an unwrap.
+const USER_TOKEN = /<@([UW][A-Z0-9]+)(?:\|([^>]*))?>/g;
+const CHANNEL_TOKEN = /<#([CG][A-Z0-9]+)(?:\|([^>]*))?>/g;
+const SUBTEAM_TOKEN = /<!subteam\^[A-Z0-9]+(?:\|([^>]*))?>/g;
+const SPECIAL_TOKEN = /<!(here|channel|everyone)(?:\|[^>]*)?>/g;
+const LINK_TOKEN = /<(https?:\/\/[^|>]+)(?:\|([^>]*))?>/g;
+
+/** `@name`, tolerating a label that already carries the sigil (subteam labels do). */
+function mention(label: string): string {
+  return label.startsWith("@") ? label : `@${label}`;
+}
+
+/**
+ * Rewrite Slack's reference tokens to readable text. Bare user mentions cost a
+ * `users.info` lookup (cached, and only for the ids actually present); the
+ * pipe-labelled forms carry their own label and need none. An unresolvable id keeps
+ * the id but loses the brackets, which is what Slack itself renders.
+ */
+async function readableText(
+  raw: string | undefined,
+  authors: AuthorCache,
+): Promise<string | undefined> {
+  if (!raw) return raw;
+  const names = new Map<string, string | undefined>();
+  for (const m of raw.matchAll(USER_TOKEN)) {
+    if (!m[2] && !names.has(m[1]!)) names.set(m[1]!, await authors.name(m[1]!));
+  }
+  return raw
+    .replace(SUBTEAM_TOKEN, (_all, label?: string) => mention(label || "group"))
+    .replace(SPECIAL_TOKEN, (_all, kind: string) => `@${kind}`)
+    .replace(USER_TOKEN, (_all, id: string, label?: string) => mention(label || names.get(id) || id))
+    .replace(CHANNEL_TOKEN, (_all, id: string, label?: string) => `#${label || id}`)
+    .replace(LINK_TOKEN, (_all, url: string, label?: string) => label || url);
 }
 
 /** Map one search hit through the normalizer; only domain judgment lives here. */
@@ -344,7 +396,7 @@ async function normalizeMatch(
     kind: "message",
     timestamp: instant,
     id: messageId(channelId, m.ts!),
-    title: m.text,
+    title: await readableText(m.text, authors),
     url: m.permalink,
     extras: {
       channel: { id: channelId, name: m.channel?.name, type: channelType(m.channel) },
@@ -369,7 +421,7 @@ async function normalizeReply(
     kind: "message",
     timestamp: instant,
     id: messageId(channelId, reply.ts!),
-    title: reply.text,
+    title: await readableText(reply.text, authors),
     // conversations.replies carries no permalink; a reconstructed reply has no url.
     extras: {
       channel: { id: channelId, name: channel.name, type: channelType(channel) },

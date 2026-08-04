@@ -190,6 +190,111 @@ describe("SlackSource.read mapping", () => {
     const extras = unwrap((await s.read(WINDOW))[0]!.extras!) as any;
     expect(extras.author).toBe("bob");
   });
+
+  // ADR-0014 §4 specifies `author` as a display name. A raw Slack id is not one:
+  // emitting it let an unresolved id ("UQXGH0T7G") reach a real Brief summary as if
+  // it were a person's name. When no name is obtainable the key is omitted instead
+  // — compaction drops it, and the summarizer sees no author rather than a fake one.
+  test("omits author entirely when neither users.info nor a username yields a name", async () => {
+    const s = source({
+      search: { authored: [match({ user: "UQXGH0T7G", username: undefined })] },
+      users: { UQXGH0T7G: { ok: false, error: "user_not_found" } },
+    });
+    const extras = unwrap((await s.read(WINDOW))[0]!.extras!) as any;
+    expect(extras.author).toBeUndefined();
+    expect(JSON.stringify(extras)).not.toContain("UQXGH0T7G");
+  });
+
+  test("prefers real_name, then display_name, then name from users.info", async () => {
+    const s = source({
+      search: {
+        authored: [
+          match({ ts: tsFor("2026-07-08T09:00:00Z"), channel: { id: "C1" }, user: "U_R" }),
+          match({ ts: tsFor("2026-07-08T09:01:00Z"), channel: { id: "C2" }, user: "U_D" }),
+          match({ ts: tsFor("2026-07-08T09:02:00Z"), channel: { id: "C3" }, user: "U_N" }),
+        ],
+      },
+      users: {
+        U_R: { ok: true, user: { profile: { real_name: "Real Name" }, name: "handle" } },
+        U_D: { ok: true, user: { profile: { display_name: "Display Name" }, name: "handle" } },
+        U_N: { ok: true, user: { name: "just-handle" } },
+      },
+    });
+    const items = await s.read(WINDOW);
+    const authorOf = (chan: string) =>
+      (unwrap(items.find((i) => unwrap(i.id).startsWith(chan))!.extras!) as any).author;
+    expect(authorOf("C1")).toBe("Real Name");
+    expect(authorOf("C2")).toBe("Display Name");
+    expect(authorOf("C3")).toBe("just-handle");
+  });
+});
+
+// ── read(): Slack reference tokens in message text ──────────────────────────────
+//
+// Slack encodes references inside message text as angle-bracket tokens. Left raw,
+// a mention reaches the summarizer as `<@U12345>` — an unreadable id where a name
+// belongs — so the source rewrites them to readable text before the body becomes
+// the item title.
+describe("SlackSource.read message text tokens", () => {
+  async function titleOf(text: string, store: Partial<Store> = {}): Promise<string> {
+    const s = source({
+      search: { authored: [match({ text })] },
+      users: { U2: { ok: true, user: { profile: { real_name: "Alice Example" } } } },
+      ...store,
+    });
+    const items = await s.read(WINDOW);
+    return unwrap(items[0]!.title);
+  }
+
+  test("rewrites a bare user mention to the resolved display name", async () => {
+    expect(await titleOf("hey <@U9> can you look?", {
+      users: {
+        U2: { ok: true, user: { name: "alice" } },
+        U9: { ok: true, user: { profile: { real_name: "Bent Hansen" } } },
+      },
+    })).toBe("hey @Bent Hansen can you look?");
+  });
+
+  test("uses the inline label when the mention carries one (no lookup needed)", async () => {
+    expect(await titleOf("thanks <@U9|bent>")).toBe("thanks @bent");
+  });
+
+  test("keeps the bare id (bracket-stripped) when the user cannot be resolved", async () => {
+    const out = await titleOf("ping <@U404>", {
+      users: { U2: { ok: true, user: { name: "alice" } }, U404: { ok: false, error: "user_not_found" } },
+    });
+    expect(out).toBe("ping @U404");
+    expect(out).not.toContain("<@");
+  });
+
+  test("rewrites channel, special, and subteam mentions", async () => {
+    expect(await titleOf("see <#C5|eng-platform> <!here> <!subteam^S1|@leads>")).toBe(
+      "see #eng-platform @here @leads",
+    );
+  });
+
+  test("rewrites a labelled link to its label and unwraps a bare link", async () => {
+    expect(await titleOf("docs <https://example.test/x|the spec> and <https://example.test/y>")).toBe(
+      "docs the spec and https://example.test/y",
+    );
+  });
+
+  test("resolves mentions in reconstructed thread replies too", async () => {
+    const rootTs = tsFor("2026-07-08T11:00:00Z");
+    const s = source(
+      {
+        search: { authored: [match({ ts: tsFor("2026-07-08T11:30:00Z"), thread_ts: rootTs })] },
+        users: {
+          U2: { ok: true, user: { name: "alice" } },
+          U9: { ok: true, user: { profile: { real_name: "Bent Hansen" } } },
+        },
+        replies: { [`C1:${rootTs}`]: [{ user: "U9", ts: rootTs, text: "cc <@U9>", thread_ts: rootTs }] },
+      },
+      { threads: true },
+    );
+    const items = await s.read(WINDOW);
+    expect(unwrap(items.find((i) => unwrap(i.id) === `C1:${rootTs}`)!.title)).toBe("cc @Bent Hansen");
+  });
 });
 
 // ── read(): window filter ──────────────────────────────────────────────────────
