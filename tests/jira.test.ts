@@ -526,7 +526,26 @@ describe("jira debug events", () => {
 });
 
 describe("jira transport debug events", () => {
+  // defaultTransport reads JIRA_EMAIL/JIRA_API_TOKEN from the env and returns null
+  // without them, so these tests set both and restore after. Without this they pass
+  // on a machine that happens to export real credentials and fail in CI, which is
+  // exactly what happened.
+  function withCredentials<T>(run: () => Promise<T>): Promise<T> {
+    const saved = { email: process.env.JIRA_EMAIL, token: process.env.JIRA_API_TOKEN };
+    process.env.JIRA_EMAIL = "ada@example.com";
+    process.env.JIRA_API_TOKEN = "test-token";
+    const restore = (key: "JIRA_EMAIL" | "JIRA_API_TOKEN", value: string | undefined) => {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    };
+    return run().finally(() => {
+      restore("JIRA_EMAIL", saved.email);
+      restore("JIRA_API_TOKEN", saved.token);
+    });
+  }
+
   test("http events carry host + path shape + status, never the full URL", async () => {
+   await withCredentials(async () => {
     const events: DebugEvent[] = [];
     const fetchImpl: FetchLike = async (url) => {
       if (url.endsWith("/_edge/tenant_info")) {
@@ -547,9 +566,11 @@ describe("jira transport debug events", () => {
     });
     // The gateway URL embeds the cloudId; the event must carry only the host.
     expect(JSON.stringify(http)).not.toContain("11111111-2222");
+   });
   });
 
   test("a gateway 401 emits the instance-fallback route event", async () => {
+   await withCredentials(async () => {
     const events: DebugEvent[] = [];
     const fetchImpl: FetchLike = async (url) => {
       if (url.endsWith("/_edge/tenant_info")) {
@@ -562,5 +583,6 @@ describe("jira transport debug events", () => {
     const t = defaultTransport(SITE, fetchImpl, (e) => events.push(e))!;
     await t("/rest/api/3/myself");
     expect(events).toContainEqual({ kind: "route", source: "jira", via: "instance", reason: "fallback" });
+   });
   });
 });
