@@ -90,6 +90,24 @@ exactly `{source, kind, timestamp}`. Everything else is branded `Untrusted<T>` a
   Reactions, edited-markers, attachment lists, unreads, and saved-for-later are omitted — #19 ruled
   them out of the first design, and none is a grouping key.
 
+  **Amendment (execution, [#40](https://github.com/oyvindfanebust/rundown/issues/40)).** The
+  `author` row above conflated two different people: "for `authored` this is the user; for
+  `dms`/`mentions` the counterpart". The author of a message is whoever wrote it, and this source
+  anchors on the user's own participation (§1), so most DM messages were written by the user —
+  attributing those to their author names the user, not the person they were talking to.
+  Dogfooding produced a Brief whose DM evidence read "DM with <the user>" for 11 of 12 quotes. Two
+  `extras` keys resolve it, both `Untrusted` like the rest:
+
+  | Field | Shape | Role |
+  |---|---|---|
+  | `counterpart` | display name | The other party in a 1:1 DM, giving a DM the human label a channel gets from `channel.name`. `search.messages` returns the target user's id in `channel.name` for IM results, and `users.info` resolves it. Absent when unresolvable, and for group DMs, whose `mpdm-…` composite the search docs do not specify — an absent label beats a wrong one. |
+  | `fromMe` | boolean, present only when true | Whether the user wrote the message, by comparing the author id to the authenticated user's. Makes §1's participation anchor explicit rather than something the summarizer infers from a name. |
+
+  `author` keeps its plain meaning: whoever wrote the message. The IM behavior of `channel.name` is
+  documented on a method Slack now marks legacy, and it contradicts the response schema on the same
+  page, so the source treats it as a shape to test for rather than a guarantee: a value shaped like
+  a user id is resolved, anything else leaves `counterpart` absent.
+
 ### 5. The `threads` option: opt-in full-thread reconstruction
 
 `search.messages` matches individual messages, so a hit deep in a thread reaches the summarizer as

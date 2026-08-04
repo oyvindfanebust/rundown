@@ -229,6 +229,66 @@ describe("SlackSource.read mapping", () => {
   });
 });
 
+// ── read(): DM counterpart + fromMe ─────────────────────────────────────────────
+//
+// ADR-0014 §4 defined `author` as "for `authored` this is the user; for `dms`/`mentions`
+// the counterpart", conflating two different people: the author is whoever wrote the
+// message, and this source is anchored on the user's own participation, so most DM
+// messages were written by the user. A real Brief attributed 11 of 12 quotes to
+// "DM with <the user themselves>" as a result.
+describe("SlackSource.read DM counterpart", () => {
+  test("resolves the counterpart when search puts the target user id in channel.name", async () => {
+    const s = source({
+      search: {
+        // A realistic Slack user id — the guard requires one, so a lowercase channel
+        // name (Slack forces channel names lowercase) can never be mistaken for one.
+        authored: [match({ user: "U1", channel: { id: "D1", name: "U024BE7LH", is_im: true } })],
+      },
+      users: { U024BE7LH: { ok: true, user: { profile: { real_name: "Bent Hansen" } } } },
+    });
+    const extras = unwrap((await s.read(WINDOW))[0]!.extras!) as any;
+    expect(extras.counterpart).toBe("Bent Hansen");
+  });
+
+  test("leaves the counterpart unset when channel.name is not a user id", async () => {
+    // The documented IM behavior is legacy and contradicts the same page's schema, so
+    // an empty channel.name is the case that must degrade honestly.
+    const s = source({
+      search: { authored: [match({ user: "U1", channel: { id: "D1", name: "", is_im: true } })] },
+    });
+    const extras = unwrap((await s.read(WINDOW))[0]!.extras!) as any;
+    expect(extras.counterpart).toBeUndefined();
+  });
+
+  test("never sets a counterpart for channels or group DMs", async () => {
+    const s = source({
+      search: {
+        authored: [
+          match({ ts: tsFor("2026-07-08T09:00:00Z"), channel: { id: "C1", name: "general", is_channel: true } }),
+          match({ ts: tsFor("2026-07-08T09:01:00Z"), channel: { id: "G1", name: "mpdm-a--b--c-1", is_mpim: true } }),
+        ],
+      },
+    });
+    const items = await s.read(WINDOW);
+    for (const i of items) expect((unwrap(i.extras!) as any).counterpart).toBeUndefined();
+  });
+
+  test("flags the user's own messages with fromMe and omits it for others", async () => {
+    const s = source({
+      search: {
+        authored: [match({ ts: tsFor("2026-07-08T09:00:00Z"), channel: { id: "C1" }, user: "U1" })],
+        mentions: [match({ ts: tsFor("2026-07-08T09:01:00Z"), channel: { id: "C2" }, user: "U2" })],
+      },
+      users: { U1: { ok: true, user: { name: "me" } }, U2: { ok: true, user: { name: "other" } } },
+    }, { relationships: ["authored", "mentions"] });
+    const items = await s.read(WINDOW);
+    const extrasOf = (chan: string) =>
+      unwrap(items.find((i) => unwrap(i.id).startsWith(chan))!.extras!) as any;
+    expect(extrasOf("C1").fromMe).toBe(true); // authed user is U1
+    expect(extrasOf("C2").fromMe).toBeUndefined(); // false is absence — compaction drops it
+  });
+});
+
 // ── read(): Slack reference tokens in message text ──────────────────────────────
 //
 // Slack encodes references inside message text as angle-bracket tokens. Left raw,

@@ -107,6 +107,38 @@ function channelType(c: SlackChannel | undefined): string {
   return "public";
 }
 
+/**
+ * A Slack user id (`U…`, or `W…` on enterprise grid). Used to recognize a user id
+ * sitting in a field that normally holds a name: `search.messages` documents that for
+ * IM results `channel.name` carries the target user's id rather than a channel name.
+ * That prose is legacy and contradicts the response schema on the same page, so this
+ * is written to work either way — a value shaped like a user id is resolved to a name,
+ * anything else leaves the counterpart unknown.
+ */
+const USER_ID = /^[UW][A-Z0-9]{6,}$/;
+
+/**
+ * The other party in a DM, resolved to a display name, or undefined when it cannot be
+ * determined. Only 1:1 DMs are resolvable this way: a group DM's `channel.name` is an
+ * `mpdm-…` composite whose format the search docs never specify, so its members stay
+ * unknown rather than guessed at.
+ *
+ * This exists because ADR-0014 §4 conflated two different people. It defines `author`
+ * as "for `authored` this is the user; for `dms`/`mentions` the counterpart" — but the
+ * author of a message is simply whoever wrote it, and this source is anchored on the
+ * user's own participation, so most DM messages were written BY the user. Attributing
+ * those to their author names the user, not the person they were talking to.
+ */
+async function dmCounterpart(
+  channel: SlackChannel | undefined,
+  type: string,
+  authors: AuthorCache,
+): Promise<string | undefined> {
+  if (type !== "dm") return undefined;
+  const name = channel?.name;
+  return name && USER_ID.test(name) ? await authors.name(name) : undefined;
+}
+
 /** Slack's `ts` ("1749047412.123456", epoch seconds) → a strict ISO-8601 instant (ADR-0014 §4). */
 export function tsToInstant(ts: string): string {
   return new Date(Number.parseFloat(ts) * 1000).toISOString();
@@ -242,7 +274,7 @@ export class SlackSource implements Source {
         if (!inWindow(instant, window)) continue; // precise window cut past the coarse day bounds
         const id = messageId(channelId, ts);
         if (byId.has(id)) continue; // first-seen relationship wins
-        byId.set(id, await normalizeMatch(m, channelId, instant, relationship, authors));
+        byId.set(id, await normalizeMatch(m, channelId, instant, relationship, authors, auth.userId));
         if (this.threadsEnabled() && m.thread_ts) {
           const key = messageId(channelId, m.thread_ts);
           if (!threads.has(key)) {
@@ -264,7 +296,10 @@ export class SlackSource implements Source {
           const id = messageId(channelId, ts);
           if (byId.has(id)) continue; // deduped against what search already returned
           const instant = tsToInstant(ts);
-          byId.set(id, await normalizeReply(reply, channelId, channel, threadTs, instant, relationship, authors));
+          byId.set(
+            id,
+            await normalizeReply(reply, channelId, channel, threadTs, instant, relationship, authors, auth.userId),
+          );
         }
       }
     }
@@ -391,7 +426,9 @@ async function normalizeMatch(
   instant: string,
   relationship: Relationship,
   authors: AuthorCache,
+  selfId: string,
 ): Promise<NormalizedItem> {
+  const type = channelType(m.channel);
   return normalize({
     kind: "message",
     timestamp: instant,
@@ -399,9 +436,16 @@ async function normalizeMatch(
     title: await readableText(m.text, authors),
     url: m.permalink,
     extras: {
-      channel: { id: channelId, name: m.channel?.name, type: channelType(m.channel) },
+      // A DM's channel has no human name, so the counterpart is its label. Omitted
+      // when unresolvable — better an absent label than the author standing in for it.
+      channel: { id: channelId, name: m.channel?.name, type },
+      counterpart: await dmCounterpart(m.channel, type, authors),
       threadTs: m.thread_ts,
       author: await authors.resolve(m.user, m.username),
+      // Whether the user wrote it. The source is anchored on the user's own
+      // participation, so most messages are theirs; without this the summarizer reads
+      // the author of the user's own DM message as the person they were talking to.
+      fromMe: m.user === selfId,
       relationship,
     },
   });
@@ -416,7 +460,9 @@ async function normalizeReply(
   instant: string,
   relationship: Relationship,
   authors: AuthorCache,
+  selfId: string,
 ): Promise<NormalizedItem> {
+  const type = channelType(channel);
   return normalize({
     kind: "message",
     timestamp: instant,
@@ -424,9 +470,11 @@ async function normalizeReply(
     title: await readableText(reply.text, authors),
     // conversations.replies carries no permalink; a reconstructed reply has no url.
     extras: {
-      channel: { id: channelId, name: channel.name, type: channelType(channel) },
+      channel: { id: channelId, name: channel.name, type },
+      counterpart: await dmCounterpart(channel, type, authors),
       threadTs,
       author: await authors.resolve(reply.user, undefined),
+      fromMe: reply.user === selfId,
       relationship,
     },
   });
