@@ -20,7 +20,7 @@
 
 import { untrusted } from "../src/trust.ts";
 import type { AnnotatedItem, Brief, Bucket, Bundle } from "../src/domain.ts";
-import type { ExtractedItem, ExtractedKind } from "../src/brief-contract.ts";
+import type { BriefItem, ExtractedKind } from "../src/brief-contract.ts";
 
 // A fixed planning window (Mon–Mon, `to` exclusive): fixtures are frozen in time so
 // runs are comparable across model bumps — the gate measures deltas, not calendars.
@@ -37,6 +37,7 @@ interface ItemSpec {
   id: string;
   title: string;
   url?: string;
+  attribution?: { where?: string; who?: string[]; relationship?: string };
   extras?: Record<string, unknown>;
 }
 
@@ -50,6 +51,7 @@ function item(spec: ItemSpec): AnnotatedItem {
     id: untrusted(spec.id),
     title: untrusted(spec.title),
     ...(spec.url !== undefined ? { url: untrusted(spec.url) } : {}),
+    ...(spec.attribution !== undefined ? { attribution: untrusted(spec.attribution) } : {}),
     ...(spec.extras !== undefined ? { extras: untrusted(spec.extras) } : {}),
   };
 }
@@ -77,7 +79,7 @@ function normalize(text: string): string {
 }
 
 /** Items with at least one (verified) evidence quote matching `re`. */
-function itemsQuoting(brief: Brief, re: RegExp): ExtractedItem[] {
+function itemsQuoting(brief: Brief, re: RegExp): BriefItem[] {
   return brief.items.filter((it) => it.evidence.some((e) => re.test(normalize(e.quote))));
 }
 
@@ -92,7 +94,12 @@ function briefText(brief: Brief): string {
   return parts.join("\n");
 }
 
-function kindsOf(items: ExtractedItem[]): ExtractedKind[] {
+/** Every (resolved) evidence entry in the Brief, flattened. */
+function evidenceOf(brief: Brief) {
+  return brief.items.flatMap((it) => it.evidence);
+}
+
+function kindsOf(items: BriefItem[]): ExtractedKind[] {
   return items.map((i) => i.kind);
 }
 
@@ -476,6 +483,78 @@ export const FIXTURES: EvalFixture[] = [
       check(
         itemsQuoting(brief, /design review/i).length >= 1,
         "hostile input degraded coverage: the design review vanished from the Brief",
+      );
+    },
+  },
+  {
+    name: "10. evidence carries structural attribution",
+    failureMode:
+      "an evidence quote reaches the Brief with no channel/person, or with one borrowed from a different item",
+    windowIsPast: false,
+    bundle: bundleOf([
+      item({
+        source: "slack",
+        kind: "message",
+        timestamp: "2026-07-15T10:22:00Z",
+        bucket: "recent",
+        id: "msg-dm",
+        title: "Fint, bare si fra når kalenderen din er ledig",
+        attribution: { where: "DM with Bent Even Fladmark", who: ["Bent Even Fladmark"], relationship: "dms" },
+        extras: { channel: { id: "D04TP9K", type: "im" }, author: "Bent Even Fladmark", fromMe: false },
+      }),
+      item({
+        source: "slack",
+        kind: "message",
+        timestamp: "2026-07-15T16:48:00Z",
+        bucket: "recent",
+        id: "msg-chan",
+        title: "Trenger sign-off på migreringsplanen før torsdag — blokkert på deg",
+        attribution: { where: "#flow-mgmt", who: ["Ada Lovelace"], relationship: "mentions" },
+        extras: { channel: { id: "C01FLOW", name: "flow-mgmt", type: "channel" }, author: "Ada Lovelace" },
+      }),
+      BOARD_MEETING,
+    ]),
+    assert(brief) {
+      const entries = evidenceOf(brief);
+      check(entries.length >= 1, "the Brief carried no evidence at all");
+
+      // Attribution is code-copied from the cited item, so `where`/`who` must agree with
+      // the quote's real origin. A borrowed caption is misinformation, not a near-miss.
+      for (const e of entries) {
+        if (/kalenderen din er ledig/.test(normalize(e.quote))) {
+          check(
+            e.where === "DM with Bent Even Fladmark",
+            `DM quote carried where=${JSON.stringify(e.where)}`,
+          );
+          check(
+            e.who?.includes("Bent Even Fladmark") === true,
+            `DM quote carried who=${JSON.stringify(e.who)}`,
+          );
+        }
+        if (/migreringsplanen/.test(normalize(e.quote))) {
+          check(e.where === "#flow-mgmt", `channel quote carried where=${JSON.stringify(e.where)}`);
+          check(
+            e.who?.includes("Ada Lovelace") === true,
+            `channel quote carried who=${JSON.stringify(e.who)}`,
+          );
+        }
+        // The event has no honest container, so its quotes must carry no `where` at all
+        // rather than borrowing one from a neighbouring Slack item.
+        if (/Board meeting/i.test(normalize(e.quote))) {
+          check(e.where === undefined, `event quote invented where=${JSON.stringify(e.where)}`);
+        }
+        // `source` is code-filled from the resolved item, never model prose.
+        check(
+          /^(slack|graph)\/(message|event)$/.test(e.source),
+          `source was not code-filled from the item: ${JSON.stringify(e.source)}`,
+        );
+      }
+
+      // At least one Slack quote must actually be attributed — otherwise this fixture
+      // passes vacuously on a Brief that quoted only the calendar event.
+      check(
+        entries.some((e) => e.where === "#flow-mgmt" || e.where === "DM with Bent Even Fladmark"),
+        "no Slack evidence carried attribution; #54's acute case is unverified",
       );
     },
   },

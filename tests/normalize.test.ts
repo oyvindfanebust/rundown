@@ -24,6 +24,60 @@ describe("normalizer", () => {
     expect(item.extras).toEqual(untrusted({ organizer: "Alice" }));
   });
 
+  describe("attribution (#54)", () => {
+    const normalize = normalizer("slack");
+    const base = { kind: "message", timestamp: "2026-07-08T09:00:00Z", id: "m1", title: "hi" } as const;
+
+    test("brands attribution Untrusted alongside the other backend content", () => {
+      const item = normalize({
+        ...base,
+        attribution: { where: "#flow-mgmt", who: ["Ada Lovelace"], relationship: "mentions" },
+      });
+      expect(item.attribution).toEqual(
+        untrusted({ where: "#flow-mgmt", who: ["Ada Lovelace"], relationship: "mentions" }),
+      );
+    });
+
+    test("compacts by the same presence-is-signal policy: absent fields and absent who-entries vanish", () => {
+      const item = normalize({
+        ...base,
+        attribution: { where: undefined, who: [undefined, "Ada Lovelace", null, ""], relationship: null },
+      });
+      expect(unwrap(item.attribution!)).toEqual({ who: ["Ada Lovelace"] });
+    });
+
+    test("collapses an all-absent attribution to no key at all", () => {
+      const item = normalize({ ...base, attribution: { where: null, who: [undefined], relationship: undefined } });
+      expect(item.attribution).toBeUndefined();
+    });
+
+    test("omits attribution when the source passes none", () => {
+      expect(normalize(base).attribution).toBeUndefined();
+    });
+
+    // An incoming Slack DM has the same person as author and counterpart; a caption
+    // naming them twice reads as a bug, so the normalizer dedupes order-preserving.
+    test("dedupes who, keeping first-seen order", () => {
+      const item = normalize({
+        ...base,
+        attribution: { who: ["Bent Even Fladmark", "Ada Lovelace", "Bent Even Fladmark"] },
+      });
+      expect(unwrap(item.attribution!).who).toEqual(["Bent Even Fladmark", "Ada Lovelace"]);
+    });
+
+    // Attribution labels are backend free text like titles are: a hostile workspace can
+    // name a channel with 10kB of prose.
+    test("truncates every label to TEXT_MAX", () => {
+      const item = normalize({
+        ...base,
+        attribution: { where: "#".repeat(TEXT_MAX + 50), who: ["n".repeat(TEXT_MAX + 50)] },
+      });
+      const attribution = unwrap(item.attribution!);
+      expect(attribution.where).toHaveLength(TEXT_MAX);
+      expect(attribution.who![0]).toHaveLength(TEXT_MAX);
+    });
+  });
+
   test("omits end / url / extras when absent", () => {
     const item = normalizer("s")({ kind: "k", timestamp: "2026-07-08T09:00:00Z", id: "i", title: "T" });
     expect(item.end).toBeUndefined();

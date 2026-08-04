@@ -38,6 +38,18 @@ export const CLAUDE_CODE_LOGS_OPTIONS: OptionSchema = {};
 // The source's one normalizer — both read paths emit through it.
 const normalize = normalizer(KEY, { untitled: "(untitled session)" });
 
+/**
+ * This source's wording for the uniform attribution slot (#54): the working context a
+ * session happened in, as "<project> @ <branch>" when both are known. There is no
+ * `who` — a coding session is the user's own work, so a people list would only ever
+ * name them, and `relationship` is likewise vacuous here (every session is authored).
+ * Both stay absent rather than being filled to look uniform.
+ */
+function sessionWhere(projectPath?: string, gitBranch?: string): string | undefined {
+  if (!projectPath) return gitBranch;
+  return gitBranch ? `${projectPath} @ ${gitBranch}` : projectPath;
+}
+
 /** Injectable dependencies — the seam that makes the source unit-testable. */
 export interface ClaudeCodeLogsDeps {
   /**
@@ -95,6 +107,7 @@ function readIndexedDir(indexPath: string, window: Window): NormalizedItem[] {
         id: e.sessionId,
         // Domain judgment stays caller-side: prefer the synthesized summary over the first prompt.
         title: e.summary ?? e.firstPrompt,
+        attribution: { where: sessionWhere(e.projectPath, e.gitBranch) },
         extras: {
           firstPrompt: text(e.firstPrompt),
           summary: text(e.summary),
@@ -252,6 +265,7 @@ export class ClaudeCodeLogsSource implements Source {
           end: parsed.end, // last message's content timestamp
           id: sessionId,
           title: parsed.firstPrompt,
+          attribution: { where: sessionWhere(parsed.projectPath, parsed.gitBranch) },
           extras: {
             firstPrompt: text(parsed.firstPrompt),
             messageCount: parsed.messageCount,

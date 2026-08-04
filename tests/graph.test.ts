@@ -149,6 +149,10 @@ describe("GraphSource.read calendar", () => {
         // allDay:false and cancelled:false collapse to undefined (dropped)
       }),
     );
+    // Attribution (#54): an event has NO honest container, so it carries no `where` —
+    // `location` is a physical place, not the thing the item lives in, and a calendar
+    // title describes itself. Organizer leads `who`; attendees are context.
+    expect(item.attribution).toEqual(untrusted({ who: ["Alice", "Bob"] }));
   });
 
   test("empty attendee list vanishes — presence is signal (accepted delta)", async () => {
@@ -216,6 +220,12 @@ describe("GraphSource.read mail", () => {
         // importance:"normal" and isRead:true collapse to undefined (dropped)
       }),
     );
+
+    // Attribution (#54): `extras.folder` is a direction, so `where` is written out as a
+    // reader-facing label rather than passed through. `who` leads with whoever is not
+    // the user — the sender on received mail, the recipients on mail the user sent.
+    expect(inbox.attribution).toEqual(untrusted({ where: "Inbox", who: ["Carol", "Me"] }));
+    expect(sent.attribution).toEqual(untrusted({ where: "Sent", who: ["Me", "Carol"] }));
   });
 
   test("empty recipient list vanishes — presence is signal (accepted delta)", async () => {

@@ -263,6 +263,19 @@ function normalizeIssue(issue: LinearIssue, relationship: Relationship): Normali
     id: issue.id,
     title: issue.title,
     url: issue.url,
+    // Linear's wording for the uniform slot (#54). "Is the locus the project or the
+    // team?" is Linear's own call to make, not an abstraction problem: the project is
+    // the container a reader recognizes, with the team key as the qualifier, and the
+    // team alone when an issue sits in no project. Assignee leads `who` over creator.
+    attribution: {
+      where: issue.project?.name
+        ? issue.team?.key
+          ? `${issue.project.name} (${issue.team.key})`
+          : issue.project.name
+        : issue.team?.key,
+      who: [issue.assignee?.name, issue.creator?.name],
+      relationship,
+    },
     extras: {
       identifier: issue.identifier,
       state: issue.state ? { name: issue.state.name, type: issue.state.type } : undefined,

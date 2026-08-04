@@ -101,6 +101,47 @@ Deliberately not in the core:
 - Body and preview — only a one-line `title` is core; bulk text is source-specific and lives in
   `extras`.
 
+**Amendment (execution, [#54](https://github.com/oyvindfanebust/rundown/issues/54)).** The "People
+and participants" exclusion above is partly reversed. The reasoning — roles differ per source and do
+not flatten without loss — was right about roles and wrong about the conclusion, because it left the
+two genuinely universal notions scattered across five vocabularies:
+
+| concept | graph | linear | jira | slack | claude-code-logs |
+|---|---|---|---|---|---|
+| where it lives | `folder` | `project` + `team` | `project` | `channel` + `counterpart` | `projectPath` + `gitBranch` |
+| who is involved | `organizer`, `attendees`, `from`, `to` | `assignee`, `creator` | `assignee`, `reporter` | `author`, `counterpart` | — |
+| why it is yours | — | `relationship` | `relationship` | `relationship` | — |
+
+That is a data clump: the same three notions travelling as ad-hoc keys, which is precisely why the
+Brief could not carry them onward — there was nothing uniform to carry, so the Planner asked the
+model for attribution prose instead (ADR-0005 §4 amendment). One optional untrusted field is added
+to the item:
+
+```
+attribution?: { where?: string, who?: string[], relationship?: string }   — UNTRUSTED
+```
+
+Two ideas keep it honest:
+
+1. **Uniform slot, source-specific wording.** The container is not forced into a shared vocabulary
+   it does not have. Each source writes its own label: Slack decides between `"#flow-mgmt"` and
+   `"DM with Ada Lovelace"`, Linear decides whether the locus is the project or the team, mail
+   writes `"Inbox"`/`"Sent"` rather than passing its direction flag through. This dissolves the
+   false-uniformity objection — it becomes each source's wording decision, made where the knowledge
+   lives. A graph event gets no `where` at all: `location` is a physical place, not the container
+   the item lives in, and filling the slot would make the caption lie.
+2. **It splits the two audiences `extras` was serving at once.** `attribution` is human-facing —
+   pre-formatted labels, code-copied into Brief evidence, never model-written. `extras` stays the
+   summarizer's clustering material: ids, states, flags, and the role labels this amendment does
+   NOT promote. A `channel.id` in `extras` beside a `where` of `"#flow-mgmt"` is not duplication;
+   one is a join key, the other is a caption.
+
+Roles stay out of `who`, so the original loss-of-role objection still holds and is still respected:
+`who` is a flat, most-salient-first label list for a human to read, and organizer-vs-attendee or
+assignee-vs-reporter remains in `extras` for the model to cluster on. Branding and compaction happen
+in the one shared normalizer (`sources/normalize.ts`), under the same presence-is-signal policy as
+`extras`, so no source imports `trust.ts` and the invariant is spelled once rather than five times.
+
 ### 5. Contracts
 
 - **Read-only.** No mutating operation exists on the interface; sources request read-only scopes

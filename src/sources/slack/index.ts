@@ -139,6 +139,43 @@ async function dmCounterpart(
   return name && USER_ID.test(name) ? await authors.name(name) : undefined;
 }
 
+/**
+ * Slack's own wording for the uniform attribution slot (#54). A message body is the
+ * case that motivated the field: "give me a shout when you're free" says nothing about
+ * who or where on its own.
+ *
+ * `where` is a channel's `#name`, or a DM's counterpart. A DM whose counterpart could
+ * not be resolved gets no label rather than a misleading one — the author is NOT a
+ * fallback, since on the user's own outgoing DM the author is the user themselves,
+ * which is exactly the "DM with <the user>" bug ADR-0014 §4 was amended for.
+ *
+ * `who` is most-salient-first: on a DM that is the counterpart (the person the
+ * conversation is with), not the author, who is usually the user. On a channel it is
+ * the author. The normalizer dedupes, so an incoming DM whose author and counterpart
+ * are the same person yields one name.
+ */
+function slackAttribution(args: {
+  channelName: string | undefined;
+  type: string;
+  counterpart: string | undefined;
+  author: string | undefined;
+  fromMe: boolean;
+  relationship: Relationship;
+}): { where?: string; who: Array<string | undefined>; relationship: string } {
+  const { channelName, type, counterpart, author, fromMe, relationship } = args;
+  const where =
+    type === "dm"
+      ? counterpart && `DM with ${counterpart}`
+      : type === "group_dm"
+        ? "Group DM"
+        : channelName && `#${channelName}`;
+  return {
+    ...(where ? { where } : {}),
+    who: type === "dm" ? [counterpart, fromMe ? undefined : author] : [author],
+    relationship,
+  };
+}
+
 /** Slack's `ts` ("1749047412.123456", epoch seconds) → a strict ISO-8601 instant (ADR-0014 §4). */
 export function tsToInstant(ts: string): string {
   return new Date(Number.parseFloat(ts) * 1000).toISOString();
@@ -429,23 +466,34 @@ async function normalizeMatch(
   selfId: string,
 ): Promise<NormalizedItem> {
   const type = channelType(m.channel);
+  const counterpart = await dmCounterpart(m.channel, type, authors);
+  const author = await authors.resolve(m.user, m.username);
+  const fromMe = m.user === selfId;
   return normalize({
     kind: "message",
     timestamp: instant,
     id: messageId(channelId, m.ts!),
     title: await readableText(m.text, authors),
     url: m.permalink,
+    attribution: slackAttribution({
+      channelName: m.channel?.name,
+      type,
+      counterpart,
+      author,
+      fromMe,
+      relationship,
+    }),
     extras: {
       // A DM's channel has no human name, so the counterpart is its label. Omitted
       // when unresolvable — better an absent label than the author standing in for it.
       channel: { id: channelId, name: m.channel?.name, type },
-      counterpart: await dmCounterpart(m.channel, type, authors),
+      counterpart,
       threadTs: m.thread_ts,
-      author: await authors.resolve(m.user, m.username),
+      author,
       // Whether the user wrote it. The source is anchored on the user's own
       // participation, so most messages are theirs; without this the summarizer reads
       // the author of the user's own DM message as the person they were talking to.
-      fromMe: m.user === selfId,
+      fromMe,
       relationship,
     },
   });
@@ -463,18 +511,29 @@ async function normalizeReply(
   selfId: string,
 ): Promise<NormalizedItem> {
   const type = channelType(channel);
+  const counterpart = await dmCounterpart(channel, type, authors);
+  const author = await authors.resolve(reply.user, undefined);
+  const fromMe = reply.user === selfId;
   return normalize({
     kind: "message",
     timestamp: instant,
     id: messageId(channelId, reply.ts!),
     title: await readableText(reply.text, authors),
     // conversations.replies carries no permalink; a reconstructed reply has no url.
+    attribution: slackAttribution({
+      channelName: channel.name,
+      type,
+      counterpart,
+      author,
+      fromMe,
+      relationship,
+    }),
     extras: {
       channel: { id: channelId, name: channel.name, type },
-      counterpart: await dmCounterpart(channel, type, authors),
+      counterpart,
       threadTs,
-      author: await authors.resolve(reply.user, undefined),
-      fromMe: reply.user === selfId,
+      author,
+      fromMe,
       relationship,
     },
   });

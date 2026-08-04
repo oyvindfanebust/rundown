@@ -13,8 +13,11 @@
 // summary-over-firstPrompt title preference). ADR-0002 names the NormalizedItem
 // *shape*; this deepens under it. Never unwrapped here (sole unwrap site is
 // plan.ts; CLAUDE.md).
+//
+// Attribution (#54) is branded and compacted here too, so no source imports trust.ts
+// and the "who and where" invariant is spelled once rather than five times.
 
-import type { NormalizedItem } from "../domain.ts";
+import type { Attribution, NormalizedItem } from "../domain.ts";
 import { untrusted, untrustedOpt } from "../trust.ts";
 
 /** Max length for a free-text field (title / preview / description / …). */
@@ -80,6 +83,18 @@ export interface ItemSpec {
   id: string | number | null | undefined;
   title: string | null | undefined;
   url?: string;
+  /**
+   * Who and where, as bare values — the normalizer brands and compacts it (#54). A
+   * source writes its own honest label; see {@link Attribution}. Absent `where`, an
+   * empty/all-absent `who`, and an absent `relationship` all vanish under the same
+   * "presence is signal" policy as `extras`, so a source can pass what it has without
+   * guarding each field.
+   */
+  attribution?: {
+    where?: string | null;
+    who?: Array<string | null | undefined>;
+    relationship?: string | null;
+  };
   extras?: Record<string, unknown>;
 }
 
@@ -101,6 +116,36 @@ function compactExtras(obj: Record<string, unknown>): Record<string, unknown> {
 }
 
 /**
+ * Compact one attribution under the same "presence is signal" policy: drop absent
+ * `where`/`relationship`, drop absent entries from `who`, truncate every label to
+ * {@link TEXT_MAX} (these are hostile free text like titles are), and collapse the
+ * whole thing to `undefined` when nothing survives — so an all-absent attribution
+ * costs no key on the item and no line in the rendered bundle.
+ *
+ * `who` is deduplicated, order-preserving: Slack's `author` and `counterpart` are the
+ * same person on an incoming DM, and a caption listing them twice reads as a bug.
+ */
+function compactAttribution(spec: NonNullable<ItemSpec["attribution"]>): Attribution | undefined {
+  const out: Attribution = {};
+  const where = text(spec.where ?? undefined);
+  if (where !== undefined) out.where = where;
+  const relationship = text(spec.relationship ?? undefined);
+  if (relationship !== undefined) out.relationship = relationship;
+  if (spec.who !== undefined) {
+    const seen = new Set<string>();
+    const who: string[] = [];
+    for (const raw of spec.who) {
+      const label = text(raw ?? undefined);
+      if (label === undefined || seen.has(label)) continue;
+      seen.add(label);
+      who.push(label);
+    }
+    if (who.length > 0) out.who = who;
+  }
+  return Object.keys(out).length > 0 ? out : undefined;
+}
+
+/**
  * Make a Source's normalizer: brand the backend content Untrusted
  * (`id`/`title`/`url`/`extras`), keep the structural core (`source`/`kind`/
  * `timestamp`/`end`) trusted — validating each instant via {@link instant} so a
@@ -115,6 +160,8 @@ export function normalizer(
   const untitled = opts.untitled ?? "(untitled)";
   return (spec) => {
     const extras = spec.extras === undefined ? undefined : compactExtras(spec.extras);
+    const attribution =
+      spec.attribution === undefined ? undefined : compactAttribution(spec.attribution);
     const item: NormalizedItem = {
       source,
       kind: spec.kind,
@@ -122,6 +169,7 @@ export function normalizer(
       id: untrusted(String(spec.id ?? "")),
       title: untrusted(text(spec.title) ?? untitled),
       url: untrustedOpt(spec.url),
+      attribution: attribution === undefined ? undefined : untrusted(attribution),
       extras: extras && Object.keys(extras).length > 0 ? untrusted(extras) : undefined,
     };
     if (spec.end !== undefined) item.end = instant(spec.end, "end", source);

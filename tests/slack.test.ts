@@ -289,6 +289,60 @@ describe("SlackSource.read DM counterpart", () => {
   });
 });
 
+// ── read(): attribution (#54) ───────────────────────────────────────────────────
+//
+// Slack is the source that motivated the uniform attribution slot: a chat body is
+// unreadable without knowing the channel and the person, where a calendar title
+// describes itself. These labels are what the Brief's evidence captions come from, so
+// the wording is a contract, not an implementation detail.
+describe("SlackSource.read attribution", () => {
+  const attributionOf = (item: { attribution?: any }) => unwrap(item.attribution!) as any;
+
+  test("labels a channel message with #name and the author", async () => {
+    const s = source({
+      search: { authored: [match({ user: "U2", channel: { id: "C1", name: "flow-mgmt", is_channel: true } })] },
+      users: { U2: { ok: true, user: { profile: { real_name: "Ada Lovelace" } } } },
+    });
+    const attribution = attributionOf((await s.read(WINDOW))[0]!);
+    expect(attribution.where).toBe("#flow-mgmt");
+    expect(attribution.who).toEqual(["Ada Lovelace"]);
+    expect(attribution.relationship).toBe("authored");
+  });
+
+  test("labels a DM with the counterpart, who leads with them rather than the author", async () => {
+    // The user (U1) wrote this DM, so the author is the user and the counterpart is the
+    // other person. `who` must name the counterpart — naming the author here is the
+    // "DM with <the user themselves>" failure ADR-0014 §4 was amended for.
+    const s = source({
+      search: { authored: [match({ user: "U1", channel: { id: "D1", name: "U024BE7LH", is_im: true } })] },
+      users: {
+        U024BE7LH: { ok: true, user: { profile: { real_name: "Bent Hansen" } } },
+        U1: { ok: true, user: { profile: { real_name: "Øyvind Fanebust" } } },
+      },
+    });
+    const attribution = attributionOf((await s.read(WINDOW))[0]!);
+    expect(attribution.where).toBe("DM with Bent Hansen");
+    expect(attribution.who).toEqual(["Bent Hansen"]);
+  });
+
+  test("gives an unresolvable DM no where at all rather than a misleading one", async () => {
+    const s = source({
+      search: { authored: [match({ user: "U1", channel: { id: "D1", name: "", is_im: true } })] },
+      users: { U1: { ok: true, user: { profile: { real_name: "Øyvind Fanebust" } } } },
+    });
+    const attribution = attributionOf((await s.read(WINDOW))[0]!);
+    expect(attribution.where).toBeUndefined(); // NOT the author, who is the user here
+  });
+
+  test("labels a group DM generically, since it has no human-readable name", async () => {
+    const s = source({
+      search: { authored: [match({ user: "U2", channel: { id: "G1", name: "mpdm-a--b--c-1", is_mpim: true } })] },
+      users: { U2: { ok: true, user: { profile: { real_name: "Ada Lovelace" } } } },
+    });
+    expect(attributionOf((await s.read(WINDOW))[0]!).where).toBe("Group DM");
+  });
+});
+
 // ── read(): Slack reference tokens in message text ──────────────────────────────
 //
 // Slack encodes references inside message text as angle-bracket tokens. Left raw,

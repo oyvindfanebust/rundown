@@ -182,6 +182,11 @@ describe("LinearSource.read mapping", () => {
         description: "D".repeat(200), // truncated ~200
       }),
     );
+    // Attribution (#54): "project or team?" is Linear's own wording call — the project
+    // is the container a reader recognizes, qualified by the team key.
+    expect(item.attribution).toEqual(
+      untrusted({ where: "rundown (OYV)", who: ["Me"], relationship: "assigned" }),
+    );
   });
 
   test('omits "No priority", empty labels, and unset estimate/description', async () => {

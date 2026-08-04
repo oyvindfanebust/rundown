@@ -43,6 +43,29 @@ representations, so they cannot diverge:
   byte-for-byte equivalent (modulo key order) to the old hand-written literal, pinned by
   `tests/brief-contract.test.ts`, which asserts the shape empirically rather than trusting the
   generator.
+
+  **Amendment (execution, [#54](https://github.com/oyvindfanebust/rundown/issues/54)).** The
+  post-processing now also strips `minimum`/`maximum` from every `"integer"` node. Zod's `.int()`
+  records the JS safe-integer range, so `z.number().int()` generates
+  `{type: "integer", minimum: -9007199254740991, maximum: 9007199254740991}`, and the
+  structured-output API rejects the whole request: `"For 'integer' type, properties maximum, minimum
+  are not supported"`. Nothing real is lost — those bounds are the language's integer range, not a
+  domain rule, and the runtime `.parse()` still enforces them locally. The general constraint is that
+  **the model-facing schema cannot carry numeric bounds**, so a numeric field's real validity must be
+  enforced after the parse, not declared in the schema (for `evidence.ref`, by whether it resolves
+  against the render index).
+
+  This is also the one class of defect this ADR's generation strategy cannot catch on its own: the
+  constraint lives in the API, not the generator, so no unit test would have found it. It surfaced
+  by running the eval corpus live (ADR-0012), which is now the check that the generated schema is
+  not merely well-formed but *accepted*.
+
+  Two further amendments from the same change: `Evidence` is model-facing only, so the caps and shape
+  the generator sees cover `{ref, quote}` alone; and code-filled Brief fields never pass through the
+  model-output `.parse()`, so `plan()` re-parses the assembled Brief against a parallel
+  `BriefOutputSchema`. Without that second parse, a cap on a code-filled field would be a type
+  annotation rather than an enforced bound — which would quietly break this ADR's central claim that
+  the Zod schema is the single source of truth for the caps.
 - The TypeScript types are inferred: `Evidence`, `ExtractedItem`, `SummarizerOutput` are `z.infer<…>`
   of the schemas. `kind` infers as the `ExtractedKind` union (not `string`), and `when` infers as
   optional.
