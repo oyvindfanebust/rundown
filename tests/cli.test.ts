@@ -24,11 +24,14 @@ function run(args: string[], configPath: string, entrypoint = "src/cli.ts"): Run
   const env: Record<string, string> = {};
   for (const [k, v] of Object.entries(process.env)) if (v !== undefined) env[k] = v;
   env.RUNDOWN_CONFIG = configPath;
-  // Neutralize inherited credentials so `graph`/`linear` report a deterministic
-  // (unconfigured) state, offline — no live MSAL or Linear network calls.
+  // Neutralize inherited credentials so `graph`/`linear`/`jira` report a
+  // deterministic (unconfigured) state, offline — no live MSAL, Linear, or Jira
+  // network calls.
   delete env.AZURE_TENANT_ID;
   delete env.AZURE_CLIENT_ID;
   delete env.LINEAR_API_KEY;
+  delete env.JIRA_EMAIL;
+  delete env.JIRA_API_TOKEN;
   const proc = Bun.spawnSync([process.execPath, entrypoint, ...args], { cwd: ROOT, env });
   return { stdout: proc.stdout.toString(), stderr: proc.stderr.toString(), exitCode: proc.exitCode ?? 0 };
 }
@@ -164,6 +167,12 @@ describe("cli", () => {
       expect(template).toContain(`"graph"`);
       expect(template).toContain(`"claude-code-logs"`);
       expect(template).toContain(`"linear"`);
+      expect(template).toContain(`"jira"`);
+      // Credential-only sources document their env secrets in the auth line (§7),
+      // rather than the misleading "No auth required" a non-interactive source used
+      // to print — the site option is documented via its own option description.
+      expect(template).toContain("set LINEAR_API_KEY in your environment");
+      expect(template).toContain("set JIRA_EMAIL, JIRA_API_TOKEN in your environment");
 
       const second = run(["init"], path);
       expect(second.exitCode).toBe(0);
@@ -223,6 +232,15 @@ describe("cli", () => {
       expect(r.exitCode).toBe(1);
     });
 
+    test("naming jira (credential-only, half-configurable) names its env secrets in the error", () => {
+      // jira declares no `login` — it's credential-only (JIRA_EMAIL/JIRA_API_TOKEN,
+      // deleted from the env above). Built config-independently ({}), so `site` is
+      // also unset; the error names the env secrets that authenticate it.
+      const r = run(["login", "jira"], missing());
+      expect(r.stderr).toContain("jira authenticates via JIRA_EMAIL");
+      expect(r.exitCode).toBe(1);
+    });
+
     test("naming a no-auth source (no login(), never not-configured) still errors, differently worded", () => {
       // claude-code-logs is local + always ready — "nothing to log in" for a
       // different structural reason than linear's declared env-credential.
@@ -237,6 +255,7 @@ describe("cli", () => {
       expect(r.stderr).toContain("graph");
       expect(r.stderr).toContain("claude-code-logs");
       expect(r.stderr).toContain("linear");
+      expect(r.stderr).toContain("jira");
       expect(r.exitCode).toBe(1);
     });
   });

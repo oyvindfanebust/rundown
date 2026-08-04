@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.2.3](https://github.com/oyvindfanebust/rundown/compare/v0.2.2...v0.2.3) (2026-07-16)
+
+
+### Refactors
+
+* sources receive resolved config via constructor injection ([#27](https://github.com/oyvindfanebust/rundown/issues/27)) ([#37](https://github.com/oyvindfanebust/rundown/issues/37)) ([174e840](https://github.com/oyvindfanebust/rundown/commit/174e840a10a6175881306a083a4b032fc2590173))
+
 ## [0.2.2](https://github.com/oyvindfanebust/rundown/compare/v0.2.1...v0.2.2) (2026-07-16)
 
 

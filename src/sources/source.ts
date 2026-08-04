@@ -156,6 +156,13 @@ export interface SourceDescriptor {
   options: OptionSchema;
   /** Whether the source has interactive `login()` — the static declaration read where no instance exists. */
   interactive: boolean;
+  /**
+   * Env var names a non-interactive source reads for auth, documented verbatim in
+   * the `init` template so a credential-only source (Linear, Jira) says what to set
+   * rather than "No auth required". Absent for interactive sources (they log in) and
+   * genuinely no-auth local sources.
+   */
+  credentials?: readonly string[];
   /** Construct the source with its resolved per-source config injected. */
   build(options: Record<string, unknown>): Source;
 }

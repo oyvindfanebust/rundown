@@ -12,6 +12,7 @@ import type { Selection } from "../config.ts";
 import { GraphSource, GRAPH_OPTIONS } from "./graph/index.ts";
 import { ClaudeCodeLogsSource, CLAUDE_CODE_LOGS_OPTIONS } from "./claude-code-logs/index.ts";
 import { LinearSource, LINEAR_OPTIONS } from "./linear/index.ts";
+import { JiraSource, JIRA_OPTIONS } from "./jira/index.ts";
 import { SlackSource, SLACK_OPTIONS } from "./slack/index.ts";
 
 export const descriptors: Descriptors = {
@@ -34,7 +35,16 @@ export const descriptors: Descriptors = {
     label: "Linear",
     options: LINEAR_OPTIONS,
     interactive: false,
+    credentials: ["LINEAR_API_KEY"],
     build: (options) => new LinearSource(options),
+  },
+  jira: {
+    key: "jira",
+    label: "Jira",
+    options: JIRA_OPTIONS,
+    interactive: false,
+    credentials: ["JIRA_EMAIL", "JIRA_API_TOKEN"],
+    build: (options) => new JiraSource(options),
   },
   slack: {
     key: "slack",
