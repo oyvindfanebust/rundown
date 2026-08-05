@@ -89,10 +89,41 @@ export type JiraRequest = (path: string, init?: { method?: string; body?: unknow
 export type FetchLike = (
   url: string,
   init?: { method?: string; headers?: Record<string, string>; body?: string },
-) => Promise<{ ok: boolean; status: number; json: () => Promise<any> }>;
+) => Promise<{
+  ok: boolean;
+  status: number;
+  json: () => Promise<any>;
+  /** Present on a real `fetch` Response; optional so a test fake can omit it. */
+  headers?: { get: (name: string) => string | null };
+}>;
 
 /** The scoped-token gateway origin; the REST path is prefixed with `/rest/api/3/…`. */
 const GATEWAY_ORIGIN = "https://api.atlassian.com/ex/jira";
+
+/** The wait used when a 429 carries no usable `Retry-After` (ADR-0013 §6). */
+const DEFAULT_RETRY_MS = 1_000;
+/** The ceiling on that wait, so a hostile or absurd header cannot stall the run. */
+export const MAX_RETRY_MS = 30_000;
+
+/**
+ * How long to wait before the single 429 retry, given a raw `Retry-After` header
+ * value (ADR-0013 §6, #26). Only the numeric seconds form is read. A seconds count
+ * is a trusted scalar, the same kind of value as an HTTP status; a missing,
+ * blank, or non-numeric value (an HTTP-date, prose) falls back to
+ * {@link DEFAULT_RETRY_MS}. The result is clamped to [0, {@link MAX_RETRY_MS}], and
+ * an overflowing number clamps to the ceiling rather than the fallback, so no
+ * backend-supplied value can stall a run. No header byte reaches an error, a log, or
+ * the Brief.
+ */
+export function retryAfterMs(raw: string | null | undefined): number {
+  if (raw === null || raw === undefined || raw.trim() === "") return DEFAULT_RETRY_MS;
+  const seconds = Number(raw);
+  if (Number.isNaN(seconds)) return DEFAULT_RETRY_MS;
+  return Math.min(Math.max(seconds * 1000, 0), MAX_RETRY_MS);
+}
+
+/** The real wait. Injected in tests so the retry path costs no wall time. */
+const realSleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
 
 /** cloudId is a UUID; validate its shape before it feeds a request URL (ADR-0013 §5). */
 function isCloudId(value: unknown): value is string {
@@ -105,6 +136,10 @@ function isCloudId(value: unknown): value is string {
  * out, and any failure (non-ok, or a malformed/absent cloudId) reduces to the
  * shared status-only scrub — no body bytes cross into the thrown message
  * (ADR-0004 §5, ADR-0013 §5). `origin` is the bare instance origin from `siteOrigin`.
+ *
+ * This request is outside the 429 retry the REST calls get (§6): it runs at most once
+ * per invocation, is unauthenticated, and is not what a per-user rate limit throttles,
+ * so a 429 here fails cleanly like any other non-ok status.
  */
 export async function resolveCloudId(origin: string, fetchImpl: FetchLike): Promise<string> {
   const r = await fetchImpl(`${origin}/_edge/tenant_info`);
@@ -145,11 +180,20 @@ export function siteOrigin(site: unknown): string | undefined {
  * most once (cached in the closure), lazily on the first request, so both `status()`
  * and `read()` reuse it. `fetchImpl` is injectable for tests; production uses the
  * global `fetch`.
+ *
+ * A 429 on a REST call is retried once, after a `Retry-After`-bounded wait (#26): the
+ * source issues many sequential requests per run (relationships × {standing, recent} ×
+ * pages), so a rate limit mid-run would otherwise abort the whole aggregate for a wait
+ * of a second or two. A second 429 fails cleanly through the status-only scrub, as
+ * before. The one request outside this path is the cloudId resolution, which keeps its
+ * fail-cleanly behaviour (see {@link resolveCloudId}). `sleep` is injectable so the
+ * retry path costs no wall time in tests.
  */
 export function defaultTransport(
   site: unknown,
   fetchImpl: FetchLike = fetch,
   debug: DebugSink = noDebug,
+  sleep: (ms: number) => Promise<void> = realSleep,
 ): JiraRequest | null {
   const origin = siteOrigin(site);
   const credentials = jiraCredentials();
@@ -167,18 +211,28 @@ export function defaultTransport(
   const call = async (root: string, path: string, init?: { method?: string; body?: unknown }) => {
     const hasBody = init?.body !== undefined;
     const method = init?.method ?? "GET";
-    const r = await fetchImpl(`${root}${path}`, {
-      method,
-      headers: {
-        Authorization: authorization,
-        Accept: "application/json",
-        ...(hasBody ? { "Content-Type": "application/json" } : {}),
-      },
-      body: hasBody ? JSON.stringify(init!.body) : undefined,
-    });
-    // Host + path shape + status only — never the populated URL (ADR-0015 §5).
-    debug({ kind: "http", source: KEY, method, host: hostOf(root), pathShape: path, status: r.status });
-    return r;
+    const attempt = async () => {
+      const r = await fetchImpl(`${root}${path}`, {
+        method,
+        headers: {
+          Authorization: authorization,
+          Accept: "application/json",
+          ...(hasBody ? { "Content-Type": "application/json" } : {}),
+        },
+        body: hasBody ? JSON.stringify(init!.body) : undefined,
+      });
+      // Host + path shape + status only — never the populated URL (ADR-0015 §5).
+      debug({ kind: "http", source: KEY, method, host: hostOf(root), pathShape: path, status: r.status });
+      return r;
+    };
+    const r = await attempt();
+    // One rate-limit retry per HTTP request, bounded by Retry-After (the gateway→
+    // instance fallback below is a second request, so it carries its own retry). The
+    // retry adds no debug event kind: the second `http` event is what makes a retried
+    // 429 visible as the two requests it was, as in slack/auth.ts.
+    if (r.status !== 429) return r;
+    await sleep(retryAfterMs(r.headers?.get("retry-after")));
+    return attempt();
   };
 
   return async (path, init) => {

@@ -154,9 +154,29 @@ Jira error bodies (`{ errorMessages, errors }`) are backend content and can carr
 attacker-influenced text, so the transport reduces any transport error to a status-only message,
 `Jira request failed[: <status>]`, emitting only the numeric HTTP status (a trusted scalar) and
 never any `errorMessages` bytes — the Jira analog of Linear's `scrubbedTransportError` (ADR-0004
-§5). A 429 fails cleanly through this same path (`Jira request failed: 429`) with no retry loop;
-for a once-per-invocation manual read a retry adds state for little gain. A Retry-After-bounded
-single retry is a possible later refinement.
+§5).
+
+A 429 on a REST call is retried once, after a wait read from the response's `Retry-After` header,
+and a second 429 fails cleanly through this same path (`Jira request failed: 429`). The read issues
+many sequential requests per run (relationships × {standing, recent} × pages), so a rate limit
+mid-run is more likely here than for Linear and would otherwise abort the whole fail-hard aggregate
+for a wait of a second or two ([#26](https://github.com/oyvindfanebust/rundown/issues/26)).
+
+Only the numeric seconds form of `Retry-After` is read. A seconds count is a trusted scalar, the
+same kind of value as the HTTP status, and the wait is clamped to [0s, 30s] so no backend-supplied
+value can stall the CLI: a missing, blank, or non-numeric value (an HTTP-date, prose) waits one
+second, and anything above the ceiling waits 30s. No header byte reaches an error, a log, or the
+Brief. The retry adds no debug event kind; the second `http` event is what makes a retried 429
+visible as the two requests it was.
+
+The bound is one retry per HTTP request, not per logical read: the gateway-to-instance fallback (§5)
+issues a second request, which carries its own retry, so the worst case for a single `read()` call
+is bounded rather than unbounded. One request stays outside the retry and fails cleanly on a 429 as
+before: the cloudId resolution, which runs at most once per invocation and is unauthenticated, so a
+per-user rate limit is not what would throttle it. The Slack source retries 429s within its own
+`Retry-After` bound (ADR-0014 §7) with a different retry count and no ceiling; the two are not a
+shared implementation, and consolidating them behind one bounded parse is a possible later
+refinement.
 
 ### 7. Config, status, and init deltas
 

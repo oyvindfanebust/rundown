@@ -11,6 +11,8 @@ import {
   buildJql,
   defaultTransport,
   resolveCloudId,
+  retryAfterMs,
+  MAX_RETRY_MS,
   type JiraRequest,
   type FetchLike,
 } from "../src/sources/jira/index.ts";
@@ -386,6 +388,8 @@ interface FakeRoute {
   ok?: boolean;
   status?: number;
   body?: unknown;
+  /** Response headers a route wants to expose (e.g. `Retry-After` on a 429). */
+  headers?: Record<string, string>;
 }
 
 /** A fake `fetch`: `route(url, init)` decides the response; every call is recorded. */
@@ -398,7 +402,12 @@ function fakeFetch(route: (url: string, init: any) => FakeRoute): {
     calls.push({ url, init });
     const r = route(url, init);
     const status = r.status ?? (r.ok === false ? 500 : 200);
-    return { ok: r.ok ?? (status >= 200 && status < 300), status, json: async () => r.body };
+    return {
+      ok: r.ok ?? (status >= 200 && status < 300),
+      status,
+      json: async () => r.body,
+      headers: { get: (name: string) => r.headers?.[name.toLowerCase()] ?? null },
+    };
   };
   return { fetch, calls };
 }
@@ -490,6 +499,144 @@ describe("defaultTransport gateway routing", () => {
     const request = defaultTransport(SITE, fetch)!;
     await expect(request("/rest/api/3/myself")).rejects.toThrow("Jira request failed: 500");
     expect(calls.some((c) => c.url.startsWith(`https://${SITE}/rest`))).toBe(false); // instance never hit
+  });
+});
+
+// ── 429 rate limits (#26) ──────────────────────────────────────────────────────
+
+describe("retryAfterMs", () => {
+  test("reads the numeric seconds form", () => {
+    expect(retryAfterMs("3")).toBe(3_000);
+    expect(retryAfterMs("0")).toBe(0);
+  });
+
+  test("falls back to one second when the value is absent, blank, or non-numeric", () => {
+    expect(retryAfterMs(null)).toBe(1_000);
+    expect(retryAfterMs(undefined)).toBe(1_000);
+    expect(retryAfterMs("  ")).toBe(1_000);
+    expect(retryAfterMs("Wed, 21 Oct 2026 07:28:00 GMT")).toBe(1_000);
+  });
+
+  test("clamps an absurd, overflowing, or negative wait so the run cannot hang", () => {
+    expect(retryAfterMs("86400")).toBe(MAX_RETRY_MS);
+    expect(retryAfterMs("1e400")).toBe(MAX_RETRY_MS); // Infinity clamps to the ceiling, not the fallback
+    expect(retryAfterMs("-5")).toBe(0);
+  });
+});
+
+describe("defaultTransport 429 retry", () => {
+  const saved = { email: process.env.JIRA_EMAIL, token: process.env.JIRA_API_TOKEN };
+  beforeAll(() => {
+    process.env.JIRA_EMAIL = "ada@example.com";
+    process.env.JIRA_API_TOKEN = "test-token";
+  });
+  afterAll(() => {
+    if (saved.email === undefined) delete process.env.JIRA_EMAIL;
+    else process.env.JIRA_EMAIL = saved.email;
+    if (saved.token === undefined) delete process.env.JIRA_API_TOKEN;
+    else process.env.JIRA_API_TOKEN = saved.token;
+  });
+
+  /** Records the waits instead of taking them, so these tests cost no wall time. */
+  function recordingSleep(): { sleep: (ms: number) => Promise<void>; waits: number[] } {
+    const waits: number[] = [];
+    return { sleep: async (ms) => void waits.push(ms), waits };
+  }
+
+  test("retries once after the Retry-After wait and succeeds", async () => {
+    let searches = 0;
+    const { fetch } = fakeFetch((url) => {
+      if (url === TENANT_INFO) return { body: { cloudId: CLOUD_ID } };
+      searches++;
+      if (searches === 1) return { ok: false, status: 429, headers: { "retry-after": "2" } };
+      return { body: { issues: [{ id: "1" }], isLast: true } };
+    });
+    const { sleep, waits } = recordingSleep();
+    const request = defaultTransport(SITE, fetch, undefined, sleep)!;
+    const data = await request("/rest/api/3/search/jql", { method: "POST", body: {} });
+    expect(data.issues).toHaveLength(1);
+    expect(searches).toBe(2);
+    expect(waits).toEqual([2_000]);
+  });
+
+  test("a second 429 fails clean, status only, with no body bytes", async () => {
+    const { fetch } = fakeFetch((url) =>
+      url === TENANT_INFO
+        ? { body: { cloudId: CLOUD_ID } }
+        : { ok: false, status: 429, headers: { "retry-after": "1" }, body: { errorMessages: ["INJECTED"] } },
+    );
+    const { sleep, waits } = recordingSleep();
+    const request = defaultTransport(SITE, fetch, undefined, sleep)!;
+    const err = await request("/rest/api/3/search/jql", { method: "POST", body: {} }).catch((e) => e);
+    expect(err.message).toBe("Jira request failed: 429");
+    expect(err.message).not.toContain("INJECTED");
+    expect(waits).toHaveLength(1); // retried exactly once
+  });
+
+  test("emits one http event per attempt, so a retried 429 reads as the two requests it was", async () => {
+    let searches = 0;
+    const { fetch } = fakeFetch((url) => {
+      if (url === TENANT_INFO) return { body: { cloudId: CLOUD_ID } };
+      return ++searches === 1
+        ? { ok: false, status: 429, headers: { "retry-after": "1" } }
+        : { body: { issues: [], isLast: true } };
+    });
+    const events: DebugEvent[] = [];
+    const { sleep } = recordingSleep();
+    const request = defaultTransport(SITE, fetch, (e) => events.push(e), sleep)!;
+    await request("/rest/api/3/search/jql", { method: "POST", body: {} });
+    const statuses = events.filter((e) => e.kind === "http").map((e) => (e as { status: number }).status);
+    expect(statuses).toEqual([429, 200]);
+  });
+
+  test("a 429 with no Retry-After header waits the one-second default", async () => {
+    let searches = 0;
+    // This fake omits `headers` entirely, the shape a minimal test double (and an
+    // exotic transport) can have; the wait must still be defined.
+    const fetchImpl: FetchLike = async (url) => {
+      if (url === TENANT_INFO) return { ok: true, status: 200, json: async () => ({ cloudId: CLOUD_ID }) };
+      return ++searches === 1
+        ? { ok: false, status: 429, json: async () => ({}) }
+        : { ok: true, status: 200, json: async () => ({ issues: [], isLast: true }) };
+    };
+    const { sleep, waits } = recordingSleep();
+    const request = defaultTransport(SITE, fetchImpl, undefined, sleep)!;
+    await request("/rest/api/3/search/jql", { method: "POST", body: {} });
+    expect(waits).toEqual([1_000]);
+  });
+
+  test("a 429 resolving cloudId fails clean — that request is outside the retry", async () => {
+    let tenantHits = 0;
+    const { fetch } = fakeFetch((url) => {
+      if (url === TENANT_INFO) {
+        tenantHits++;
+        return { ok: false, status: 429, headers: { "retry-after": "1" } };
+      }
+      return { body: { issues: [], isLast: true } };
+    });
+    const { sleep, waits } = recordingSleep();
+    const request = defaultTransport(SITE, fetch, undefined, sleep)!;
+    await expect(request("/rest/api/3/search/jql", { method: "POST", body: {} })).rejects.toThrow(
+      "Jira request failed: 429",
+    );
+    expect(tenantHits).toBe(1);
+    expect(waits).toEqual([]);
+  });
+
+  test("a non-429 failure is not retried", async () => {
+    let searches = 0;
+    const { fetch } = fakeFetch((url) => {
+      if (url === TENANT_INFO) return { body: { cloudId: CLOUD_ID } };
+      searches++;
+      return { ok: false, status: 500 };
+    });
+    const { sleep, waits } = recordingSleep();
+    const request = defaultTransport(SITE, fetch, undefined, sleep)!;
+    await expect(request("/rest/api/3/search/jql", { method: "POST", body: {} })).rejects.toThrow(
+      "Jira request failed: 500",
+    );
+    expect(searches).toBe(1);
+    expect(waits).toEqual([]);
   });
 });
 
