@@ -325,7 +325,13 @@ function resolvedExecPath(): string {
 }
 
 if (process.env[WORKER_ENV] !== undefined) {
-  await runUpdateWorker({ io: fsUpdateStateIO, dir: configDir(), now: () => new Date() });
+  await runUpdateWorker({
+    io: fsUpdateStateIO,
+    dir: configDir(),
+    now: () => new Date(),
+    version: VERSION,
+    fetch,
+  });
   process.exit(0);
 }
 

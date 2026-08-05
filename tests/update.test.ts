@@ -11,6 +11,7 @@ import {
   readAutoUpdateSetting,
   armUpdateCheck,
   runUpdateWorker,
+  discoverLatestVersion,
   WORKER_ENV,
   type UpdateGateDeps,
   type GateInputs,
@@ -503,20 +504,208 @@ describe("armUpdateCheck", () => {
 });
 
 describe("runUpdateWorker", () => {
-  test("records that a check happened, preserving the failure count", async () => {
+  /** A fetch that resolves the redirect to a fixed tag, so the worker has an answer. */
+  function tagged(tag: string): typeof fetch {
+    return (async () =>
+      new Response(null, { status: 302, headers: { location: `https://example.test/releases/tag/${tag}` } })) as unknown as typeof fetch;
+  }
+
+  test("records that a check happened", async () => {
     const io = fakeIO({
       [updateStatePath("/cfg")]: JSON.stringify({ checkedAt: "2026-08-01T00:00:00.000Z", outcome: "failed", consecutiveFailures: 3 }),
     });
-    await runUpdateWorker({ io, dir: "/cfg", now: () => NOW });
+    await runUpdateWorker({ io, dir: "/cfg", now: () => NOW, version: "0.6.0", fetch: tagged("v0.6.0"), url: "https://example.test/releases/latest" });
     const written = JSON.parse(io.files[updateStatePath("/cfg")]!);
     expect(written.checkedAt).toBe(NOW.toISOString());
     expect(written.outcome).toBe("current");
-    expect(written.consecutiveFailures).toBe(3);
   });
 
   test("a failing filesystem exits quietly rather than throwing", async () => {
     const io = fakeIO();
     io.fail = new Error("nope");
-    expect(await runUpdateWorker({ io, dir: "/cfg", now: () => NOW })).toBeUndefined();
+    expect(
+      await runUpdateWorker({ io, dir: "/cfg", now: () => NOW, version: "0.6.0", fetch: tagged("v0.6.0"), url: "https://example.test/releases/latest" }),
+    ).toBeUndefined();
+  });
+});
+
+// ── discovery: the redirect probe (ADR-0001 §5) ──────────────────────────────
+//
+// The redirect, not the JSON API: no token, no rate limit, a few hundred bytes,
+// and the same `latest` pointer that already excludes drafts and pre-releases. The
+// live header shape this parses is
+//   HTTP/2 302
+//   location: https://github.com/<owner>/rundown/releases/tag/v0.6.0
+// so the fakes below mirror exactly that.
+
+const LATEST_URL = "https://example.test/releases/latest";
+
+function redirectTo(location: string | undefined, status = 302): typeof fetch {
+  return (async () =>
+    new Response(null, {
+      status,
+      headers: location ? { location } : {},
+    })) as unknown as typeof fetch;
+}
+
+describe("discoverLatestVersion", () => {
+  test("reads the tag out of the Location header", async () => {
+    const f = redirectTo("https://example.test/releases/tag/v0.7.0");
+    expect(await discoverLatestVersion({ fetch: f, url: LATEST_URL })).toEqual({ ok: true, latest: "0.7.0" });
+  });
+
+  test("accepts a tag with no leading v", async () => {
+    const f = redirectTo("https://example.test/releases/tag/0.7.0");
+    expect(await discoverLatestVersion({ fetch: f, url: LATEST_URL })).toEqual({ ok: true, latest: "0.7.0" });
+  });
+
+  test("refuses a tag that is not an exact three-part semver, rather than interpreting it", async () => {
+    for (const tag of ["v0.7", "v0.7.0-rc.1", "latest", "v1.2.3.4", "nightly-2026-08-05", ""]) {
+      const f = redirectTo(`https://example.test/releases/tag/${tag}`);
+      expect(await discoverLatestVersion({ fetch: f, url: LATEST_URL })).toEqual({ ok: false, reason: "unparseable-tag" });
+    }
+  });
+
+  test("refuses a Location that is not a release-tag URL", async () => {
+    const f = redirectTo("https://example.test/login?return_to=%2Freleases");
+    expect(await discoverLatestVersion({ fetch: f, url: LATEST_URL })).toEqual({ ok: false, reason: "unparseable-tag" });
+  });
+
+  test("a missing Location header is an unexpected response", async () => {
+    expect(await discoverLatestVersion({ fetch: redirectTo(undefined), url: LATEST_URL })).toEqual({
+      ok: false,
+      reason: "unexpected-response",
+    });
+  });
+
+  test("a non-redirect status is an unexpected response", async () => {
+    for (const status of [200, 404, 500]) {
+      const f = redirectTo("https://example.test/releases/tag/v0.7.0", status);
+      expect(await discoverLatestVersion({ fetch: f, url: LATEST_URL })).toEqual({
+        ok: false,
+        reason: "unexpected-response",
+      });
+    }
+  });
+
+  test("a network failure is unreachable, not a crash", async () => {
+    const f = (async () => {
+      throw new Error("getaddrinfo ENOTFOUND");
+    }) as unknown as typeof fetch;
+    expect(await discoverLatestVersion({ fetch: f, url: LATEST_URL })).toEqual({ ok: false, reason: "unreachable" });
+  });
+
+  test("an aborted read is unreachable, so a hung worker cannot linger", async () => {
+    const f = (async () => {
+      const e = new Error("The operation timed out.");
+      e.name = "TimeoutError";
+      throw e;
+    }) as unknown as typeof fetch;
+    expect(await discoverLatestVersion({ fetch: f, url: LATEST_URL })).toEqual({ ok: false, reason: "unreachable" });
+  });
+
+  test("passes an abort signal and asks for manual redirects", async () => {
+    // The two request options the whole design rests on: without manual redirects
+    // there is no Location to read, and without a signal a hung read never returns.
+    let seen: RequestInit | undefined;
+    const f = (async (_u: string, init: RequestInit) => {
+      seen = init;
+      return new Response(null, { status: 302, headers: { location: "https://example.test/releases/tag/v0.7.0" } });
+    }) as unknown as typeof fetch;
+    await discoverLatestVersion({ fetch: f, url: LATEST_URL });
+    expect(seen?.redirect).toBe("manual");
+    expect(seen?.signal).toBeDefined();
+  });
+});
+
+// ── the worker's read path (ADR-0001 §5) ────────────────────────────────────
+
+describe("runUpdateWorker with discovery", () => {
+  function workerDeps(over: Partial<Parameters<typeof runUpdateWorker>[0]> = {}) {
+    // Narrowed before the spread, so a caller-supplied fake is the one read back.
+    const io = (over.io as ReturnType<typeof fakeIO>) ?? fakeIO();
+    return {
+      dir: "/cfg",
+      now: () => NOW,
+      version: "0.6.0",
+      url: LATEST_URL,
+      fetch: redirectTo("https://example.test/releases/tag/v0.7.0"),
+      ...over,
+      io,
+    };
+  }
+
+  async function stateAfter(over: Partial<Parameters<typeof runUpdateWorker>[0]> = {}) {
+    const deps = workerDeps(over);
+    await runUpdateWorker(deps);
+    const text = deps.io.files[updateStatePath("/cfg")];
+    return text ? JSON.parse(text) : undefined;
+  }
+
+  test("records the newer version it found", async () => {
+    const s = await stateAfter();
+    expect(s.latest).toBe("0.7.0");
+    expect(s.checkedAt).toBe(NOW.toISOString());
+    expect(s.consecutiveFailures).toBe(0);
+  });
+
+  test("an equal version records the check without claiming an update", async () => {
+    const s = await stateAfter({ fetch: redirectTo("https://example.test/releases/tag/v0.6.0") });
+    expect(s.latest).toBe("0.6.0");
+    expect(s.outcome).toBe("current");
+  });
+
+  test("never moves downward: an older latest is recorded, not acted on", async () => {
+    const s = await stateAfter({ fetch: redirectTo("https://example.test/releases/tag/v0.5.0") });
+    expect(s.latest).toBe("0.5.0");
+    expect(s.outcome).toBe("current");
+  });
+
+  test("the running version is a parameter, so every comparison branch is reachable", async () => {
+    const older = await stateAfter({ version: "0.1.0" });
+    expect(older.latest).toBe("0.7.0");
+    const newer = await stateAfter({ version: "9.9.9" });
+    expect(newer.latest).toBe("0.7.0");
+    expect(newer.outcome).toBe("current");
+  });
+
+  test("a failed check records the failure and increments the count", async () => {
+    const io = fakeIO({
+      [updateStatePath("/cfg")]: JSON.stringify({
+        checkedAt: "2026-08-01T00:00:00.000Z",
+        outcome: "failed",
+        reason: "unreachable",
+        consecutiveFailures: 2,
+      }),
+    });
+    const s = await stateAfter({ io, fetch: redirectTo("https://example.test/releases/tag/v0.7", 302) });
+    expect(s.outcome).toBe("failed");
+    expect(s.reason).toBe("unparseable-tag");
+    expect(s.consecutiveFailures).toBe(3);
+  });
+
+  test("a successful check resets the failure count", async () => {
+    const io = fakeIO({
+      [updateStatePath("/cfg")]: JSON.stringify({
+        checkedAt: "2026-08-01T00:00:00.000Z",
+        outcome: "failed",
+        reason: "unreachable",
+        consecutiveFailures: 6,
+      }),
+    });
+    const s = await stateAfter({ io });
+    expect(s.outcome).toBe("current");
+    expect(s.consecutiveFailures).toBe(0);
+    expect(s.reason).toBeUndefined();
+  });
+
+  test("an unreachable network records a failure and never throws", async () => {
+    const f = (async () => {
+      throw new Error("offline");
+    }) as unknown as typeof fetch;
+    const s = await stateAfter({ fetch: f });
+    expect(s.outcome).toBe("failed");
+    expect(s.reason).toBe("unreachable");
+    expect(s.consecutiveFailures).toBe(1);
   });
 });
