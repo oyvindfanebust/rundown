@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.6.0](https://github.com/oyvindfanebust/rundown/compare/v0.5.0...v0.6.0) (2026-08-05)
+
+
+### ⚠ BREAKING CHANGES
+
+* `evidence[]` entries change from `{source, quote}` to `{source, where?, who?, quote}`, and the Summarizer's own output schema changes from `{source, quote}` to `{ref, quote}`. Consumers reading `evidence[].source` for attribution should read `where`/`who` instead; `source` is now strictly the source key and kind, code-filled rather than model-written.
+
+### Features
+
+* carry who-and-where attribution structurally on Brief evidence ([#55](https://github.com/oyvindfanebust/rundown/issues/55)) ([46f261b](https://github.com/oyvindfanebust/rundown/commit/46f261b81ac13ac641a2d827f2b097687cd62dc9))
+
 ## [0.5.0](https://github.com/oyvindfanebust/rundown/compare/v0.4.0...v0.5.0) (2026-08-04)
 
 

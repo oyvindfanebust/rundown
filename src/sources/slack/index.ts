@@ -20,7 +20,8 @@
 
 import type { NormalizedItem, Window } from "../../domain.ts";
 import { normalizer } from "../normalize.ts";
-import { statusOnlyError } from "../errors.ts";
+import { statusOnlyError, statusOf } from "../errors.ts";
+import { noDebug, type DebugSink } from "../../debug.ts";
 import type { OptionSchema, Source, SourceStatus } from "../source.ts";
 import {
   slackAppConfig,
@@ -71,6 +72,8 @@ export interface SlackDeps {
   transport?: (token: string) => SlackRequest;
   /** Interactive login (default: the real OAuth flow). */
   login?: (threads: boolean) => Promise<string>;
+  /** Structural diagnostics sink (ADR-0015); defaults to the no-op. */
+  debug?: DebugSink;
 }
 
 // ── Slack row shapes (the external HTTP contract, mirrored for mapping + fixtures) ──
@@ -235,12 +238,16 @@ export class SlackSource implements Source {
   private readonly cachedAuth: () => Promise<CachedAuth | null>;
   private readonly transport: (token: string) => SlackRequest;
   private readonly loginFn: (threads: boolean) => Promise<string>;
+  private readonly debug: DebugSink;
 
   constructor(options: Record<string, unknown> = {}, deps: SlackDeps = {}) {
     this.config = options;
     this.appConfig = deps.appConfig ?? slackAppConfig;
     this.cachedAuth = deps.cachedAuth ?? readCachedAuth;
-    this.transport = deps.transport ?? ((token) => (method, params) => slackApi(token, method, params));
+    // The default transport threads the sink into `slackApi`, which owns the fetch and
+    // so is the only place a real HTTP status exists (ADR-0015 §6).
+    this.debug = deps.debug ?? noDebug;
+    this.transport = deps.transport ?? ((token) => (method, params) => slackApi(token, method, params, this.debug));
     this.loginFn = deps.login ?? slackLogin;
   }
 
@@ -272,13 +279,22 @@ export class SlackSource implements Source {
     if (!auth) return { state: "not-authenticated" }; // configured, interactive, not yet logged in
     try {
       const res = await this.transport(auth.accessToken)("auth.test");
-      if (res?.ok) return { state: "ready", identity: typeof res.user === "string" ? res.user : undefined };
+      if (res?.ok) {
+        this.debug({ kind: "auth-verify", source: KEY, outcome: "ready" });
+        return { state: "ready", identity: typeof res.user === "string" ? res.user : undefined };
+      }
       // A rejected token is a meaningful state, not a leak — no `res.error` surfaced.
+      // The event says so too: an application-level rejection arrives over HTTP 200,
+      // so there is no status to carry and Slack's own `error` code is backend content.
+      this.debug({ kind: "auth-verify", source: KEY, outcome: "rejected" });
       return { state: "not-authenticated" };
-    } catch {
+    } catch (e) {
       // A scrubbed transport error (network/HTTP) can't confirm readiness. Fold it
       // onto the existing union (no shared-schema change, ADR-0014 §8) as a
       // not-configured with a status-only detail — the raw error never surfaced.
+      // The HTTP status the transport error already carries is read through the shared
+      // `statusOf` scrub, the same one the thrown-error channel uses (ADR-0015 §5).
+      this.debug({ kind: "auth-verify", source: KEY, outcome: "rejected", httpStatus: statusOf(e) });
       return { state: "not-configured", detail: "Slack could not be reached — check your connection" };
     }
   }
