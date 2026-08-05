@@ -32,6 +32,10 @@ function run(args: string[], configPath: string, entrypoint = "src/cli.ts", extr
   delete env.LINEAR_API_KEY;
   delete env.JIRA_EMAIL;
   delete env.JIRA_API_TOKEN;
+  // The auto-update off-switch too, so the version line's default reading does not
+  // depend on the developer's shell (ADR-0001 §5); the disabled case sets it back
+  // explicitly via extraEnv.
+  delete env.RUNDOWN_DISABLE_AUTOUPDATE;
   Object.assign(env, extraEnv);
   const proc = Bun.spawnSync([process.execPath, entrypoint, ...args], { cwd: ROOT, env });
   return { stdout: proc.stdout.toString(), stderr: proc.stderr.toString(), exitCode: proc.exitCode ?? 0 };
@@ -272,6 +276,92 @@ describe("cli", () => {
       expect(r.stdout).not.toContain("All configured sources already authenticated.");
       expect(r.stdout).not.toContain("Done. Next: rundown status");
       expect(r.exitCode).toBe(0);
+    });
+  });
+
+  // ── status version line (ADR-0001 §5) ─────────────────────────────────────
+  //
+  // Every rendered state goes through the real CLI: the state document is written
+  // into the temp config directory the run pins with RUNDOWN_CONFIG, which is also
+  // the proof that the override relocates the document. No network is reachable
+  // from any of these — the line reads the file and nothing else.
+
+  describe("status version line", () => {
+    const CONFIG = JSON.stringify({ timezone: "UTC", window: "this-week", sources: { "claude-code-logs": {} } });
+
+    /** Write the state document beside the config file this run will use. */
+    function withState(document: string): string {
+      const path = written(CONFIG);
+      writeFileSync(join(dir!, "update-state.json"), document);
+      return path;
+    }
+
+    function state(over: Record<string, unknown>): string {
+      return JSON.stringify({ checkedAt: "2026-08-05T09:00:00.000Z", outcome: "current", consecutiveFailures: 0, ...over });
+    }
+
+    test("no state document: reports the running version and that nothing has been checked", () => {
+      const r = run(["status"], written(CONFIG));
+      expect(r.stdout).toContain("version   0.0.0-dev   no update check recorded yet");
+    });
+
+    test("a current state reads as up to date", () => {
+      const r = run(["status"], withState(state({ latest: "0.0.0-dev" })));
+      expect(r.stdout).toContain("version   0.0.0-dev   up to date (checked 2026-08-05T09:00:00.000Z)");
+    });
+
+    test("a newer recorded version is named", () => {
+      // The running version is stamped, so the comparison is a real one rather
+      // than the dev marker's unconditional "not newer".
+      const outDir = mkdtempSync(join(tmpdir(), "rundown-stamp-"));
+      try {
+        const build = Bun.spawnSync(
+          [process.execPath, "build", "src/cli.ts", "--target=bun", "--define", 'RUNDOWN_VERSION="0.3.0"', "--outfile", join(outDir, "cli.js")],
+          { cwd: ROOT },
+        );
+        expect(build.exitCode).toBe(0);
+        const r = run(["status"], withState(state({ latest: "0.4.0" })), join(outDir, "cli.js"));
+        expect(r.stdout).toContain("version   0.3.0   0.4.0 available (checked 2026-08-05T09:00:00.000Z)");
+      } finally {
+        rmSync(outDir, { recursive: true, force: true });
+      }
+    });
+
+    test("a refused state names the recorded reason", () => {
+      const r = run(["status"], withState(state({ outcome: "refused", reason: "install directory not writable" })));
+      expect(r.stdout).toContain("version   0.0.0-dev   update refused: install directory not writable (checked 2026-08-05T09:00:00.000Z)");
+    });
+
+    test("a failed state reports the failure and its count", () => {
+      const r = run(["status"], withState(state({ outcome: "failed", reason: "checksum mismatch", consecutiveFailures: 3 })));
+      expect(r.stdout).toContain("last update check failed: checksum mismatch (3 in a row, checked 2026-08-05T09:00:00.000Z)");
+    });
+
+    test("RUNDOWN_DISABLE_AUTOUPDATE is reported as disabled", () => {
+      const r = run(["status"], written(CONFIG), "src/cli.ts", { RUNDOWN_DISABLE_AUTOUPDATE: "1" });
+      expect(r.stdout).toContain("version   0.0.0-dev   auto-update disabled");
+    });
+
+    test("a corrupt state document degrades to the no-check line rather than an error", () => {
+      const r = run(["status"], withState("{not json at all"));
+      expect(r.stdout).toContain("version   0.0.0-dev   no update check recorded yet");
+      expect(r.stdout).toContain("source");
+      expect(r.stderr).toBe("");
+    });
+
+    test("an empty state document degrades the same way", () => {
+      const r = run(["status"], withState(""));
+      expect(r.stdout).toContain("version   0.0.0-dev   no update check recorded yet");
+      expect(r.stderr).toBe("");
+    });
+
+    test("the line renders even when the config is invalid", () => {
+      const path = missing();
+      writeFileSync(join(dir!, "update-state.json"), state({ latest: "0.0.0-dev" }));
+      const r = run(["status"], path);
+      expect(r.stdout).toContain("version   0.0.0-dev   up to date");
+      expect(r.stdout).toContain("✗ invalid");
+      expect(r.exitCode).toBe(1);
     });
   });
 
