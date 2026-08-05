@@ -61,9 +61,10 @@ Exactly five agent-facing commands, and no more (see [ADR-0008](docs/adr/0008-bo
 - `rundown login` — interactive auth (the only command where interactivity is allowed).
 - `rundown status` — one readiness phrase per source (`ready` / `not authenticated` /
   `not configured`, with identity or a fix-it detail), plus the global summarizer
-  credential (`ANTHROPIC_API_KEY` present?). An installed-vs-latest version signal is designed
-  ([ADR-0009](docs/adr/0009-skills-collection.md), [ADR-0001](docs/adr/0001-package-rundown-cli-as-compiled-binaries-in-skills.md) §5)
-  but not yet implemented.
+  credential (`ANTHROPIC_API_KEY` present?), and a version line: the running version, a newer known
+  version when one exists, and the recorded reason when an update is being refused. The version line
+  is read from the update state document with no network call, so it never hangs and can be a day
+  stale ([ADR-0001](docs/adr/0001-package-rundown-cli-as-compiled-binaries-in-skills.md) §5).
 - `rundown init` — write the annotated JSONC config template (only if absent).
 - `rundown --version` — the CLI version (today a hardcoded constant; tag-stamped semver arrives
   with the release workflow).
@@ -110,16 +111,22 @@ the `brief` invocation, and scoped rendering guidance (field semantics, a defaul
 inside the skill folder, reached by a context pointer, so the always-loaded body stays lean.
 
 The skill ships light — `SKILL.md` plus reference files only; it does not contain the CLI. The
-distribution story is designed ([ADR-0001](docs/adr/0001-package-rundown-cli-as-compiled-binaries-in-skills.md))
-but not yet implemented: a standalone `bun build --compile` binary distributed as GitHub Release
-assets, installed by a `curl | bash` `install.sh` into a user-writable dir (`rundown` as a public
-repo), self-updating in the background (Claude-Code-style: detached, throttled, checksum-verified,
-atomic self-replace, effect next-invocation) with a config/`RUNDOWN_DISABLE_AUTOUPDATE` off-switch.
-Today only the `rundown` launcher's run-from-source fallback exists — no release workflow, no
-installer, no self-update code. In the design, self-update is a behavior, not a sixth command, so
-the [five-command surface](#architecture) holds; its trust axis (a first-party artifact fetched over
-TLS, whose trust anchor ADR-0001 §5 states) is orthogonal to the untrusted-data→model
-[boundary](#trust-boundary).
+distribution story ([ADR-0001](docs/adr/0001-package-rundown-cli-as-compiled-binaries-in-skills.md))
+is implemented: a standalone `bun build --compile` binary per platform, distributed as GitHub Release
+assets with a SHA-256 checksum each and a build-provenance attestation, installed by a `curl | bash`
+`install.sh` into a user-writable dir (`rundown` as a public repo).
+
+The installed binary keeps itself current. At most once a day a run forks a detached worker, which
+asks GitHub for the latest release, and when that is newer downloads this platform's asset, verifies
+its checksum, runs the candidate once to confirm it starts and reports the expected version, and only
+then atomically replaces the binary. The new version takes effect on the next invocation, so a
+`brief` in flight is never mutated. Updating is off when `autoUpdate` is `false` in the config, when
+`RUNDOWN_DISABLE_AUTOUPDATE` is truthy, when `CI` is present in the environment, and on a source run.
+
+Self-update is a behavior, not a sixth command, so the [five-command surface](#architecture) holds;
+its trust axis (a first-party artifact fetched over TLS, whose trust anchor ADR-0001 §5 states) is
+orthogonal to the untrusted-data→model [boundary](#trust-boundary). The updater does not verify the
+provenance attestations it now ships alongside; that is a separate decision (ADR-0001 §8).
 
 ### Source
 

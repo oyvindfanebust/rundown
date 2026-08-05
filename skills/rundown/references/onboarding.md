@@ -12,9 +12,13 @@ If `rundown` is not installed, run the one-time installer (public repo):
 curl -fsSL https://github.com/oyvindfanebust/rundown/releases/latest/download/install.sh | bash
 ```
 
-After that the binary self-updates in the background, and `rundown status` surfaces the
-installed-vs-latest version. (Distribution — the compile matrix, `install.sh`, and self-update —
-is ADR-0001; until it ships, run from source in the repo with `./rundown`.)
+After that the binary keeps itself current: at most once a day a run checks for a newer release in a
+detached worker, verifies it, confirms it starts, and replaces itself, taking effect on the next
+invocation. `rundown status` prints a version line — the running version, a newer known version when
+there is one, and the reason an update is being refused if it is — read from cached state with no
+network call. Set `"autoUpdate": false` in the config to turn updating off durably, or
+`RUNDOWN_DISABLE_AUTOUPDATE=1` for one command; it is skipped automatically under `CI`. Distribution
+and self-update are ADR-0001. To work in the repo instead, run from source with `./rundown`.
 
 ## Setup flow
 

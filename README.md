@@ -49,9 +49,20 @@ The primary install is a one-liner:
 curl -fsSL https://github.com/oyvindfanebust/rundown/releases/latest/download/install.sh | bash
 ```
 
-It fetches the compiled `rundown` binary and puts it on your `PATH`; after that the binary
-self-updates in the background. This is the intended path, available from the v0.1.0 release —
-until that ships, run from source.
+It fetches the compiled `rundown` binary and puts it on your `PATH`.
+
+After that the binary keeps itself current on its own. At most once a day a run checks GitHub for a
+newer release in a detached background worker and, when it finds one, verifies its checksum, confirms
+the downloaded binary starts and reports the expected version, and replaces itself. The new version
+takes effect the next time you run `rundown`, never mid-run. There is no update command: `rundown
+status` reports which version you are on, whether a newer one is known, and why an update is being
+refused if one is.
+
+To turn it off, set `"autoUpdate": false` in `~/.config/rundown/config.json` — that is the durable
+switch, and the only one that also makes an install-time version pin stick. For a single command,
+`RUNDOWN_DISABLE_AUTOUPDATE=1` does the same. Updating is skipped automatically when `CI` is set in
+the environment, so a vendored binary never mutates itself mid-pipeline, and a run from source never
+updates anything.
 
 ### Run from source
 
