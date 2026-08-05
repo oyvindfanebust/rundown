@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.8.0](https://github.com/oyvindfanebust/rundown/compare/v0.7.0...v0.8.0) (2026-08-05)
+
+
+### Features
+
+* **jira:** Retry-After-bounded retry on 429 rate limits ([#81](https://github.com/oyvindfanebust/rundown/issues/81)) ([9b900b1](https://github.com/oyvindfanebust/rundown/commit/9b900b1bb4bfb95eba36f4e2294a1ab74c678812)), closes [#26](https://github.com/oyvindfanebust/rundown/issues/26)
+
 ## [0.7.0](https://github.com/oyvindfanebust/rundown/compare/v0.6.0...v0.7.0) (2026-08-05)
 
 
