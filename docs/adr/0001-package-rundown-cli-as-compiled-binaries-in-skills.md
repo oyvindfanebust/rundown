@@ -128,6 +128,11 @@ separate from the untrusted work-source data the boundary defends against. The t
   `BREAKING CHANGE` → major) and keeps an open "release PR" that bumps `package.json`, updates the
   `.release-please-manifest.json` version, and writes the `CHANGELOG.md` entry. The version lives in
   the manifest as the source of truth; `package.json` mirrors it.
+- Below 1.0.0 a breaking change bumps the minor rather than the major: `bump-minor-pre-major` is set
+  in `release-please-config.json`. Reaching 1.0.0 is a decision the maintainer makes deliberately, by
+  releasing it, and not a side effect of the first `feat!:` to land during pre-1.0 development, where
+  the contract is still moving and breaking changes are expected. The changelog still carries the
+  BREAKING CHANGES section either way, so the break stays visible to a consumer.
 - Only commit types that change the compiled binary cut a release: `feat`, `fix`, `perf`, `refactor`.
   `docs`, `chore`, `ci`, and `test` are marked `hidden` in `release-please-config.json`, which in
   release-please means both hidden from the changelog and non-release-triggering — a doc-only change

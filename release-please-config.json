@@ -6,6 +6,7 @@
       "package-name": "rundown",
       "changelog-path": "CHANGELOG.md",
       "include-component-in-tag": false,
+      "bump-minor-pre-major": true,
       "changelog-sections": [
         { "type": "feat", "section": "Features" },
         { "type": "fix", "section": "Bug Fixes" },

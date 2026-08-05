@@ -30,8 +30,9 @@ version bump and write `CHANGELOG.md`, so **commits must follow
 [Conventional Commits](https://www.conventionalcommits.org)**.
 
 - `feat:` → minor; `fix:`, `perf:`, `refactor:` → patch; a `!` (`feat!:`) or a `BREAKING CHANGE:`
-  footer → major. `perf` and `refactor` change the compiled binary, so they cut a release and show
-  in the changelog.
+  footer → minor while the version is below 1.0.0, and major after that (`bump-minor-pre-major` in
+  `release-please-config.json`). `perf` and `refactor` change the compiled binary, so they cut a
+  release and show in the changelog.
 - `docs:`, `chore:`, `ci:`, `test:` trigger no release (recorded but hidden from the changelog);
   they do not change the binary. A commit whose prefix isn't in the convention is invisible to
   versioning, so the release can stall or under-bump. Choose `feat` vs `fix` vs breaking by
