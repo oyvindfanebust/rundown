@@ -682,3 +682,34 @@ export async function downloadAndSwap(deps: {
     await deps.io.remove(candidate).catch(() => {});
   }
 }
+
+// ── the persistent-failure warning (ADR-0001 §5) ─────────────────────────────
+
+/**
+ * How many consecutive failed checks before a human is told. Seven days is long
+ * enough that transient network failures never trigger it, and short enough to
+ * catch a real breakage within the week.
+ */
+export const FAILURE_WARN_THRESHOLD = 7;
+
+/**
+ * The one line a human sees when updates have been failing for about a week, or
+ * `undefined` when there is nothing to say.
+ *
+ * Everything else about update failure is deliberately silent, and the visible
+ * signal lives in `status`. But the primary consumer is an agent, and an agent runs
+ * `brief`; it has no reason to call `status` again after onboarding. An install
+ * where every check has failed for months looks identical to a healthy one from the
+ * only command anyone actually runs.
+ *
+ * Accepted limitation: a fully headless install never has a terminal, so it stays
+ * silent regardless. The rejected alternative was surfacing this in the Brief,
+ * which would pollute a contract ADR-0011 pins with a schema test and which is the
+ * untrusted-derived artifact.
+ */
+export function persistentFailureWarning(state: UpdateState | undefined): string | undefined {
+  if (!state || state.outcome !== "failed" && state.outcome !== "refused") return undefined;
+  if (state.consecutiveFailures < FAILURE_WARN_THRESHOLD) return undefined;
+  const why = state.reason ? ` (${state.reason})` : "";
+  return `rundown: self-update has failed ${state.consecutiveFailures} times in a row${why}. Run \`rundown status\` for details.`;
+}

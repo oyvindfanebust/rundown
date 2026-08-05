@@ -12,6 +12,7 @@ import {
   armUpdateCheck,
   runUpdateWorker,
   discoverLatestVersion,
+  persistentFailureWarning,
   WORKER_ENV,
   type UpdateGateDeps,
   type GateInputs,
@@ -707,5 +708,48 @@ describe("runUpdateWorker with discovery", () => {
     expect(s.outcome).toBe("failed");
     expect(s.reason).toBe("unreachable");
     expect(s.consecutiveFailures).toBe(1);
+  });
+});
+
+// ── the persistent-failure warning (ADR-0001 §5) ─────────────────────────────
+
+describe("persistentFailureWarning", () => {
+  function failing(n: number, over: Partial<UpdateState> = {}): UpdateState {
+    return { checkedAt: NOW.toISOString(), outcome: "failed", reason: "unreachable", consecutiveFailures: n, ...over };
+  }
+
+  test("says nothing below the threshold", () => {
+    for (const n of [0, 1, 3, 6]) expect(persistentFailureWarning(failing(n))).toBeUndefined();
+  });
+
+  test("warns once the threshold is reached, naming the count and the reason", () => {
+    const w = persistentFailureWarning(failing(7));
+    expect(w).toContain("7 times in a row");
+    expect(w).toContain("unreachable");
+    // It points at the diagnostic command rather than telling anyone to run an
+    // upgrade: no output channel gains an imperative an agent could act on.
+    expect(w).toContain("rundown status");
+  });
+
+  test("keeps warning past the threshold", () => {
+    expect(persistentFailureWarning(failing(30))).toContain("30 times in a row");
+  });
+
+  test("a recorded refusal counts too, since a refused install never updates either", () => {
+    const w = persistentFailureWarning(failing(7, { outcome: "refused", reason: "install directory not writable" }));
+    expect(w).toContain("install directory not writable");
+  });
+
+  test("says nothing when the last check succeeded, whatever the stale count", () => {
+    expect(persistentFailureWarning(failing(9, { outcome: "current", reason: undefined }))).toBeUndefined();
+    expect(persistentFailureWarning(failing(9, { outcome: "updated", reason: undefined }))).toBeUndefined();
+  });
+
+  test("says nothing with no state at all", () => {
+    expect(persistentFailureWarning(undefined)).toBeUndefined();
+  });
+
+  test("tolerates a missing reason", () => {
+    expect(persistentFailureWarning(failing(7, { reason: undefined }))).toContain("7 times in a row");
   });
 });

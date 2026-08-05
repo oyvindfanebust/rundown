@@ -20,6 +20,7 @@ import {
   downloadAndSwap,
   fsSwapIO,
   fsUpdateStateIO,
+  persistentFailureWarning,
   readUpdateState,
   renderVersionLine,
   runUpdateWorker,
@@ -299,6 +300,16 @@ async function cmdBrief(debug: DebugSink, windowOverride?: WindowSelector, sourc
   const onProgress = process.stderr.isTTY
     ? (message: string) => process.stderr.write(`${message}\n`)
     : undefined;
+
+  // A permanently broken updater must not stay invisible to a human. Gated on the
+  // same terminal check as progress output, so a piped or agent-driven run stays
+  // byte-for-byte silent on both streams and no automated consumer is affected.
+  // Nothing about this reaches the Brief: ADR-0011 pins that contract with a schema
+  // test, and it is the untrusted-derived artifact.
+  if (process.stderr.isTTY) {
+    const warning = persistentFailureWarning(await readUpdateState(fsUpdateStateIO, configDir()));
+    if (warning) process.stderr.write(`${warning}\n`);
+  }
   const brief = await buildBrief({ windowOverride, sourceFilter, onProgress, onDebug: debug });
   // Bun.write awaits the flush, so the JSON is fully emitted before we exit.
   await Bun.write(Bun.stdout, JSON.stringify(brief) + "\n");
