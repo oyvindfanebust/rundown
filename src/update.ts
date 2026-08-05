@@ -388,7 +388,67 @@ export async function armUpdateCheck(deps: UpdateGateDeps): Promise<GateDecision
   }
 }
 
+// ── discovery: the redirect probe (ADR-0001 §5) ──────────────────────────────
+
+/** The stable "latest" pointer. A redirect, not the JSON API — see {@link discoverLatestVersion}. */
+export const RELEASES_LATEST_URL = "https://github.com/oyvindfanebust/rundown/releases/latest";
+
+/** How long a network read may take before it is abandoned. */
+export const NETWORK_TIMEOUT_MS = 10_000;
+
+/** What discovery learned, or why it learned nothing. Both are recordable as-is. */
+export type Discovery =
+  | { ok: true; latest: string }
+  | { ok: false; reason: "unreachable" | "unexpected-response" | "unparseable-tag" };
+
 /**
+ * Ask GitHub for the latest release version by reading the redirect, with
+ * redirects handled manually so the `Location` header is ours to parse.
+ *
+ * This is deliberately not the JSON API. The redirect needs no token, has no rate
+ * limit, costs a few hundred bytes, and honours the same `latest` pointer that
+ * already excludes drafts and pre-releases. The API's unauthenticated
+ * 60-per-hour-per-IP limit is reachable behind a shared corporate egress address,
+ * and its failure mode is a silent refusal that would stop updates for an unknown
+ * set of users. Nothing in the response is needed beyond the tag, because asset
+ * names are deterministic from the platform (ADR-0001 §2–§3).
+ *
+ * Anything unexpected returns a reason rather than a guess: a tag that is not an
+ * exact three-part semver aborts instead of being interpreted, so an unexpected
+ * response can never turn into an arbitrary download. The read carries an abort
+ * timeout, so a hung worker cannot linger as an orphaned process.
+ */
+export async function discoverLatestVersion(deps: {
+  fetch: typeof fetch;
+  url?: string;
+  timeoutMs?: number;
+}): Promise<Discovery> {
+  let response: Response;
+  try {
+    response = await deps.fetch(deps.url ?? RELEASES_LATEST_URL, {
+      redirect: "manual",
+      signal: AbortSignal.timeout(deps.timeoutMs ?? NETWORK_TIMEOUT_MS),
+    });
+  } catch {
+    // A network failure, a DNS failure, and a timeout are one outcome here: no
+    // answer. The distinction would not change what the updater does next.
+    return { ok: false, reason: "unreachable" };
+  }
+  if (response.status < 300 || response.status > 399) return { ok: false, reason: "unexpected-response" };
+  const location = response.headers.get("location");
+  if (!location) return { ok: false, reason: "unexpected-response" };
+
+  // The live shape is `.../releases/tag/v0.6.0`; the leading `v` is the tag
+  // convention, not part of the version.
+  const tag = /\/releases\/tag\/([^/?#]+)$/.exec(location)?.[1];
+  if (!tag) return { ok: false, reason: "unparseable-tag" };
+  const version = tag.startsWith("v") ? tag.slice(1) : tag;
+  if (!/^\d+\.\d+\.\d+$/.test(version)) return { ok: false, reason: "unparseable-tag" };
+  return { ok: true, latest: version };
+}
+
+/**
+ * The internal worker mode: the same binary, re-executed with {@link WORKER_ENV}/**
  * The internal worker mode: the same binary, re-executed with {@link WORKER_ENV}
  * set. It returns before any argument handling, which is what guarantees it cannot
  * reach config resolution, Sources, or the Summarizer — no untrusted byte is ever
@@ -401,13 +461,38 @@ export async function runUpdateWorker(deps: {
   io: UpdateStateIO;
   dir: string;
   now: () => Date;
+  /** The running version, passed in rather than read from the build-time constant, so every comparison branch is testable. */
+  version: string;
+  fetch: typeof fetch;
+  url?: string;
+  timeoutMs?: number;
 }): Promise<void> {
   try {
     const state = await readUpdateState(deps.io, deps.dir);
+    const found = await discoverLatestVersion(deps);
+
+    if (!found.ok) {
+      // A failed check is recorded, not swallowed: the count is what lets a
+      // permanently broken updater become visible instead of silently never
+      // working. It stays silent on the invoking run — this process is detached.
+      await writeUpdateState(
+        deps.io,
+        deps.dir,
+        { outcome: "failed", reason: found.reason, consecutiveFailures: (state?.consecutiveFailures ?? 0) + 1 },
+        deps.now,
+      );
+      return;
+    }
+
+    // A successful check resets the count. `latest` is recorded whether or not it
+    // is newer, because that is what the status line reports from; the
+    // strictly-greater comparison is what decides whether anything happens — never
+    // on equal, never downward. Acting on it (download, verify, swap) is #65; until
+    // then a newer release is recorded and surfaced, and the binary is untouched.
     await writeUpdateState(
       deps.io,
       deps.dir,
-      { outcome: "current", consecutiveFailures: state?.consecutiveFailures ?? 0 },
+      { latest: found.latest, outcome: "current", consecutiveFailures: 0 },
       deps.now,
     );
   } catch {
