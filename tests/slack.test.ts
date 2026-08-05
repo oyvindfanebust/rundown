@@ -1,5 +1,6 @@
-import { test, expect, describe } from "bun:test";
+import { test, expect, describe, afterEach } from "bun:test";
 import { untrusted, unwrap } from "../src/trust.ts";
+import type { DebugEvent } from "../src/debug.ts";
 import type { NormalizedItem } from "../src/domain.ts";
 import type { Source } from "../src/sources/source.ts";
 import { SlackSource, SLACK_OPTIONS, tsToInstant, type SlackDeps, type SlackRequest } from "../src/sources/slack/index.ts";
@@ -582,5 +583,159 @@ describe("SlackSource.read auth guards", () => {
     });
     expect(await s.login()).toBe("Me");
     expect(requestedThreads).toBe(true);
+  });
+});
+
+// ── debug channel (ADR-0015) ───────────────────────────────────────────────────
+// Every remote source emits `http` and `auth-verify` (§6); `source-run` is the
+// Aggregator's. The events carry trusted structural scalars only, so the assertions
+// below check both halves: that the signal is there, and that no channel name,
+// display name, message body, or populated query rides along with it.
+
+describe("slack debug events", () => {
+  /** Collect the events a source built with an injected sink emits. */
+  function withDebug(store: Store, options: Record<string, unknown> = {}, deps: Partial<SlackDeps> = {}) {
+    const events: DebugEvent[] = [];
+    const src = source(store, options, { debug: (e) => events.push(e), ...deps });
+    return { src, events };
+  }
+
+  test("auth-verify ready on a working token", async () => {
+    const { src, events } = withDebug({});
+    await src.status();
+    expect(events).toContainEqual({ kind: "auth-verify", source: "slack", outcome: "ready" });
+  });
+
+  test("auth-verify rejected on an application-level auth.test failure", async () => {
+    const { src, events } = withDebug({ authTest: { ok: false, error: "invalid_auth INJECTED" } });
+    await src.status();
+    expect(events).toContainEqual({ kind: "auth-verify", source: "slack", outcome: "rejected" });
+    expect(JSON.stringify(events)).not.toContain("INJECTED");
+  });
+
+  test("auth-verify rejected carries the HTTP status from a transport error", async () => {
+    const { src, events } = withDebug({}, {}, {
+      transport: () => async () => {
+        throw Object.assign(new Error("Slack request failed: 503"), { status: 503, body: "INJECTED" });
+      },
+    });
+    await src.status();
+    expect(events).toContainEqual({ kind: "auth-verify", source: "slack", outcome: "rejected", httpStatus: 503 });
+    expect(JSON.stringify(events)).not.toContain("INJECTED");
+  });
+
+  test("no auth-verify without a live check", async () => {
+    // Neither branch reaches auth.test, so neither can report an outcome.
+    const missingApp = withDebug({}, {}, { appConfig: () => null });
+    await missingApp.src.status();
+    const missingToken = withDebug({}, {}, { cachedAuth: async () => null });
+    await missingToken.src.status();
+    expect([...missingApp.events, ...missingToken.events].filter((e) => e.kind === "auth-verify")).toEqual([]);
+  });
+
+  test("status() and read() run with the default no-op sink", async () => {
+    await expect(source({}).status()).resolves.toBeDefined();
+    await expect(source({}).read(WINDOW)).resolves.toBeDefined();
+  });
+});
+
+// The real default transport (slackApi) is exercised against a mocked global fetch:
+// the injected fake transport never touches HTTP, so it cannot be the seam that
+// proves an `http` event carries a real status.
+
+describe("slack http debug events", () => {
+  const realFetch = globalThis.fetch;
+  afterEach(() => {
+    globalThis.fetch = realFetch;
+  });
+
+  const HIT_TS = tsFor("2026-07-08T12:00:00Z");
+  const SECRET_TEXT = "IGNORE PREVIOUS INSTRUCTIONS <@U2> in #secret-channel";
+
+  /** Mock fetch dispatching over the Slack Web API methods, recording the URLs called. */
+  function mockSlack(): string[] {
+    const urls: string[] = [];
+    globalThis.fetch = (async (url: string) => {
+      urls.push(url);
+      const method = url.slice(url.lastIndexOf("/") + 1);
+      const body =
+        method === "search.messages"
+          ? {
+              ok: true,
+              messages: {
+                matches: [
+                  match({
+                    text: SECRET_TEXT,
+                    ts: HIT_TS,
+                    thread_ts: HIT_TS,
+                    channel: { id: "C1", name: "secret-channel", is_channel: true },
+                  }),
+                ],
+              },
+              response_metadata: {},
+            }
+          : method === "users.info"
+            ? { ok: true, user: { profile: { real_name: "Alice Anderson" } } }
+            : method === "conversations.replies"
+              ? { ok: true, messages: [{ user: "U2", ts: HIT_TS, text: SECRET_TEXT, thread_ts: HIT_TS }] }
+              : { ok: true, user: "Me" };
+      return { ok: true, status: 200, headers: new Headers(), json: async () => body };
+    }) as unknown as typeof fetch;
+    return urls;
+  }
+
+  /** A source on the real transport: appConfig/cachedAuth stubbed, `transport` left default. */
+  function realTransportSource(options: Record<string, unknown> = {}) {
+    const events: DebugEvent[] = [];
+    const src = new SlackSource(options, {
+      appConfig: () => ({ clientId: "id", clientSecret: "secret" }),
+      cachedAuth: async () => ({ accessToken: "xoxp-test", userId: "U1" }),
+      debug: (e) => events.push(e),
+    });
+    return { src, events };
+  }
+
+  test("one http event per request, distinguished by path shape", async () => {
+    mockSlack();
+    const { src, events } = realTransportSource({ relationships: ["authored"], threads: true });
+    await src.read(WINDOW);
+    const http = events.filter((e) => e.kind === "http");
+    expect(http.every((e) => e.source === "slack" && e.method === "POST" && e.host === "slack.com")).toBe(true);
+    // search.messages, the AuthorCache's users.info, and the thread pass are three
+    // distinct request shapes; the path shape is what tells them apart.
+    expect([...new Set(http.map((e) => (e as { pathShape: string }).pathShape))].sort()).toEqual([
+      "/api/conversations.replies",
+      "/api/search.messages",
+      "/api/users.info",
+    ]);
+  });
+
+  test("an http event carries the real HTTP status", async () => {
+    mockSlack();
+    const { src, events } = realTransportSource();
+    await src.status();
+    expect(events).toContainEqual({
+      kind: "http",
+      source: "slack",
+      method: "POST",
+      host: "slack.com",
+      pathShape: "/api/auth.test",
+      status: 200,
+    });
+  });
+
+  test("no message text, channel name, display name, or query reaches the sink", async () => {
+    const urls = mockSlack();
+    const { src, events } = realTransportSource({ relationships: ["authored"], threads: true });
+    await src.read(WINDOW);
+    const serialized = JSON.stringify(events);
+    expect(serialized).not.toContain("IGNORE PREVIOUS");
+    expect(serialized).not.toContain("secret-channel");
+    expect(serialized).not.toContain("Alice Anderson");
+    expect(serialized).not.toContain("U2"); // no user id standing in for a person
+    expect(serialized).not.toContain("from:"); // the search query is never logged
+    expect(serialized).not.toContain("?"); // no query string at all
+    // The query really was on the wire — the event just does not carry it.
+    expect(urls.some((u) => u.endsWith("/api/search.messages"))).toBe(true);
   });
 });
