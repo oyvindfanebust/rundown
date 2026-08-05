@@ -3,9 +3,10 @@
 **Status:** Accepted
 
 The compiled-binary distribution described below (the release workflow and `install.sh`) ships as of
-v0.1.0; releases carry the nine assets (§2). Background self-update (§5) and §8's build-provenance
-attestation are designed but not yet wired. The launcher still falls back to running from source in
-local dev (§4's local-dev path).
+v0.1.0; releases carry the nine assets (§2). Background self-update (§5) ships as of v0.7.0, enabled
+by default, and §8's build-provenance attestation is produced from that release forward. The launcher
+still falls back to running from source in local dev (§4's local-dev path), and a source run never
+self-updates.
 
 This ADR covers the CLI's binary packaging, distribution, and self-update. The skills-collection
 inventory and CLI-wrapping decisions are in [ADR-0009](0009-skills-collection.md).
