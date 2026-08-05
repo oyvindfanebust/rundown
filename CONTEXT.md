@@ -117,8 +117,9 @@ repo), self-updating in the background (Claude-Code-style: detached, throttled, 
 atomic self-replace, effect next-invocation) with a config/`RUNDOWN_DISABLE_AUTOUPDATE` off-switch.
 Today only the `rundown` launcher's run-from-source fallback exists — no release workflow, no
 installer, no self-update code. In the design, self-update is a behavior, not a sixth command, so
-the [five-command surface](#architecture) holds; its trust axis (first-party signed releases) is
-orthogonal to the untrusted-data→model [boundary](#trust-boundary).
+the [five-command surface](#architecture) holds; its trust axis (a first-party artifact fetched over
+TLS, whose trust anchor ADR-0001 §5 states) is orthogonal to the untrusted-data→model
+[boundary](#trust-boundary).
 
 ### Source
 
