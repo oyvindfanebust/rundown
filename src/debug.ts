@@ -47,7 +47,13 @@ export type DebugEvent =
   /** A transport routing decision (e.g. Jira's gateway-vs-instance fallback). */
   | { kind: "route"; source: string; via: string; reason?: "preferred" | "fallback" }
   /** A local source's filesystem scan: which directory, how many files. */
-  | { kind: "scan"; source: string; path: string; fileCount: number };
+  | { kind: "scan"; source: string; path: string; fileCount: number }
+  /**
+   * The self-update gate's decision and why (ADR-0001 §5). `reason` is a short
+   * structural marker from a closed set the gate owns — never a message, never a
+   * path, never anything a backend supplied.
+   */
+  | { kind: "update-gate"; spawned: boolean; reason: string };
 
 /**
  * The debug sink. Sources and the composition root receive one and emit into it;
@@ -103,6 +109,8 @@ export function formatDebugEvent(e: DebugEvent): string {
       return `[debug] ${e.source}  route via=${e.via}${e.reason ? ` (${e.reason})` : ""}`;
     case "scan":
       return `[debug] ${e.source}  scan path=${e.path} files=${e.fileCount}`;
+    case "update-gate":
+      return `[debug] update  gate ${e.spawned ? "spawn" : `skip (${e.reason})`}`;
   }
 }
 

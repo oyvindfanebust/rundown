@@ -3,8 +3,9 @@
 // logic lives here.
 
 import { parseArgs, type ParseArgsConfig } from "node:util";
-import { existsSync } from "node:fs";
-import { mkdir, writeFile } from "node:fs/promises";
+import { existsSync, realpathSync } from "node:fs";
+import { mkdir, writeFile, access } from "node:fs/promises";
+import { constants } from "node:fs";
 import { dirname } from "node:path";
 import { buildBrief } from "./brief.ts";
 import { configDir, configPath, resolveConfig, ConfigError } from "./config.ts";
@@ -12,7 +13,15 @@ import { parseWindowSelector, WindowError, WINDOW_SPANS, type WindowSelector } f
 import { descriptors, registeredKeys, buildRegistry } from "./sources/registry.ts";
 import { narrateStatus, optionTemplateDefault, type Source } from "./sources/source.ts";
 import { debugEnabled, makeDebugSink, type DebugSink } from "./debug.ts";
-import { autoUpdateDisabled, fsUpdateStateIO, readUpdateState, renderVersionLine } from "./update.ts";
+import {
+  armUpdateCheck,
+  autoUpdateDisabled,
+  fsUpdateStateIO,
+  readUpdateState,
+  renderVersionLine,
+  runUpdateWorker,
+  WORKER_ENV,
+} from "./update.ts";
 
 // Build-time semver (ADR-0001 §7): the release workflow injects RUNDOWN_VERSION via
 // `bun build --define` from the git tag; running from source falls back to the dev marker.
@@ -290,6 +299,72 @@ async function cmdBrief(debug: DebugSink, windowOverride?: WindowSelector, sourc
   const brief = await buildBrief({ windowOverride, sourceFilter, onProgress, onDebug: debug });
   // Bun.write awaits the flush, so the JSON is fully emitted before we exit.
   await Bun.write(Bun.stdout, JSON.stringify(brief) + "\n");
+}
+
+// ── self-update: the internal worker mode, then the gate ─────────────────────
+//
+// Both run above every line that touches an argument (ADR-0001 §5, ADR-0008 §2).
+// Self-update is a behavior, not a sixth command: the worker is an env-gated mode
+// of this same binary, so the agent-facing surface stays exactly five commands and
+// no output channel gains an imperative.
+//
+// The worker's early return is the structural guarantee that matters: because it
+// returns before argument handling, config resolution, Sources, and the Summarizer
+// are all unreachable from it. No untrusted byte is ever in scope while it runs,
+// which is why self-update needs no separate trust argument — its axis (a
+// first-party artifact over TLS) and the untrusted-content axis cannot both be
+// live in one process.
+
+/** The running executable with symlinks resolved, so the installer's convenience symlink is never the target. */
+function resolvedExecPath(): string {
+  try {
+    return realpathSync(process.execPath);
+  } catch {
+    return process.execPath;
+  }
+}
+
+if (process.env[WORKER_ENV] !== undefined) {
+  await runUpdateWorker({ io: fsUpdateStateIO, dir: configDir(), now: () => new Date() });
+  process.exit(0);
+}
+
+// Fire before the command runs, not after: several paths below exit the process
+// directly, and a trailing hook would be skipped on exactly the error paths where
+// a stale version is most likely. The gate never throws and never waits on the
+// worker, so an armed check costs the command nothing.
+{
+  const debug = makeDebugSink(debugEnabled(undefined), (s) => process.stderr.write(s));
+  await armUpdateCheck({
+    version: VERSION,
+    env: process.env,
+    dir: configDir(),
+    configFile: configPath(),
+    io: fsUpdateStateIO,
+    now: () => new Date(),
+    execPath: resolvedExecPath(),
+    dirWritable: async (dir) => {
+      try {
+        await access(dir, constants.W_OK);
+        return true;
+      } catch {
+        return false;
+      }
+    },
+    spawnWorker: (execPath) => {
+      // Detached and unref'd, so it outlives this process and is never awaited.
+      // The resolved executable path, never argv[0], which in a compiled binary is
+      // the literal runtime name.
+      const child = Bun.spawn([execPath, ...(execPath === process.execPath ? [import.meta.path] : [])], {
+        env: { ...process.env, [WORKER_ENV]: "1" },
+        stdin: "ignore",
+        stdout: "ignore",
+        stderr: "ignore",
+      });
+      child.unref();
+    },
+    debug: (reason, spawned) => debug({ kind: "update-gate", spawned, reason }),
+  });
 }
 
 // ── dispatch ──────────────────────────────────────────────────────────────
