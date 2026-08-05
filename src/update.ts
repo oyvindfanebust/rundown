@@ -14,7 +14,7 @@
 // clock, which is what makes every branch below testable without a real
 // filesystem.
 
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { chmod, mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { stripJsonc } from "./config.ts";
 
@@ -466,6 +466,8 @@ export async function runUpdateWorker(deps: {
   fetch: typeof fetch;
   url?: string;
   timeoutMs?: number;
+  /** Replace the binary with the given version. Absent means discovery only (the read path). */
+  swap?: (latest: string) => Promise<SwapResult>;
 }): Promise<void> {
   try {
     const state = await readUpdateState(deps.io, deps.dir);
@@ -487,16 +489,196 @@ export async function runUpdateWorker(deps: {
     // A successful check resets the count. `latest` is recorded whether or not it
     // is newer, because that is what the status line reports from; the
     // strictly-greater comparison is what decides whether anything happens — never
-    // on equal, never downward. Acting on it (download, verify, swap) is #65; until
-    // then a newer release is recorded and surfaced, and the binary is untouched.
+    // on equal, never downward.
+    if (!isNewerVersion(found.latest, deps.version) || !deps.swap) {
+      await writeUpdateState(
+        deps.io,
+        deps.dir,
+        { latest: found.latest, outcome: "current", consecutiveFailures: 0 },
+        deps.now,
+      );
+      return;
+    }
+
+    const swapped = await deps.swap(found.latest);
+    if (swapped.ok) {
+      // The new version takes effect on the next invocation; this process is not
+      // mutated, so a Brief in flight stays deterministic.
+      await writeUpdateState(
+        deps.io,
+        deps.dir,
+        { latest: found.latest, outcome: "updated", consecutiveFailures: 0 },
+        deps.now,
+      );
+      return;
+    }
+    // A refusal is recorded with its reason, which `status` then surfaces, and the
+    // working binary is untouched. This counts as a failure: something is wrong
+    // with the release or the install, and a run of them should become visible.
     await writeUpdateState(
       deps.io,
       deps.dir,
-      { latest: found.latest, outcome: "current", consecutiveFailures: 0 },
+      {
+        latest: found.latest,
+        outcome: "refused",
+        reason: swapped.reason,
+        consecutiveFailures: (state?.consecutiveFailures ?? 0) + 1,
+      },
       deps.now,
     );
   } catch {
     // A worker that cannot record its own outcome exits quietly; the next run's
     // stale stamp will simply try again.
+  }
+}
+
+// ── the swap: download, verify, smoke-test, rename (ADR-0001 §5) ─────────────
+
+/**
+ * This platform's release asset name, or `undefined` on a platform the release
+ * matrix does not build. The mapping exists in three places — `install.sh`'s case
+ * statement, the release workflow's build matrix, and here — so a test pins the
+ * expected names and a platform added to one and forgotten in another fails loudly.
+ */
+export function assetName(platform: string = process.platform, arch: string = process.arch): string | undefined {
+  if (platform === "darwin") {
+    if (arch === "arm64") return "rundown-darwin-arm64";
+    if (arch === "x64") return "rundown-darwin-x64";
+    return undefined;
+  }
+  if (platform === "linux") {
+    if (arch === "x64") return "rundown-linux-x64";
+    if (arch === "arm64") return "rundown-linux-arm64";
+    return undefined;
+  }
+  // Windows needs a different self-replace strategy entirely: there is no atomic
+  // rename over a running executable (ADR-0001 §3).
+  return undefined;
+}
+
+/** The download URL for one asset on one release tag. */
+export function assetUrl(version: string, asset: string, base = "https://github.com/oyvindfanebust/rundown/releases/download"): string {
+  return `${base}/v${version}/${asset}`;
+}
+
+/** Why the swap declined. Recorded verbatim to the state document, which `status` surfaces. */
+export type SwapRefusal =
+  | "unsupported-platform"
+  | "asset-missing"
+  | "checksum-missing"
+  | "checksum-mismatch"
+  | "smoke-test-failed"
+  | "version-mismatch"
+  | "write-failed";
+
+export type SwapResult = { ok: true } | { ok: false; reason: SwapRefusal };
+
+/** The effects the swap needs, injected so the whole path is testable. */
+export interface SwapIO {
+  /** Write the candidate bytes, then make it executable. */
+  writeCandidate(path: string, bytes: Uint8Array): Promise<void>;
+  makeExecutable(path: string): Promise<void>;
+  /** Run the candidate once with the version flag. */
+  probe(path: string): Promise<{ exitCode: number; stdout: string }>;
+  /** Same-filesystem atomic replace. */
+  rename(from: string, to: string): Promise<void>;
+  remove(path: string): Promise<void>;
+  sha256(bytes: Uint8Array): string;
+}
+
+/**
+ * The real implementation: a real filesystem and a real subprocess. Only the
+ * network is faked in tests, because renaming, permission bits, and actually
+ * executing the candidate are the behavior under test rather than incidental.
+ */
+export const fsSwapIO: SwapIO = {
+  writeCandidate: async (path, bytes) => {
+    await writeFile(path, bytes);
+  },
+  makeExecutable: async (path) => {
+    await chmod(path, 0o755);
+  },
+  probe: async (path) => {
+    const proc = Bun.spawn([path, "--version"], { stdout: "pipe", stderr: "ignore", stdin: "ignore" });
+    const stdout = await new Response(proc.stdout).text();
+    return { exitCode: (await proc.exited) ?? 1, stdout };
+  },
+  rename: async (from, to) => {
+    await rename(from, to);
+  },
+  remove: async (path) => {
+    await rm(path, { force: true });
+  },
+  sha256: (bytes) => new Bun.CryptoHasher("sha256").update(bytes).digest("hex"),
+};
+
+/** The candidate's fixed name, in the target's own directory so the rename is atomic. */
+export const CANDIDATE_SUFFIX = ".update-candidate";
+
+/**
+ * Download the newer release, verify it, prove it runs, and only then replace the
+ * binary on disk. Returns a refusal rather than throwing, so the worker can record
+ * why nothing was installed.
+ *
+ * The order is the safety argument. The checksum is verified before the file is
+ * made executable, so a corrupt download is never even runnable. The candidate is
+ * then executed once and must exit zero AND report the expected version — a
+ * liveness check, not a correctness check, and the reason this can ship enabled by
+ * default: a binary that does not start would otherwise reach every install within
+ * a day and leave users on a `rundown` that cannot update out of the problem. Only
+ * then is it renamed over the target.
+ *
+ * The candidate is a fixed-name file in the target's own directory, so the rename
+ * is a same-filesystem atomic swap and a killed worker leaves at most one stale
+ * file that the next run overwrites rather than accumulating debris. The temporary
+ * file is removed on every exit path.
+ *
+ * No lock is taken. Two workers can both download, both verify, and both rename;
+ * rename is atomic and the bytes are identical either way, so the outcome is the
+ * same and the cost is one wasted download. The cost of a lock would be stale-lock
+ * detection in the code path that must never wedge.
+ */
+export async function downloadAndSwap(deps: {
+  fetch: typeof fetch;
+  io: SwapIO;
+  /** The resolved target path, symlinks already followed. */
+  target: string;
+  version: string;
+  asset?: string;
+  baseUrl?: string;
+  timeoutMs?: number;
+}): Promise<SwapResult> {
+  const asset = deps.asset ?? assetName();
+  if (!asset) return { ok: false, reason: "unsupported-platform" };
+  const candidate = deps.target + CANDIDATE_SUFFIX;
+  const signal = () => AbortSignal.timeout(deps.timeoutMs ?? NETWORK_TIMEOUT_MS);
+  const url = assetUrl(deps.version, asset, deps.baseUrl);
+
+  try {
+    const binary = await deps.fetch(url, { signal: signal() });
+    if (!binary.ok) return { ok: false, reason: "asset-missing" };
+    const bytes = new Uint8Array(await binary.arrayBuffer());
+
+    const sums = await deps.fetch(`${url}.sha256`, { signal: signal() });
+    if (!sums.ok) return { ok: false, reason: "checksum-missing" };
+    // The checksum asset is `<hash>  <name>`, the shasum/sha256sum format.
+    const expected = (await sums.text()).trim().split(/\s+/)[0]?.toLowerCase();
+    if (!expected || expected !== deps.io.sha256(bytes)) return { ok: false, reason: "checksum-mismatch" };
+
+    await deps.io.writeCandidate(candidate, bytes);
+    await deps.io.makeExecutable(candidate);
+
+    const probe = await deps.io.probe(candidate);
+    if (probe.exitCode !== 0) return { ok: false, reason: "smoke-test-failed" };
+    if (probe.stdout.trim() !== deps.version) return { ok: false, reason: "version-mismatch" };
+
+    await deps.io.rename(candidate, deps.target);
+    return { ok: true };
+  } catch {
+    return { ok: false, reason: "write-failed" };
+  } finally {
+    // Every exit path, including the successful one where the rename already moved
+    // it: removing a file that is gone is not an error worth propagating.
+    await deps.io.remove(candidate).catch(() => {});
   }
 }
