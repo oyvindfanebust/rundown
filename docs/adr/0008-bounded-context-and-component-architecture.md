@@ -30,7 +30,7 @@ The context's edges are these. The inputs are command-line arguments,
 `~/.config/rundown/config.json`, and environment secrets; the output is a single Brief as JSON on
 stdout, or an error on stderr. All of it is the CLI.
 
-### 2. Four components; config and emission are composition-root plumbing
+### 2. Four components; config, emission, and self-update are not among them
 
 Inside the context are four components, named by role:
 
@@ -41,8 +41,9 @@ Inside the context are four components, named by role:
 | Summarizer | `summarize({instructions, data, schema}) → structured` | the tool-less model call; the sole point untrusted content meets a model; owns the security invariants |
 | Planner | `plan(bundle, windowIsPast, guidance) → Brief` | the plan-my-week task; renders the Bundle into the prompt (the sole `Untrusted<T>` unwrap site) and attaches the trusted envelope |
 
-Two things are not components. They are composition-root plumbing: code that exists but is not a
-pipeline stage you would swap.
+Three things are not components. They are code that exists beside the pipeline rather than in it —
+composition-root plumbing, or in self-update's case a behavior that runs alongside whatever command
+was invoked.
 
 - Config resolution loads and validates `~/.config/rundown/config.json`, resolves the symbolic
   window against the timezone, and hands `(selection, window, guidance)` to the Aggregator and
@@ -50,10 +51,15 @@ pipeline stage you would swap.
   layer.
 - Emission serializes the Brief to stdout, or an error to stderr with a non-zero exit. It is a
   handful of lines at the process edge (ADR-0006), with nothing pluggable to name.
+- Self-update gates and performs the background binary replacement (ADR-0001 §5). It runs beside the
+  read → aggregate → summarize → emit pipeline rather than in it: it shares no state with any
+  component, reads no source content, and its worker returns before argument handling, so Sources and
+  the Summarizer are unreachable from it. It is one module in the flat `src/` (§4), not a fifth
+  component.
 
 The shape is a composition root (the `brief` command) that runs resolve config → Aggregator →
 Planner (which calls the Summarizer) → emit. Four components, threaded by one root, with config at
-the entry and emission at the exit.
+the entry, emission at the exit, and self-update off to the side.
 
 ### 3. The vocabulary of record
 
