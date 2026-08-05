@@ -52,7 +52,7 @@ export const descriptors: Descriptors = {
     label: "Slack",
     options: SLACK_OPTIONS,
     interactive: true,
-    build: (options) => new SlackSource(options),
+    build: (options, debug) => new SlackSource(options, { debug }),
   },
 };
 

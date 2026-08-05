@@ -7,11 +7,12 @@ import { existsSync } from "node:fs";
 import { mkdir, writeFile } from "node:fs/promises";
 import { dirname } from "node:path";
 import { buildBrief } from "./brief.ts";
-import { configPath, resolveConfig, ConfigError } from "./config.ts";
+import { configDir, configPath, resolveConfig, ConfigError } from "./config.ts";
 import { parseWindowSelector, WindowError, WINDOW_SPANS, type WindowSelector } from "./temporal.ts";
 import { descriptors, registeredKeys, buildRegistry } from "./sources/registry.ts";
 import { narrateStatus, optionTemplateDefault, type Source } from "./sources/source.ts";
 import { debugEnabled, makeDebugSink, type DebugSink } from "./debug.ts";
+import { autoUpdateDisabled, fsUpdateStateIO, readUpdateState, renderVersionLine } from "./update.ts";
 
 // Build-time semver (ADR-0001 §7): the release workflow injects RUNDOWN_VERSION via
 // `bun build --define` from the git tag; running from source falls back to the dev marker.
@@ -127,6 +128,16 @@ async function cmdInit(): Promise<void> {
 async function cmdStatus(debug: DebugSink): Promise<void> {
   const path = configPath();
   const out = process.stdout;
+
+  // The version line first, and before config is even read: it is the one line
+  // that always renders (ADR-0001 §5). It makes no network call — the numbers come
+  // from the state document the background updater writes — so `status` stays a
+  // diagnostic that cannot hang, and a broken config still gets a version answer.
+  out.write(`${renderVersionLine({
+    running: VERSION,
+    state: await readUpdateState(fsUpdateStateIO, configDir()),
+    autoUpdateDisabled: autoUpdateDisabled(),
+  })}\n`);
 
   let config;
   try {
