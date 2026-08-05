@@ -18,6 +18,10 @@ Bun, not Node. `bun install` for deps. This is a production setup, not a "no bui
   `Untrusted<T>` sole-unwrap-site guarantee is a dev-time typecheck (ADR-0004 §3).
 - Unit tests (`bun test`) cover every component.
 - E2E acceptance (`scripts/e2e.sh`) drives the real CLI against live Graph; run it to dogfood.
+- Live self-update (`scripts/update-e2e.sh`) compiles a binary stamped with an artificially old
+  version and asserts it replaces itself with the current real release — the only layer that
+  exercises the real redirect, asset URL, checksum format, and a real compiled binary (ADR-0001 §5).
+  Not in CI; run it before merging a change to the updater.
 - Brief-quality evals (`scripts/evals.sh`) drive the real Summarizer over synthetic fixture
   bundles (`evals/`) — the manual gate before any `DEFAULT_MODEL` bump or prompt change
   (ADR-0012). Not in CI; `bun test` skips them unless `RUNDOWN_EVALS=1`.

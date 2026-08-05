@@ -3,6 +3,7 @@
 // logic lives here.
 
 import { parseArgs, type ParseArgsConfig } from "node:util";
+import { spawn } from "node:child_process";
 import { existsSync, realpathSync } from "node:fs";
 import { mkdir, writeFile, access } from "node:fs/promises";
 import { constants } from "node:fs";
@@ -16,6 +17,8 @@ import { debugEnabled, makeDebugSink, type DebugSink } from "./debug.ts";
 import {
   armUpdateCheck,
   autoUpdateDisabled,
+  downloadAndSwap,
+  fsSwapIO,
   fsUpdateStateIO,
   readUpdateState,
   renderVersionLine,
@@ -331,6 +334,10 @@ if (process.env[WORKER_ENV] !== undefined) {
     now: () => new Date(),
     version: VERSION,
     fetch,
+    // The target is the resolved executable, so the installer's convenience
+    // symlink is never replaced by a regular file.
+    swap: (latest) =>
+      downloadAndSwap({ fetch, io: fsSwapIO, target: resolvedExecPath(), version: latest }),
   });
   process.exit(0);
 }
@@ -358,14 +365,19 @@ if (process.env[WORKER_ENV] !== undefined) {
       }
     },
     spawnWorker: (execPath) => {
-      // Detached and unref'd, so it outlives this process and is never awaited.
+      // `detached: true` is load-bearing, not decoration: it calls setsid, putting
+      // the worker in its own session. Without it the worker stays in this process
+      // group and the `process.exit(0)` at the end of this file tears down the whole
+      // tree — including the candidate the worker is mid-way through smoke-testing,
+      // which then looks like a failed liveness check rather than a killed process.
+      // Found by scripts/update-e2e.sh; unit fakes cannot see it.
+      //
       // The resolved executable path, never argv[0], which in a compiled binary is
       // the literal runtime name.
-      const child = Bun.spawn([execPath, ...(execPath === process.execPath ? [import.meta.path] : [])], {
+      const child = spawn(execPath, execPath === process.execPath ? [import.meta.path] : [], {
         env: { ...process.env, [WORKER_ENV]: "1" },
-        stdin: "ignore",
-        stdout: "ignore",
-        stderr: "ignore",
+        detached: true,
+        stdio: "ignore",
       });
       child.unref();
     },
