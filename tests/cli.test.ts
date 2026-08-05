@@ -36,6 +36,12 @@ function run(args: string[], configPath: string, entrypoint = "src/cli.ts", extr
   // depend on the developer's shell (ADR-0001 §5); the disabled case sets it back
   // explicitly via extraEnv.
   delete env.RUNDOWN_DISABLE_AUTOUPDATE;
+  // And `CI`, which the update gate skips on by design (ADR-0001 §5) with no
+  // override. Left inherited, every test that expects the gate to arm would pass
+  // locally and fail in CI — where `CI` is always set. The CI-skip test sets it
+  // back explicitly via extraEnv.
+  delete env.CI;
+  delete env.RUNDOWN_INTERNAL_UPDATE_WORKER;
   Object.assign(env, extraEnv);
   const proc = Bun.spawnSync([process.execPath, entrypoint, ...args], { cwd: ROOT, env });
   return { stdout: proc.stdout.toString(), stderr: proc.stderr.toString(), exitCode: proc.exitCode ?? 0 };
