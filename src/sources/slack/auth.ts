@@ -24,6 +24,7 @@ import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { configDir } from "../../config.ts";
 import { statusOnlyError } from "../errors.ts";
+import { hostOf, noDebug, type DebugSink } from "../../debug.ts";
 import { awaitAuthCode } from "../graph/auth.ts";
 
 /** Absolute path to the cached Slack user token — resolved per call so it tracks RUNDOWN_CONFIG. */
@@ -143,11 +144,18 @@ export function tokenFromExchange(body: unknown): CachedAuth | null {
  * which the caller interprets (a rejected `auth.test` is a state, not a leak; a
  * failed data method is scrubbed to a generic failure). Never echoes a response
  * byte into a thrown message. 429s are retried within the `Retry-After` bound.
+ *
+ * `debug` receives one `http` event per attempt (ADR-0015 §6), so a retried 429 is
+ * visible as the two lines it was. The Slack method name is one of this module's own
+ * constants, never backend content, so it is safe as the path shape; `params` — which
+ * carry the `search.messages` query, a channel id, and a user id — stay out, and the
+ * URL is never logged populated.
  */
 export async function slackApi(
   token: string,
   method: string,
   params: Record<string, string> = {},
+  debug: DebugSink = noDebug,
 ): Promise<any> {
   const MAX_RETRIES = 3;
   const url = `${SLACK_API}/${method}`;
@@ -159,6 +167,14 @@ export async function slackApi(
         "Content-Type": "application/x-www-form-urlencoded",
       },
       body: new URLSearchParams(params).toString(),
+    });
+    debug({
+      kind: "http",
+      source: "slack",
+      method: "POST",
+      host: hostOf(SLACK_API),
+      pathShape: `/api/${method}`,
+      status: r.status,
     });
     if (r.status === 429 && attempt < MAX_RETRIES) {
       const retryAfter = Number(r.headers.get("retry-after")) || 1;
