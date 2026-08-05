@@ -302,6 +302,33 @@ describe("cli", () => {
     // covered over armUpdateCheck's injected effects in tests/update.test.ts.
   });
 
+  // ── the persistent-failure warning (ADR-0001 §5) ──────────────────────────
+  //
+  // The message itself is covered as a pure function in tests/update.test.ts. What
+  // belongs here is the property an automated consumer depends on: a piped run is
+  // byte-for-byte silent no matter what the state document says.
+  //
+  // The terminal branch has no test because a subprocess has no pty, and this repo
+  // already treats `process.stderr.isTTY` as an untested gate — it is the same one
+  // the existing progress output uses (cli.ts). Adding a pty harness for one line
+  // would be the only place in the suite that needs one.
+
+  describe("persistent update failure", () => {
+    test("a piped brief stays silent, whatever the failure count", () => {
+      const path = written(`{"sources": {"claude-code-logs": {}}}`);
+      writeFileSync(
+        join(dirname(path), "update-state.json"),
+        JSON.stringify({ checkedAt: "2026-08-01T00:00:00.000Z", outcome: "failed", reason: "unreachable", consecutiveFailures: 9 }),
+      );
+      const r = run(["brief", "--window", "today"], path, "src/cli.ts", { ANTHROPIC_API_KEY: "" });
+      // Nothing about self-update on either stream: no warning, and nothing in the
+      // Brief contract either (ADR-0011 pins that with a schema test).
+      expect(r.stderr).not.toContain("self-update");
+      expect(r.stdout).not.toContain("self-update");
+      expect(r.stdout).not.toContain("update-state");
+    });
+  });
+
   // Config validation is exercised where the user meets it: a real config file in a
   // temp dir, read by a real `rundown status` subprocess (ADR-0007 §6, fail-hard).
   describe("config validation through the CLI", () => {
