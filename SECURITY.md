@@ -58,11 +58,12 @@ never sees raw content in the first place.
   distribution-security concern rather than the untrusted-content injection boundary this policy is
   about, and the risk there is accepted rather than absent. The update channel's trust anchor is TLS
   plus the maintainer's GitHub account; the checksum asset is served from the same origin as the
-  binary, so verifying it detects corruption and gives no tamper resistance. Self-update is designed
-  to run unattended and daily, which means a compromise of the release pipeline reaches every install
-  within a day with no human in the loop, where the installer runs only when someone deliberately
-  types a command. That is the accepted risk. ADR-0001 §5 and §8 hold the design of record, including
-  the build provenance that lets a suspicious user verify by hand where a binary came from.
+  binary, so verifying it detects corruption and gives no tamper resistance. Self-update runs unattended
+  and daily, which means a compromise of the release pipeline reaches every install within a day with
+  no human in the loop, where the installer runs only when someone deliberately types a command. That
+  is the accepted risk. Release binaries carry build provenance attestations, so a suspicious user can
+  verify by hand which workflow run and commit produced a binary; the updater does not check them
+  itself. ADR-0001 §5 and §8 hold the design of record.
 - **Your own Microsoft Graph / Azure app registration.** Getting your first-party OAuth setup
   right is on you; `rundown` doesn't second-guess credentials you've configured for yourself.
 
