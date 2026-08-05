@@ -6,7 +6,10 @@
 # Maps `uname -sm` onto a release binary, verifies its SHA-256 checksum, and
 # installs it into the user-writable ~/.config/rundown/bin/ (required for
 # self-update's atomic rename). No PATH or rc-file mutation. Re-running
-# upgrades in place. Pin a version with RUNDOWN_VERSION=v0.1.0.
+# upgrades in place. RUNDOWN_VERSION=v0.1.0 installs that version, but the pin only
+# holds while auto-update is off: rundown replaces its own binary with the latest
+# release in the background (ADR-0001 §5), so a durable pin also needs
+# "autoUpdate": false in the config file.
 set -euo pipefail
 
 REPO="oyvindfanebust/rundown"
@@ -53,6 +56,14 @@ if [ "$VERSION" = "latest" ]; then
   base_url="https://github.com/${REPO}/releases/latest/download"
 else
   base_url="https://github.com/${REPO}/releases/download/${VERSION}"
+  # Requesting a version installs it now, but rundown self-updates in the background
+  # (ADR-0001 §5), so the pin is not durable on its own. Say so here, where the person
+  # who asked for it is watching, and name what makes it stick.
+  echo "Warning: the ${VERSION} pin is not durable on its own. rundown self-updates in the background"
+  echo "         and will replace it with the latest release. To hold this version, set"
+  echo "           \"autoUpdate\": false"
+  echo "         in ${HOME}/.config/rundown/config.json (run \`rundown init\` to create it)."
+  echo
 fi
 
 # Stage inside the install dir so the final `mv` is a same-filesystem atomic

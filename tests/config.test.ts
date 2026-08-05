@@ -138,6 +138,44 @@ describe("parseConfig", () => {
   test("rejects an invalid window span", () => {
     expect(() => parseConfig(`{"window": "yesterday", "sources": {"graph": {}}}`, descriptors)).toThrow(/window/);
   });
+
+  test("accepts autoUpdate: false", () => {
+    const parsed = parseConfig(`{"autoUpdate": false, "sources": {"graph": {}}}`, descriptors);
+    expect(parsed.autoUpdate).toBe(false);
+  });
+
+  test("accepts autoUpdate: true", () => {
+    const parsed = parseConfig(`{"autoUpdate": true, "sources": {"graph": {}}}`, descriptors);
+    expect(parsed.autoUpdate).toBe(true);
+  });
+
+  test("leaves autoUpdate undefined when absent", () => {
+    const parsed = parseConfig(`{"sources": {"graph": {}}}`, descriptors);
+    expect(parsed.autoUpdate).toBeUndefined();
+  });
+
+  test("rejects a non-boolean autoUpdate, naming the value and the expected type", () => {
+    expect(() => parseConfig(`{"autoUpdate": "false", "sources": {"graph": {}}}`, descriptors)).toThrow(
+      /"autoUpdate" must be true or false; got "false"/,
+    );
+    expect(() => parseConfig(`{"autoUpdate": 0, "sources": {"graph": {}}}`, descriptors)).toThrow(ConfigError);
+    expect(() => parseConfig(`{"autoUpdate": null, "sources": {"graph": {}}}`, descriptors)).toThrow(ConfigError);
+  });
+
+  test("rejects an unknown top-level key, naming it", () => {
+    expect(() => parseConfig(`{"nonsense": 1, "sources": {"graph": {}}}`, descriptors)).toThrow(
+      /Unknown config key "nonsense"/,
+    );
+  });
+
+  test("rejects an unknown top-level key with a did-you-mean, like unknown source options", () => {
+    expect(() => parseConfig(`{"autoUpdates": false, "sources": {"graph": {}}}`, descriptors)).toThrow(
+      /did you mean "autoUpdate"/,
+    );
+    expect(() => parseConfig(`{"timezones": "UTC", "sources": {"graph": {}}}`, descriptors)).toThrow(
+      /did you mean "timezone"/,
+    );
+  });
 });
 
 // resolveConfig is the untested wiring around temporal.ts's tested fortress: it
