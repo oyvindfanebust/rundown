@@ -1,5 +1,26 @@
 # Changelog
 
+## [0.7.0](https://github.com/oyvindfanebust/rundown/compare/v0.6.0...v0.7.0) (2026-08-05)
+
+
+### ⚠ BREAKING CHANGES
+
+* a config file with a stray top-level key used to load and is now rejected. Unknown top-level keys fail hard, naming the key and the known keys.
+
+### Features
+
+* download, verify, smoke-test, and atomically swap the binary ([#78](https://github.com/oyvindfanebust/rundown/issues/78)) ([407ef4a](https://github.com/oyvindfanebust/rundown/commit/407ef4a41cd11c62effa8e2dd879e07c2ba6c485)), closes [#65](https://github.com/oyvindfanebust/rundown/issues/65)
+* latest-release discovery via redirect and strictly-greater comparison ([#77](https://github.com/oyvindfanebust/rundown/issues/77)) ([64357fd](https://github.com/oyvindfanebust/rundown/commit/64357fd83e5759488c298b50834d533fd7b98e2c)), closes [#64](https://github.com/oyvindfanebust/rundown/issues/64)
+* throttled update gate and the detached internal worker mode ([#76](https://github.com/oyvindfanebust/rundown/issues/76)) ([b843556](https://github.com/oyvindfanebust/rundown/commit/b843556f6d35c1a11c26806e51c1a1a4124158f6)), closes [#63](https://github.com/oyvindfanebust/rundown/issues/63)
+* update state document and the status version line ([#73](https://github.com/oyvindfanebust/rundown/issues/73)) ([2a44f74](https://github.com/oyvindfanebust/rundown/commit/2a44f748b2f6e0ec4ed01b8fc98bbd64699b9056)), closes [#61](https://github.com/oyvindfanebust/rundown/issues/61)
+* validated autoUpdate config field, strict top-level keys, durable-pin warning ([#74](https://github.com/oyvindfanebust/rundown/issues/74)) ([8467568](https://github.com/oyvindfanebust/rundown/commit/84675689bcfd5e47a41b27146a810ec755bb96e3))
+* warn on a terminal after seven consecutive failed update checks ([#79](https://github.com/oyvindfanebust/rundown/issues/79)) ([78430a7](https://github.com/oyvindfanebust/rundown/commit/78430a78082352401eed37a335fb12c12cf0bca9)), closes [#66](https://github.com/oyvindfanebust/rundown/issues/66)
+
+
+### Bug Fixes
+
+* **slack:** emit the debug events the Slack source was dropping ([#72](https://github.com/oyvindfanebust/rundown/issues/72)) ([80feb75](https://github.com/oyvindfanebust/rundown/commit/80feb756db9973f6f3fa96185c28bda7ae0a0494)), closes [#56](https://github.com/oyvindfanebust/rundown/issues/56)
+
 ## [0.6.0](https://github.com/oyvindfanebust/rundown/compare/v0.5.0...v0.6.0) (2026-08-05)
 
 
