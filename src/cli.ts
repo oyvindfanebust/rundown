@@ -87,6 +87,11 @@ function initTemplate(): string {
   // Spans: ${WINDOW_SPANS.join(" | ")}
   "window": "this-week",
 
+  // Whether rundown may replace its own binary with a newer release in the background.
+  // Default true. Set it to false to stay on the version you installed; that is what makes
+  // an install-time version pin (RUNDOWN_VERSION in install.sh) durable.
+  // "autoUpdate": true,
+
   // Which sources run — selection = presence in this map. At least one required.
   // Only registered sources may appear; an unknown key is a hard error.
   "sources": {

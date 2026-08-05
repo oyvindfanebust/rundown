@@ -141,12 +141,21 @@ function validateOption(sourceKey: string, name: string, spec: OptionSpec, value
   if (err) throw new ConfigError(err);
 }
 
+/**
+ * Every key the config file may carry. Unknown top-level keys are a hard error,
+ * the same way an unknown source key and an unknown source option already are: a
+ * misspelled key that loads silently would leave the user believing a setting is
+ * in effect when it is not.
+ */
+const TOP_LEVEL_KEYS = ["timezone", "window", "guidance", "autoUpdate", "sources"] as const;
+
 /** Parse + validate raw config text (strict fail-hard) against the injected descriptor map. Returns the checked config. */
 export function parseConfig(text: string, descriptors: Descriptors): {
   timezone?: string;
   window?: WindowSpan;
   selection: Selection[];
   guidance?: string;
+  autoUpdate?: boolean;
 } {
   let raw: unknown;
   try {
@@ -158,6 +167,14 @@ export function parseConfig(text: string, descriptors: Descriptors): {
     throw new ConfigError("config.json must be a JSON object.");
   }
   const obj = raw as Record<string, unknown>;
+
+  for (const key of Object.keys(obj)) {
+    if (!(TOP_LEVEL_KEYS as readonly string[]).includes(key)) {
+      // suggest() already ends in "?" when it fires, so the fallback supplies the period.
+      const hint = suggest(key, [...TOP_LEVEL_KEYS]) || ".";
+      throw new ConfigError(`Unknown config key "${key}"${hint} Known keys: ${TOP_LEVEL_KEYS.join(", ")}.`);
+    }
+  }
 
   // timezone
   let timezone: string | undefined;
@@ -184,6 +201,19 @@ export function parseConfig(text: string, descriptors: Descriptors): {
   if (obj.guidance !== undefined) {
     if (typeof obj.guidance !== "string") throw new ConfigError(`"guidance" must be a string.`);
     guidance = obj.guidance;
+  }
+
+  // autoUpdate — the durable off-switch for background self-update (ADR-0001 §5).
+  // Validated and documented here; no code reads it yet.
+  let autoUpdate: boolean | undefined;
+  if (obj.autoUpdate !== undefined) {
+    if (typeof obj.autoUpdate !== "boolean") {
+      throw new ConfigError(
+        `"autoUpdate" must be true or false; got ${JSON.stringify(obj.autoUpdate)}. ` +
+          `Set it to false to keep rundown on the installed version.`,
+      );
+    }
+    autoUpdate = obj.autoUpdate;
   }
 
   // sources — the one mandatory field
@@ -221,7 +251,7 @@ export function parseConfig(text: string, descriptors: Descriptors): {
     selection.push({ sourceKey: key, options });
   }
 
-  return { timezone, window, selection, guidance };
+  return { timezone, window, selection, guidance, autoUpdate };
 }
 
 // ── Load + resolve ─────────────────────────────────────────────────────────────

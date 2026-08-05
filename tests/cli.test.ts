@@ -174,12 +174,61 @@ describe("cli", () => {
       // to print — the site option is documented via its own option description.
       expect(template).toContain("set LINEAR_API_KEY in your environment");
       expect(template).toContain("set JIRA_EMAIL, JIRA_API_TOKEN in your environment");
+      // The autoUpdate off-switch ships commented, documenting the default and the
+      // durable half of pinning a version (ADR-0001 §5).
+      expect(template).toContain(`// "autoUpdate": true,`);
+      expect(template).toContain("Default true");
+      expect(template).toContain("RUNDOWN_VERSION");
+      // The field ships commented out; that the template still loads is asserted
+      // through the subprocess seam below, not by parsing in-process (tests/brief.test.ts
+      // mock.module's the registry, and that mock leaks across files).
 
       const second = run(["init"], path);
       expect(second.exitCode).toBe(0);
       expect(second.stdout).toContain("already exists");
       // The existing file is left byte-for-byte untouched.
       expect(readFileSync(path, "utf-8")).toBe(template);
+    });
+  });
+
+  // Config validation is exercised where the user meets it: a real config file in a
+  // temp dir, read by a real `rundown status` subprocess (ADR-0007 §6, fail-hard).
+  describe("config validation through the CLI", () => {
+    test("a non-boolean autoUpdate is rejected, naming the field and the expected values", () => {
+      const path = written(`{"autoUpdate": "no", "sources": {"graph": {}}}`);
+      const r = run(["status"], path);
+      expect(r.stdout).toContain("✗ invalid");
+      expect(r.stdout).toContain(`"autoUpdate" must be true or false; got "no"`);
+      expect(r.exitCode).toBe(1);
+    });
+
+    test("autoUpdate: false is accepted", () => {
+      const path = written(`{"timezone":"UTC","autoUpdate": false, "sources": {"graph": {}}}`);
+      const r = run(["status"], path);
+      expect(r.stdout).toContain("✓ valid");
+    });
+
+    test("an unknown top-level key is a hard error naming the key, with a did-you-mean", () => {
+      const path = written(`{"autoUpdates": false, "sources": {"graph": {}}}`);
+      const r = run(["status"], path);
+      expect(r.stdout).toContain("✗ invalid");
+      expect(r.stdout).toContain(`Unknown config key "autoUpdates" — did you mean "autoUpdate"?`);
+      expect(r.exitCode).toBe(1);
+    });
+
+    test("an unknown top-level key with no near miss still names the key and the known keys", () => {
+      const path = written(`{"gibberish": 1, "sources": {"graph": {}}}`);
+      const r = run(["status"], path);
+      expect(r.stdout).toContain(`Unknown config key "gibberish"`);
+      expect(r.stdout).toContain("Known keys: timezone, window, guidance, autoUpdate, sources.");
+      expect(r.exitCode).toBe(1);
+    });
+
+    test("the template `rundown init` writes loads as valid", () => {
+      const path = missing();
+      expect(run(["init"], path).exitCode).toBe(0);
+      const r = run(["status"], path);
+      expect(r.stdout).toContain("✓ valid");
     });
   });
 
