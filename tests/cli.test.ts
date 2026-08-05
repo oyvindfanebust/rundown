@@ -1,7 +1,7 @@
 import { test, expect, describe, afterEach } from "bun:test";
-import { mkdtempSync, readFileSync, writeFileSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync, writeFileSync, rmSync, existsSync, chmodSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, dirname } from "node:path";
 
 // cli.ts is the bounded context's ONLY external surface (ADR-0008 §4): it parses
 // args, dispatches the five commands, and owns emission (stdout/stderr/exit code).
@@ -36,6 +36,12 @@ function run(args: string[], configPath: string, entrypoint = "src/cli.ts", extr
   // depend on the developer's shell (ADR-0001 §5); the disabled case sets it back
   // explicitly via extraEnv.
   delete env.RUNDOWN_DISABLE_AUTOUPDATE;
+  // And `CI`, which the update gate skips on by design (ADR-0001 §5) with no
+  // override. Left inherited, every test that expects the gate to arm would pass
+  // locally and fail in CI — where `CI` is always set. The CI-skip test sets it
+  // back explicitly via extraEnv.
+  delete env.CI;
+  delete env.RUNDOWN_INTERNAL_UPDATE_WORKER;
   Object.assign(env, extraEnv);
   const proc = Bun.spawnSync([process.execPath, entrypoint, ...args], { cwd: ROOT, env });
   return { stdout: proc.stdout.toString(), stderr: proc.stderr.toString(), exitCode: proc.exitCode ?? 0 };
@@ -193,6 +199,107 @@ describe("cli", () => {
       // The existing file is left byte-for-byte untouched.
       expect(readFileSync(path, "utf-8")).toBe(template);
     });
+  });
+
+  // ── the self-update gate (ADR-0001 §5) ─────────────────────────────────────
+  //
+  // The observable facts are the debug decision event and what is on disk
+  // afterwards. A source run carries the dev marker and the first gate refuses, so
+  // the spawn path needs a version-stamped entry point — the same `bun build
+  // --define` trick the version-line test uses.
+
+  describe("update gate", () => {
+    /** A stamped entry point, so the gate sees a real release version. */
+    function stamped(version: string, outDir: string): string {
+      const out = join(outDir, "cli.js");
+      const build = Bun.spawnSync(
+        [process.execPath, "build", "src/cli.ts", "--target=bun", "--define", `RUNDOWN_VERSION="${version}"`, "--outfile", out],
+        { cwd: ROOT },
+      );
+      expect(build.exitCode).toBe(0);
+      return out;
+    }
+
+    test("a run from source never spawns a worker, and says why", () => {
+      const path = missing();
+      const r = run(["status"], path, "src/cli.ts", { RUNDOWN_DEBUG: "1" });
+      expect(r.stderr).toContain("[debug] update  gate skip (dev-build)");
+      // The load-bearing negative: nothing was written, so a working tree can
+      // never be overwritten by a release binary.
+      expect(existsSync(join(dirname(path), "update-state.json"))).toBe(false);
+    });
+
+    test("every command arms the check, including --version and the usage fallback", () => {
+      const path = missing();
+      for (const args of [["status"], ["init"], ["--version"], ["not-a-command"]]) {
+        const r = run(args, path, "src/cli.ts", { RUNDOWN_DEBUG: "1" });
+        expect(r.stderr).toContain("[debug] update  gate skip");
+      }
+    });
+
+    test("CI is skipped with no override", () => {
+      const outDir = mkdtempSync(join(tmpdir(), "rundown-gate-"));
+      try {
+        const entry = stamped("0.6.0", outDir);
+        const path = missing();
+        const r = run(["--version"], path, entry, { RUNDOWN_DEBUG: "1", CI: "1" });
+        expect(r.stderr).toContain("[debug] update  gate skip (ci)");
+        expect(existsSync(join(dirname(path), "update-state.json"))).toBe(false);
+      } finally {
+        rmSync(outDir, { recursive: true, force: true });
+      }
+    });
+
+    test("the disable env var is honoured, and 0 leaves updates on", () => {
+      const outDir = mkdtempSync(join(tmpdir(), "rundown-gate-"));
+      try {
+        const entry = stamped("0.6.0", outDir);
+        const off = run(["--version"], missing(), entry, { RUNDOWN_DEBUG: "1", RUNDOWN_DISABLE_AUTOUPDATE: "1" });
+        expect(off.stderr).toContain("[debug] update  gate skip (disabled-env)");
+        const on = run(["--version"], missing(), entry, { RUNDOWN_DEBUG: "1", RUNDOWN_DISABLE_AUTOUPDATE: "0" });
+        expect(on.stderr).not.toContain("skip (disabled-env)");
+      } finally {
+        rmSync(outDir, { recursive: true, force: true });
+      }
+    });
+
+    test("a config field of false is honoured, and a malformed config still updates", () => {
+      const outDir = mkdtempSync(join(tmpdir(), "rundown-gate-"));
+      try {
+        const entry = stamped("0.6.0", outDir);
+        const off = run(["--version"], written(`{"autoUpdate": false, "sources": {"graph": {}}}`), entry, { RUNDOWN_DEBUG: "1" });
+        expect(off.stderr).toContain("[debug] update  gate skip (disabled-config)");
+        // A syntax error must not strand someone on an old binary: the lenient
+        // reader treats an unreadable file as not-disabled.
+        const broken = run(["--version"], written(`{"autoUpdate": false`), entry, { RUNDOWN_DEBUG: "1" });
+        expect(broken.stderr).not.toContain("skip (disabled-config)");
+      } finally {
+        rmSync(outDir, { recursive: true, force: true });
+      }
+    });
+
+    test("two consecutive runs arm exactly one check: the second is throttled", () => {
+      const outDir = mkdtempSync(join(tmpdir(), "rundown-gate-"));
+      try {
+        const entry = stamped("0.6.0", outDir);
+        const path = missing();
+        const first = run(["--version"], path, entry, { RUNDOWN_DEBUG: "1" });
+        expect(first.stderr).toContain("[debug] update  gate spawn");
+        // The stamp is written before the worker is spawned, so it is on disk even
+        // if the worker never got off the ground.
+        expect(existsSync(join(dirname(path), "update-state.json"))).toBe(true);
+        const second = run(["--version"], path, entry, { RUNDOWN_DEBUG: "1" });
+        expect(second.stderr).toContain("[debug] update  gate skip (throttled)");
+      } finally {
+        rmSync(outDir, { recursive: true, force: true });
+      }
+    });
+
+    // The unwritable-install-directory refusal is not reachable from this seam: with
+    // a .js entry point `process.execPath` is the bun binary, so the gate checks
+    // Bun's own directory, not rundown's. In a compiled binary `execPath` IS the
+    // binary, which is the case production hits. That refusal and its recording are
+    // covered over armUpdateCheck's injected effects in tests/update.test.ts.
   });
 
   // Config validation is exercised where the user meets it: a real config file in a

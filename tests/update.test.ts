@@ -7,6 +7,13 @@ import {
   isNewerVersion,
   autoUpdateDisabled,
   renderVersionLine,
+  updateGateDecision,
+  readAutoUpdateSetting,
+  armUpdateCheck,
+  runUpdateWorker,
+  WORKER_ENV,
+  type UpdateGateDeps,
+  type GateInputs,
   type UpdateState,
   type UpdateStateIO,
 } from "../src/update.ts";
@@ -244,5 +251,272 @@ describe("renderVersionLine", () => {
     expect(renderVersionLine({ running: "0.4.0", state: state({ outcome: "updated", latest: "0.4.0" }), autoUpdateDisabled: false })).toBe(
       "version   0.4.0   up to date (checked 2026-08-05T09:00:00.000Z)",
     );
+  });
+});
+
+// ── the gate predicate (ADR-0001 §5) ────────────────────────────────────────
+//
+// The gate is a pure function of (version, environment, config value, state age,
+// writability), so every refusal reason is enumerable without a filesystem, a
+// clock, or a process. The order matters and is asserted: a dev build refuses
+// before anything else looks at the environment.
+
+const NOW = new Date("2026-08-05T12:00:00.000Z");
+
+function gateInputs(over: Partial<GateInputs> = {}): GateInputs {
+  return {
+    version: "0.6.0",
+    env: {},
+    autoUpdateConfig: undefined,
+    state: undefined,
+    now: NOW,
+    installDirWritable: true,
+    ...over,
+  };
+}
+
+function stateAgedHours(h: number): UpdateState {
+  return {
+    checkedAt: new Date(NOW.getTime() - h * 60 * 60 * 1000).toISOString(),
+    outcome: "current",
+    consecutiveFailures: 0,
+  };
+}
+
+describe("updateGateDecision", () => {
+  test("spawns when nothing refuses", () => {
+    expect(updateGateDecision(gateInputs())).toEqual({ spawn: true });
+  });
+
+  test("refuses a run from source, so a working tree is never overwritten", () => {
+    expect(updateGateDecision(gateInputs({ version: "0.0.0-dev" }))).toEqual({ spawn: false, reason: "dev-build" });
+  });
+
+  test("a dev build refuses before the environment is consulted", () => {
+    // Order is load-bearing: the dev marker wins even when everything else would spawn.
+    const d = updateGateDecision(gateInputs({ version: "0.0.0-dev", env: { CI: "1" } }));
+    expect(d).toEqual({ spawn: false, reason: "dev-build" });
+  });
+
+  test("refuses inside the worker, so a worker cannot spawn a worker", () => {
+    expect(updateGateDecision(gateInputs({ env: { [WORKER_ENV]: "1" } }))).toEqual({ spawn: false, reason: "worker" });
+  });
+
+  test("refuses when the disable env var is truthy", () => {
+    expect(updateGateDecision(gateInputs({ env: { RUNDOWN_DISABLE_AUTOUPDATE: "1" } }))).toEqual({
+      spawn: false,
+      reason: "disabled-env",
+    });
+  });
+
+  test("the disable env var follows the project truthiness rules, so 0 leaves updates on", () => {
+    for (const v of ["0", "false", "FALSE", ""]) {
+      expect(updateGateDecision(gateInputs({ env: { RUNDOWN_DISABLE_AUTOUPDATE: v } }))).toEqual({ spawn: true });
+    }
+  });
+
+  test("refuses when CI is present, with no override", () => {
+    expect(updateGateDecision(gateInputs({ env: { CI: "true" } }))).toEqual({ spawn: false, reason: "ci" });
+    // Even an explicitly falsey-looking CI value refuses: presence is the signal,
+    // and a vendored binary in a pipeline must not mutate itself.
+    expect(updateGateDecision(gateInputs({ env: { CI: "" } }))).toEqual({ spawn: false, reason: "ci" });
+  });
+
+  test("refuses when the config field is false", () => {
+    expect(updateGateDecision(gateInputs({ autoUpdateConfig: false }))).toEqual({
+      spawn: false,
+      reason: "disabled-config",
+    });
+  });
+
+  test("an absent or true config field does not refuse", () => {
+    expect(updateGateDecision(gateInputs({ autoUpdateConfig: undefined }))).toEqual({ spawn: true });
+    expect(updateGateDecision(gateInputs({ autoUpdateConfig: true }))).toEqual({ spawn: true });
+  });
+
+  test("refuses while the recorded check is less than roughly a day old", () => {
+    expect(updateGateDecision(gateInputs({ state: stateAgedHours(1) }))).toEqual({ spawn: false, reason: "throttled" });
+    expect(updateGateDecision(gateInputs({ state: stateAgedHours(19) }))).toEqual({ spawn: false, reason: "throttled" });
+  });
+
+  test("spawns once the recorded check is old enough", () => {
+    expect(updateGateDecision(gateInputs({ state: stateAgedHours(21) }))).toEqual({ spawn: true });
+  });
+
+  test("an unparseable checkedAt does not wedge the throttle shut", () => {
+    // A damaged stamp must fail toward checking again, not toward never checking.
+    const state: UpdateState = { checkedAt: "not a date", outcome: "current", consecutiveFailures: 0 };
+    expect(updateGateDecision(gateInputs({ state }))).toEqual({ spawn: true });
+  });
+
+  test("refuses when the install directory is not writable", () => {
+    expect(updateGateDecision(gateInputs({ installDirWritable: false }))).toEqual({
+      spawn: false,
+      reason: "not-writable",
+    });
+  });
+
+  test("throttling wins over unwritability, so a stale-stamp refusal is not re-recorded daily", () => {
+    const d = updateGateDecision(gateInputs({ state: stateAgedHours(1), installDirWritable: false }));
+    expect(d).toEqual({ spawn: false, reason: "throttled" });
+  });
+});
+
+// ── the lenient config read (ADR-0001 §5) ───────────────────────────────────
+//
+// Deliberately not config.ts's strict path: the gate runs before any command,
+// including where no config exists. Every failure reads as not-disabled, because
+// a broken file must not strand someone on an old binary.
+
+describe("readAutoUpdateSetting", () => {
+  test("reads the field when the file is well formed", async () => {
+    const io = fakeIO({ [join("/cfg", "config.json")]: `{"autoUpdate": false, "sources": {"graph": {}}}` });
+    expect(await readAutoUpdateSetting(io, join("/cfg", "config.json"))).toBe(false);
+  });
+
+  test("reads the field through JSONC comments and trailing commas", async () => {
+    const text = `{\n  // the off-switch\n  "autoUpdate": false,\n  "sources": {"graph": {}},\n}`;
+    const io = fakeIO({ [join("/cfg", "config.json")]: text });
+    expect(await readAutoUpdateSetting(io, join("/cfg", "config.json"))).toBe(false);
+  });
+
+  test("a missing file reads as not-disabled", async () => {
+    expect(await readAutoUpdateSetting(fakeIO(), join("/cfg", "config.json"))).toBeUndefined();
+  });
+
+  test("a malformed file reads as not-disabled, so a syntax error keeps updates on", async () => {
+    const io = fakeIO({ [join("/cfg", "config.json")]: `{"autoUpdate": false` });
+    expect(await readAutoUpdateSetting(io, join("/cfg", "config.json"))).toBeUndefined();
+  });
+
+  test("a non-boolean field reads as not-disabled rather than being coerced", async () => {
+    const io = fakeIO({ [join("/cfg", "config.json")]: `{"autoUpdate": "no"}` });
+    expect(await readAutoUpdateSetting(io, join("/cfg", "config.json"))).toBeUndefined();
+  });
+});
+
+// ── armUpdateCheck: the hook's observable effects ───────────────────────────
+//
+// Every effect is injected, so the spawn path runs with no process created and no
+// real filesystem. What is asserted is what the next run and `status` can see:
+// what was written, and whether a worker was asked for.
+
+function gateDeps(over: Partial<UpdateGateDeps> = {}): UpdateGateDeps & {
+  io: ReturnType<typeof fakeIO>;
+  spawns: string[];
+  events: string[];
+} {
+  const spawns: string[] = [];
+  const events: string[] = [];
+  const io = (over.io as ReturnType<typeof fakeIO>) ?? fakeIO();
+  return {
+    version: "0.6.0",
+    env: {},
+    dir: "/cfg",
+    configFile: join("/cfg", "config.json"),
+    now: () => NOW,
+    execPath: join("/opt", "rundown", "rundown"),
+    dirWritable: async () => true,
+    spawnWorker: (p) => spawns.push(p),
+    debug: (reason, spawned) => events.push(`${spawned ? "spawn" : "skip"}:${reason}`),
+    ...over,
+    // Narrowed after the spread: callers need the fake's inspection fields, not
+    // the bare interface Partial<UpdateGateDeps> widens `io` back to.
+    io,
+    spawns,
+    events,
+  };
+}
+
+describe("armUpdateCheck", () => {
+  test("stamps the state before spawning, so a worker crash cannot re-spawn every run", async () => {
+    const deps = gateDeps();
+    const d = await armUpdateCheck(deps);
+    expect(d).toEqual({ spawn: true });
+    expect(deps.spawns).toEqual([join("/opt", "rundown", "rundown")]);
+    const written = JSON.parse(deps.io.files[updateStatePath("/cfg")]!);
+    expect(written.checkedAt).toBe(NOW.toISOString());
+  });
+
+  test("spawns with the resolved executable path, never argv[0]", async () => {
+    const deps = gateDeps({ execPath: join("/real", "rundown") });
+    await armUpdateCheck(deps);
+    expect(deps.spawns).toEqual([join("/real", "rundown")]);
+  });
+
+  test("an unwritable install directory refuses, records the reason, and spawns nothing", async () => {
+    const deps = gateDeps({ dirWritable: async () => false });
+    expect(await armUpdateCheck(deps)).toEqual({ spawn: false, reason: "not-writable" });
+    expect(deps.spawns).toEqual([]);
+    const written = JSON.parse(deps.io.files[updateStatePath("/cfg")]!);
+    expect(written.outcome).toBe("refused");
+    expect(written.reason).toBe("install directory not writable");
+  });
+
+  test("a refusal that is not the user's problem records nothing", async () => {
+    // CI, a source run, the off-switch and the throttle are all either expected or
+    // already visible; writing a state document for them would be noise.
+    for (const over of [{ env: { CI: "1" } }, { version: "0.0.0-dev" }, { env: { RUNDOWN_DISABLE_AUTOUPDATE: "1" } }]) {
+      const deps = gateDeps(over);
+      await armUpdateCheck(deps);
+      expect(deps.spawns).toEqual([]);
+      expect(deps.io.files[updateStatePath("/cfg")]).toBeUndefined();
+    }
+  });
+
+  test("the stamp carries the previous outcome forward rather than claiming a fresh result", async () => {
+    const io = fakeIO({
+      [updateStatePath("/cfg")]: JSON.stringify({
+        checkedAt: "2026-08-01T00:00:00.000Z",
+        latest: "0.7.0",
+        outcome: "failed",
+        reason: "checksum mismatch",
+        consecutiveFailures: 2,
+      }),
+    });
+    const deps = gateDeps({ io });
+    await armUpdateCheck(deps);
+    const written = JSON.parse(io.files[updateStatePath("/cfg")]!);
+    expect(written.checkedAt).toBe(NOW.toISOString());
+    expect(written.outcome).toBe("failed");
+    expect(written.latest).toBe("0.7.0");
+    expect(written.consecutiveFailures).toBe(2);
+  });
+
+  test("emits exactly one decision event, spawning or not", async () => {
+    const spawned = gateDeps();
+    await armUpdateCheck(spawned);
+    expect(spawned.events).toEqual(["spawn:spawn"]);
+
+    const skipped = gateDeps({ env: { CI: "1" } });
+    await armUpdateCheck(skipped);
+    expect(skipped.events).toEqual(["skip:ci"]);
+  });
+
+  test("never throws: a filesystem that fails everywhere still returns a decision", async () => {
+    const io = fakeIO();
+    io.fail = new Error("disk on fire");
+    const deps = gateDeps({ io, dirWritable: async () => { throw new Error("nope"); } });
+    expect((await armUpdateCheck(deps)).spawn).toBe(false);
+    expect(deps.spawns).toEqual([]);
+  });
+});
+
+describe("runUpdateWorker", () => {
+  test("records that a check happened, preserving the failure count", async () => {
+    const io = fakeIO({
+      [updateStatePath("/cfg")]: JSON.stringify({ checkedAt: "2026-08-01T00:00:00.000Z", outcome: "failed", consecutiveFailures: 3 }),
+    });
+    await runUpdateWorker({ io, dir: "/cfg", now: () => NOW });
+    const written = JSON.parse(io.files[updateStatePath("/cfg")]!);
+    expect(written.checkedAt).toBe(NOW.toISOString());
+    expect(written.outcome).toBe("current");
+    expect(written.consecutiveFailures).toBe(3);
+  });
+
+  test("a failing filesystem exits quietly rather than throwing", async () => {
+    const io = fakeIO();
+    io.fail = new Error("nope");
+    expect(await runUpdateWorker({ io, dir: "/cfg", now: () => NOW })).toBeUndefined();
   });
 });

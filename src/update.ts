@@ -15,7 +15,8 @@
 // filesystem.
 
 import { mkdir, readFile, writeFile } from "node:fs/promises";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
+import { stripJsonc } from "./config.ts";
 
 /** What the last update check did. */
 export type UpdateOutcome = "updated" | "current" | "refused" | "failed";
@@ -206,4 +207,211 @@ export function renderVersionLine({ running, state, autoUpdateDisabled: disabled
   if (state) notes.push(`checked ${state.checkedAt}`);
   const suffix = notes.length > 0 ? ` (${notes.join(", ")})` : "";
   return `version   ${running}   ${parts.join(" — ")}${suffix}`;
+}
+
+// ── the gate (ADR-0001 §5) ──────────────────────────────────────────────────
+
+/**
+ * Marks the internal worker mode. An env var rather than an argv command, so the
+ * five-command agent-facing surface stays exactly five (ADR-0008 §6): there is
+ * nothing here for an agent to discover or invoke. Named to read as internal
+ * plumbing, not as a user knob.
+ */
+export const WORKER_ENV = "RUNDOWN_INTERNAL_UPDATE_WORKER";
+
+/**
+ * How stale a recorded check must be before another one runs. Twenty hours rather
+ * than a flat twenty-four so a daily habit at a slightly earlier hour still
+ * checks, instead of drifting a day later on every run.
+ */
+export const THROTTLE_MS = 20 * 60 * 60 * 1000;
+
+/** Why the gate declined. Every value is a short structural string, safe to record and print. */
+export type GateRefusal =
+  | "dev-build"
+  | "worker"
+  | "disabled-env"
+  | "ci"
+  | "disabled-config"
+  | "throttled"
+  | "not-writable";
+
+/** Everything the decision depends on, passed in so the predicate stays pure. */
+export interface GateInputs {
+  /** The running version; the dev marker means a source run. */
+  version: string;
+  env: NodeJS.ProcessEnv;
+  /** The config field as the lenient reader saw it; `undefined` when absent or unreadable. */
+  autoUpdateConfig: boolean | undefined;
+  state: UpdateState | undefined;
+  now: Date;
+  installDirWritable: boolean;
+}
+
+export type GateDecision = { spawn: true } | { spawn: false; reason: GateRefusal };
+
+/**
+ * Whether this invocation should fork an update worker, and when not, why.
+ *
+ * The order is load-bearing and matches ADR-0001 §5: the cheap structural
+ * refusals come first, and writability — the only one worth recording as a
+ * user-visible refusal — comes last, so a throttled run does not re-record it
+ * every day. `CI` is checked by presence, with no override: an opt-out switch
+ * does not protect a vendored binary in a pipeline that never sets it.
+ */
+export function updateGateDecision({
+  version,
+  env,
+  autoUpdateConfig,
+  state,
+  now,
+  installDirWritable,
+}: GateInputs): GateDecision {
+  if (!/^\d+\.\d+\.\d+$/.test(version)) return { spawn: false, reason: "dev-build" };
+  if (env[WORKER_ENV] !== undefined) return { spawn: false, reason: "worker" };
+  if (autoUpdateDisabled(env)) return { spawn: false, reason: "disabled-env" };
+  if (env.CI !== undefined) return { spawn: false, reason: "ci" };
+  if (autoUpdateConfig === false) return { spawn: false, reason: "disabled-config" };
+  if (state) {
+    const checkedAt = Date.parse(state.checkedAt);
+    // An unparseable stamp fails toward checking again rather than toward never
+    // checking: a damaged state file must not wedge the throttle shut.
+    if (Number.isFinite(checkedAt) && now.getTime() - checkedAt < THROTTLE_MS) {
+      return { spawn: false, reason: "throttled" };
+    }
+  }
+  if (!installDirWritable) return { spawn: false, reason: "not-writable" };
+  return { spawn: true };
+}
+
+/**
+ * The gate's own read of the config file — deliberately a second reader, not
+ * `config.ts`'s strict fail-hard path (ADR-0001 §5).
+ *
+ * The gate runs before any command, including on invocations where no config
+ * exists yet, so it cannot fail hard. Every error is swallowed and read as
+ * not-disabled. The consequence is explicit and intended: a config file with a
+ * syntax error keeps auto-updating even if it contains the off-switch. That bias
+ * is correct — a broken file should not strand someone on an old binary — and the
+ * strict reader still rejects the same file the moment a real command runs.
+ */
+export async function readAutoUpdateSetting(io: UpdateStateIO, path: string): Promise<boolean | undefined> {
+  try {
+    const raw = JSON.parse(stripJsonc(await io.readFile(path)));
+    if (typeof raw !== "object" || raw === null) return undefined;
+    const v = (raw as Record<string, unknown>).autoUpdate;
+    return typeof v === "boolean" ? v : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+// ── the hook and the worker (ADR-0001 §5) ───────────────────────────────────
+
+/** Everything the hook touches, injected so the whole path is testable offline. */
+export interface UpdateGateDeps {
+  version: string;
+  env: NodeJS.ProcessEnv;
+  /** The resolved config directory, where the state document lives. */
+  dir: string;
+  /** The config file itself, for the lenient off-switch read. */
+  configFile: string;
+  io: UpdateStateIO;
+  now: () => Date;
+  /** The running executable, symlinks already resolved. */
+  execPath: string;
+  /** Whether the directory holding the executable can be written. */
+  dirWritable: (dir: string) => Promise<boolean>;
+  /** Fork the detached worker. Never awaited by the caller. */
+  spawnWorker: (execPath: string) => void;
+  debug: (reason: string, spawned: boolean) => void;
+}
+
+/**
+ * Decide whether to check for a new version, and if so fork the worker and return
+ * immediately. Runs from one hook at the top of CLI dispatch, above the version
+ * branch, so all five commands and the usage fallback arm it — which also means
+ * the installer's own post-install version probe counts as the day's check, and a
+ * fresh install does not check again the same hour.
+ *
+ * Never throws: a diagnostic side errand must not fail the command the user asked
+ * for. The throttle stamp is written before the worker is spawned, so a worker
+ * that crashes on startup cannot re-spawn on every invocation.
+ */
+export async function armUpdateCheck(deps: UpdateGateDeps): Promise<GateDecision> {
+  try {
+    const state = await readUpdateState(deps.io, deps.dir);
+    const decision = updateGateDecision({
+      version: deps.version,
+      env: deps.env,
+      autoUpdateConfig: await readAutoUpdateSetting(deps.io, deps.configFile),
+      state,
+      now: deps.now(),
+      installDirWritable: await deps.dirWritable(dirname(deps.execPath)),
+    });
+    deps.debug(decision.spawn ? "spawn" : decision.reason, decision.spawn);
+
+    if (!decision.spawn) {
+      // An unwritable install directory is the one refusal worth surfacing: it is
+      // silent otherwise, and the user can fix it. The rest are either expected
+      // (CI, a source run) or already visible (the off-switch, the throttle).
+      if (decision.reason === "not-writable") {
+        await writeUpdateState(
+          deps.io,
+          deps.dir,
+          { outcome: "refused", reason: "install directory not writable", consecutiveFailures: state?.consecutiveFailures ?? 0 },
+          deps.now,
+        );
+      }
+      return decision;
+    }
+
+    // Stamp first, spawn second. The stamp carries the previous outcome forward
+    // rather than claiming a fresh result: all this write asserts is when the
+    // check started. The worker replaces it with the real outcome.
+    await writeUpdateState(
+      deps.io,
+      deps.dir,
+      {
+        outcome: state?.outcome ?? "current",
+        ...(state?.latest ? { latest: state.latest } : {}),
+        ...(state?.reason ? { reason: state.reason } : {}),
+        consecutiveFailures: state?.consecutiveFailures ?? 0,
+      },
+      deps.now,
+    );
+    deps.spawnWorker(deps.execPath);
+    return decision;
+  } catch {
+    // Any failure here means no update check this run, which is the safe outcome.
+    return { spawn: false, reason: "not-writable" };
+  }
+}
+
+/**
+ * The internal worker mode: the same binary, re-executed with {@link WORKER_ENV}
+ * set. It returns before any argument handling, which is what guarantees it cannot
+ * reach config resolution, Sources, or the Summarizer — no untrusted byte is ever
+ * in scope while it runs, so self-update needs no separate trust argument.
+ *
+ * Today it only records that a check happened. Release discovery and the
+ * download/verify/swap arrive in #64 and #65 and report into the same document.
+ */
+export async function runUpdateWorker(deps: {
+  io: UpdateStateIO;
+  dir: string;
+  now: () => Date;
+}): Promise<void> {
+  try {
+    const state = await readUpdateState(deps.io, deps.dir);
+    await writeUpdateState(
+      deps.io,
+      deps.dir,
+      { outcome: "current", consecutiveFailures: state?.consecutiveFailures ?? 0 },
+      deps.now,
+    );
+  } catch {
+    // A worker that cannot record its own outcome exits quietly; the next run's
+    // stale stamp will simply try again.
+  }
 }
