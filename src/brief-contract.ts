@@ -63,22 +63,29 @@ export const Evidence = z.strictObject({
   quote: z.string().max(300),
 });
 
+/** Longest single attribution label — one `where`, or one name in `who`. */
+export const LABEL_MAX = 120;
+
+/** Most names a `who` list carries. It is a caption, not a roster (#86). */
+export const WHO_MAX = 8;
+
 /**
  * What the CLI emits per evidence entry. Every field except `quote` is code-filled from
  * the resolved item, so none of it can be fabricated by the model (#54): `source` is
  * the item's `source/kind`, and `where`/`who` are its `Attribution`.
  *
- * The caps are as load-bearing here as everywhere else, and for one extra reason —
- * code-filled fields never pass through the model-output `.parse()`, so plan.ts
- * re-parses the assembled Brief against {@link BriefOutputSchema} to enforce them.
- * Sizes: `where` is one container label, `who` a short caption list, not a roster.
+ * Sources produce attribution at whatever size the backend has — a 60-person meeting
+ * has 60 attendees. {@link LABEL_MAX} and {@link WHO_MAX} are exported so plan.ts can
+ * clamp to exactly these numbers as it fills the fields (#86); the caps below then
+ * have nothing left to reject, and stay the enforced backstop for code-filled fields,
+ * which never pass through the model-output `.parse()`.
  */
 export const BriefEvidence = z.strictObject({
   source: z.string(),
   /** Container label ("#flow-mgmt", "DM with Ada Lovelace", "Inbox"), when the source has an honest one. */
-  where: z.string().max(120).optional(),
-  /** People involved, most salient first. */
-  who: z.array(z.string().max(120)).max(8).optional(),
+  where: z.string().max(LABEL_MAX).optional(),
+  /** People involved, most salient first — so a clamp keeps the useful end. */
+  who: z.array(z.string().max(LABEL_MAX)).max(WHO_MAX).optional(),
   quote: z.string().max(300),
 });
 
