@@ -496,6 +496,16 @@ describe("cli", () => {
     test("a newer recorded version is named", () => {
       // The running version is stamped, so the comparison is a real one rather
       // than the dev marker's unconditional "not newer".
+      //
+      // That stamp is also what makes this the one test in the block the update
+      // gate would arm on: every other run here is `0.0.0-dev` and refuses with
+      // `dev-build`. Armed, the gate stamps `checkedAt` with the current clock
+      // before spawning the worker, so the rendered line reports now rather than
+      // the fixture's timestamp — and a unit test reaches the network. `CI` is
+      // the refusal that costs nothing here: it is checked before the throttle
+      // and, unlike RUNDOWN_DISABLE_AUTOUPDATE, does not change the line's text.
+      // Without it the assertion passes only while the fixture is inside the
+      // 20-hour throttle window, which is a test that expires by the calendar.
       const outDir = mkdtempSync(join(tmpdir(), "rundown-stamp-"));
       try {
         const build = Bun.spawnSync(
@@ -503,7 +513,7 @@ describe("cli", () => {
           { cwd: ROOT },
         );
         expect(build.exitCode).toBe(0);
-        const r = run(["status"], withState(state({ latest: "0.4.0" })), join(outDir, "cli.js"));
+        const r = run(["status"], withState(state({ latest: "0.4.0" })), join(outDir, "cli.js"), { CI: "1" });
         expect(r.stdout).toContain("version   0.3.0   0.4.0 available (checked 2026-08-05T09:00:00.000Z)");
       } finally {
         rmSync(outDir, { recursive: true, force: true });
