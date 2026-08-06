@@ -7,9 +7,9 @@ up, and what you've been working on. `rundown` reads your work systems, has a sa
 call summarize them, and prints a structured Brief as JSON on stdout. A coding agent installs the
 `rundown` skill and drives it on demand; landing and rendering the Brief are the agent's job.
 
-Today `rundown` reads four sources: Microsoft Graph (calendar and mail), Linear (issues you're
-involved in), Slack (messages you were part of), and Claude Code logs (local session transcripts).
-Jira can be added later against the same abstraction.
+Today `rundown` reads five sources: Microsoft Graph (calendar and mail), Linear (issues you're
+involved in), Jira (issues you're involved in), Slack (messages you were part of), and Claude Code
+logs (local session transcripts).
 
 ## The trust boundary
 
@@ -36,7 +36,7 @@ The full enforcement model — structural, in-code (`Untrusted<T>`), and behavio
 `rundown` is one bounded context with a single external surface, the CLI. Inside are four
 components (see [`CONTEXT.md`](CONTEXT.md)):
 
-- **Sources** — read-only adapters, one per backend/auth boundary (Graph, Linear, Slack, Claude Code logs).
+- **Sources** — read-only adapters, one per backend/auth boundary (Graph, Linear, Jira, Slack, Claude Code logs).
 - **Aggregator** — pulls the selected sources concurrently into one normalized, bucketed Bundle.
 - **Summarizer** — the tool-less Anthropic call; the only place untrusted content meets a model.
 - **Planner** — turns the Bundle into a plan-my-week Brief.
@@ -127,6 +127,40 @@ Note that some workspaces disable personal API keys by policy. In that case the 
 unavailable until the policy allows it. OAuth (via the same `login()` interface Graph already
 uses) is the planned way around this.
 
+### Phase 1: Jira — get your API token
+
+Jira doesn't use `rundown login` either; the account email and an API token together are the
+credential:
+
+1. At [id.atlassian.com](https://id.atlassian.com), go to **Security → API tokens** and create an
+   API token.
+2. Export the token and the Atlassian account email it belongs to — both halves are secrets:
+
+   ```sh
+   export JIRA_EMAIL=...
+   export JIRA_API_TOKEN=...
+   ```
+
+3. Set the required `site` option in `~/.config/rundown/config.json`. It names the Jira Cloud site
+   to read, which the token does not carry:
+
+   ```json
+   "sources": {
+     "jira": { "site": "your-domain.atlassian.net" }
+   }
+   ```
+
+   A full `https://` origin works too. `site` is config rather than a secret, so it belongs in the
+   file; the two env vars stay in the environment.
+
+The other options are optional scope: `relationships` picks which of `assigned`, `created`, and
+`watching` to pull (omit for `assigned` only), `statuses` picks which of the `new`,
+`indeterminate`, and `done` status categories to include (omit for all three), and `projects`
+restricts the read to a list of project keys (omit for all projects).
+
+`rundown status` verifies the credentials against the API and reports if either env var is
+missing, if `site` is unset, or if the credentials are rejected.
+
 ### Phase 1: Slack
 
 Slack uses `rundown login`, like Graph. Register one app once for the whole workspace:
@@ -183,8 +217,8 @@ export ANTHROPIC_API_KEY=...   # the Summarizer credential, read from the env li
 
 `rundown login` authenticates every configured interactive source and prints an exit summary of
 what it did and what still needs an env var. Pass an optional source name — `rundown login graph`
-— to authenticate just one. Linear is never part of `login`; it authenticates from
-`LINEAR_API_KEY` alone.
+— to authenticate just one. Linear and Jira are never part of `login`; they authenticate from
+their env credentials alone.
 
 The config file `~/.config/rundown/config.json` (override the path with `RUNDOWN_CONFIG`) owns
 only `timezone`, `window`, `sources` (selection = presence; the one mandatory field), and freeform
