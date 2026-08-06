@@ -561,7 +561,17 @@ export function assetUrl(version: string, asset: string, base = "https://github.
   return `${base}/v${version}/${asset}`;
 }
 
-/** Why the swap declined. Recorded verbatim to the state document, which `status` surfaces. */
+/**
+ * Why the swap declined. Recorded verbatim to the state document, which `status`
+ * surfaces, so every value is a short structural string and never error text, a
+ * path, or anything else that could carry content (ADR-0001 §5).
+ *
+ * The failures that throw are discriminated by the layer that threw rather than
+ * collapsed into one: a release host that times out and a directory that cannot be
+ * written need different fixes, and the version line is where the user learns
+ * which. `unexpected-error` is the residual catch-all and is named for exactly
+ * that, so it never implies the filesystem.
+ */
 export type SwapRefusal =
   | "unsupported-platform"
   | "asset-missing"
@@ -569,7 +579,35 @@ export type SwapRefusal =
   | "checksum-mismatch"
   | "smoke-test-failed"
   | "version-mismatch"
-  | "write-failed";
+  | "download-failed"
+  | "write-failed"
+  | "rename-failed"
+  | "unexpected-error";
+
+/**
+ * A throw already attributed to a stage of the swap. Carries only the enum value,
+ * never the original error, so nothing from a network stack or a filesystem error
+ * message can reach the state document.
+ */
+class SwapFailure extends Error {
+  constructor(readonly reason: SwapRefusal) {
+    super(reason);
+  }
+}
+
+/**
+ * Run one stage of the swap, tagging anything it throws with that stage's reason.
+ * An already-tagged failure passes through unchanged, so a nested stage keeps the
+ * more specific attribution.
+ */
+async function swapStage<T>(reason: SwapRefusal, run: () => Promise<T>): Promise<T> {
+  try {
+    return await run();
+  } catch (err) {
+    if (err instanceof SwapFailure) throw err;
+    throw new SwapFailure(reason);
+  }
+}
 
 export type SwapResult = { ok: true } | { ok: false; reason: SwapRefusal };
 
@@ -655,27 +693,42 @@ export async function downloadAndSwap(deps: {
   const url = assetUrl(deps.version, asset, deps.baseUrl);
 
   try {
-    const binary = await deps.fetch(url, { signal: signal() });
-    if (!binary.ok) return { ok: false, reason: "asset-missing" };
-    const bytes = new Uint8Array(await binary.arrayBuffer());
-
-    const sums = await deps.fetch(`${url}.sha256`, { signal: signal() });
-    if (!sums.ok) return { ok: false, reason: "checksum-missing" };
-    // The checksum asset is `<hash>  <name>`, the shasum/sha256sum format.
-    const expected = (await sums.text()).trim().split(/\s+/)[0]?.toLowerCase();
+    // Reaching the release host and reading its bytes: a DNS failure, a refused
+    // connection, and the abort timeout all land here rather than looking like a
+    // disk problem.
+    const bytes = await swapStage("download-failed", async () => {
+      const binary = await deps.fetch(url, { signal: signal() });
+      if (!binary.ok) throw new SwapFailure("asset-missing");
+      return new Uint8Array(await binary.arrayBuffer());
+    });
+    const expected = await swapStage("download-failed", async () => {
+      const sums = await deps.fetch(`${url}.sha256`, { signal: signal() });
+      if (!sums.ok) throw new SwapFailure("checksum-missing");
+      // The checksum asset is `<hash>  <name>`, the shasum/sha256sum format.
+      return (await sums.text()).trim().split(/\s+/)[0]?.toLowerCase();
+    });
     if (!expected || expected !== deps.io.sha256(bytes)) return { ok: false, reason: "checksum-mismatch" };
 
-    await deps.io.writeCandidate(candidate, bytes);
-    await deps.io.makeExecutable(candidate);
+    // Putting the candidate on disk: permissions, a full filesystem, a read-only
+    // mount. This is what `write-failed` has always meant, and now all it means.
+    await swapStage("write-failed", async () => {
+      await deps.io.writeCandidate(candidate, bytes);
+      await deps.io.makeExecutable(candidate);
+    });
 
-    const probe = await deps.io.probe(candidate);
+    // A candidate that will not launch fails the liveness check the same way one
+    // that exits non-zero does; the install is not at fault either way.
+    const probe = await swapStage("smoke-test-failed", () => deps.io.probe(candidate));
     if (probe.exitCode !== 0) return { ok: false, reason: "smoke-test-failed" };
     if (probe.stdout.trim() !== deps.version) return { ok: false, reason: "version-mismatch" };
 
-    await deps.io.rename(candidate, deps.target);
+    // The swap itself: a cross-device candidate or an unwritable target, which the
+    // successful write above did not rule out.
+    await swapStage("rename-failed", () => deps.io.rename(candidate, deps.target));
     return { ok: true };
-  } catch {
-    return { ok: false, reason: "write-failed" };
+  } catch (err) {
+    // Anything left is genuinely unattributed, and says so.
+    return { ok: false, reason: err instanceof SwapFailure ? err.reason : "unexpected-error" };
   } finally {
     // Every exit path, including the successful one where the rename already moved
     // it: removing a file that is gone is not an error worth propagating.
