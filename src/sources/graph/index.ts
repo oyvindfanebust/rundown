@@ -160,6 +160,9 @@ async function readCalendar(fetchJson: FetchJson, token: string, window: Window)
       // describes itself — the asymmetry with a chat message that #54 opens with.
       // Filling the slot anyway would make the caption lie about what it means.
       // Organizer leads `who`: they own the meeting, attendees are context.
+      // `who` is uncapped here by design (#86). The source reports the real roster;
+      // the Brief's caption bounds are applied once, at the Brief boundary in plan.ts,
+      // so every source gets the same treatment. Do not re-add a cap here.
       attribution: {
         who: [
           e.organizer?.emailAddress?.name,

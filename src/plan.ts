@@ -11,7 +11,9 @@ import {
   BriefOutputSchema,
   KINDS,
   KIND_DESCRIPTIONS,
+  LABEL_MAX,
   SummarizerOutputSchema,
+  WHO_MAX,
   type BriefEvidence,
   type BriefItem,
   type BriefOutput,
@@ -276,13 +278,26 @@ function resolveEvidence(items: ExtractedItem[], rendered: RenderedBundle): Brie
       if (cited && normalizeWhitespace(cited.text).includes(quote)) {
         // Attribution is copied from the resolved item, not read from the model's
         // output. `unwrap` here is the same sole-unwrap-site allowance renderItem uses
-        // (ADR-0004 §3): the value is untrusted source bytes, so it is defanged and
-        // cap-checked on the way out like every other Brief string.
+        // (ADR-0004 §3): the value is untrusted source bytes, so it is defanged on the
+        // way out like every other Brief string.
+        //
+        // Code-filled attribution is conformed to the Brief contract here rather than
+        // asserted against it (#86). A source reports what its backend has — a 60-person
+        // meeting has 60 attendees, and a display name can be any length — and it was
+        // never told the Brief's caption bounds. `who` is most-salient-first, so slicing
+        // keeps the useful end. The alternative is the final BriefOutputSchema.parse
+        // throwing after the model call is already spent: the user pays for the summary
+        // and gets an error instead of a Brief, and the failure looks intermittent
+        // because it only fires when the model happens to cite the large item.
         const attribution = cited.item.attribution ? unwrap(cited.item.attribution) : undefined;
         evidence.push({
           source: `${cited.item.source}/${cited.item.kind}`,
-          ...(attribution?.where !== undefined ? { where: attribution.where } : {}),
-          ...(attribution?.who !== undefined ? { who: attribution.who } : {}),
+          ...(attribution?.where !== undefined
+            ? { where: attribution.where.slice(0, LABEL_MAX) }
+            : {}),
+          ...(attribution?.who !== undefined
+            ? { who: attribution.who.slice(0, WHO_MAX).map((w) => w.slice(0, LABEL_MAX)) }
+            : {}),
           quote: e.quote,
         });
         continue;

@@ -343,6 +343,61 @@ describe("plan — evidence-quote verification", () => {
       ]);
     });
 
+    // #86: a large meeting used to kill the whole run — the code-filled `who` exceeded
+    // the contract's cap and the final parse threw after the model call was spent.
+    // Attribution is now clamped as it is filled, so the Brief survives.
+    test("clamps an oversized who list to the contract cap instead of throwing", async () => {
+      const crowded = {
+        ...first,
+        attribution: untrusted({
+          where: "#flow-mgmt",
+          who: Array.from({ length: 20 }, (_, i) => `Person ${i + 1}`),
+        }),
+      };
+      const output: SummarizerOutput = {
+        summary: "s",
+        items: [
+          {
+            kind: "task",
+            summary: "All-hands",
+            evidence: [{ ref: 1, quote: "take a look this afternoon" }],
+          },
+        ],
+      };
+      const { summarize } = fakeSummarizer(output);
+      const brief = await plan(bundle([crowded]), false, undefined, { summarize });
+
+      const who = brief.items[0]!.evidence[0]!.who!;
+      expect(who).toHaveLength(8);
+      // Most-salient-first, so the clamp keeps the head of the list.
+      expect(who[0]).toBe("Person 1");
+      expect(who[7]).toBe("Person 8");
+    });
+
+    test("truncates an over-long name and where label to the label cap", async () => {
+      const longName = "N".repeat(150);
+      const wordy = {
+        ...first,
+        attribution: untrusted({ where: "W".repeat(150), who: [longName] }),
+      };
+      const output: SummarizerOutput = {
+        summary: "s",
+        items: [
+          {
+            kind: "task",
+            summary: "Long name",
+            evidence: [{ ref: 1, quote: "take a look this afternoon" }],
+          },
+        ],
+      };
+      const { summarize } = fakeSummarizer(output);
+      const brief = await plan(bundle([wordy]), false, undefined, { summarize });
+
+      const entry = brief.items[0]!.evidence[0]!;
+      expect(entry.who).toEqual(["N".repeat(120)]);
+      expect(entry.where).toBe("W".repeat(120));
+    });
+
     test("drops a real quote that cites the wrong item (the behaviour change)", async () => {
       const output: SummarizerOutput = {
         summary: "s",
