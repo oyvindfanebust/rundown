@@ -66,9 +66,10 @@ if that happens, tell the user what the error said; do not fabricate a rundown.
 
 Not configured yet? If `rundown brief` or `rundown status` reports missing config, credentials,
 or authentication, follow [references/onboarding.md](references/onboarding.md) to set it up —
-don't guess at config. Sources declare their own credentials: Microsoft Graph needs `rundown
-login`, while Linear needs only a read-only `LINEAR_API_KEY` in the environment (no `login`) —
-`rundown status` verifies it and names anything missing.
+don't guess at config. Sources declare their own credentials: Microsoft Graph and Slack are
+interactive and authenticate through `rundown login`, while Linear (`LINEAR_API_KEY`) and Jira
+(`JIRA_EMAIL`, `JIRA_API_TOKEN`) need only environment credentials and no `login` — `rundown
+status` verifies each one and names anything missing.
 
 ## The Brief shape
 
