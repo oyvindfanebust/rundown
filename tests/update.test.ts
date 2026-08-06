@@ -18,6 +18,7 @@ import {
   type GateInputs,
   type UpdateState,
   type UpdateStateIO,
+  type SwapRefusal,
 } from "../src/update.ts";
 
 // The update module takes its effects by parameter (ADR-0001 §5), so reading and
@@ -247,6 +248,39 @@ describe("renderVersionLine", () => {
         autoUpdateDisabled: true,
       }),
     ).toBe("version   0.3.0   auto-update disabled (checked 2026-08-05T09:00:00.000Z)");
+  });
+
+  test("every swap refusal reason renders in the line", () => {
+    // The vocabulary is closed and structural, and the line is where a user reads
+    // it, so each value is pinned here rather than only at the swap.
+    const reasons: SwapRefusal[] = [
+      "unsupported-platform",
+      "asset-missing",
+      "checksum-missing",
+      "checksum-mismatch",
+      "smoke-test-failed",
+      "version-mismatch",
+      "download-failed",
+      "write-failed",
+      "rename-failed",
+      "unexpected-error",
+    ];
+    for (const reason of reasons) {
+      expect(renderVersionLine({ running: "0.3.0", state: state({ outcome: "refused", latest: "0.4.0", reason }), autoUpdateDisabled: false })).toBe(
+        `version   0.3.0   0.4.0 available — update refused: ${reason} (checked 2026-08-05T09:00:00.000Z)`,
+      );
+    }
+  });
+
+  test("names a network failure and a filesystem failure differently", () => {
+    // The defect this replaced: both of these read as `write-failed`, so the line
+    // could not say which fix applied.
+    expect(renderVersionLine({ running: "0.3.0", state: state({ outcome: "refused", reason: "download-failed" }), autoUpdateDisabled: false })).toBe(
+      "version   0.3.0   update refused: download-failed (checked 2026-08-05T09:00:00.000Z)",
+    );
+    expect(renderVersionLine({ running: "0.3.0", state: state({ outcome: "refused", reason: "write-failed" }), autoUpdateDisabled: false })).toBe(
+      "version   0.3.0   update refused: write-failed (checked 2026-08-05T09:00:00.000Z)",
+    );
   });
 
   test("an updated outcome reads as up to date on the version now running", () => {

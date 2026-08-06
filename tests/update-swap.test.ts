@@ -176,7 +176,9 @@ describe("downloadAndSwap", () => {
     const r = await downloadAndSwap(
       deps({ [URL_BIN]: { body }, [`${URL_BIN}.sha256`]: { body: `${sha256Hex(body)}  ${ASSET}\n` } }),
     );
-    expect(r.ok).toBe(false);
+    // Whether the exec fails by throwing or by a non-zero exit, the liveness check
+    // owns the outcome.
+    expect(r).toEqual({ ok: false, reason: "smoke-test-failed" });
     expectUntouched();
     expectNoCandidate();
   });
@@ -199,6 +201,142 @@ describe("downloadAndSwap", () => {
       expect(called).toBe(false);
     }
     expectUntouched();
+  });
+
+  // A thrown failure must name the layer that threw, so `status` says whether the
+  // network or the disk is the thing to fix. Before this discrimination every one
+  // of these read as `write-failed`.
+
+  test("a fetch that throws is a download failure, not a write failure", async () => {
+    const r = await downloadAndSwap(
+      deps({}, {
+        fetch: (async () => {
+          throw new TypeError("fetch failed");
+        }) as unknown as typeof fetch,
+      }),
+    );
+    expect(r).toEqual({ ok: false, reason: "download-failed" });
+    expectUntouched();
+    expectNoCandidate();
+  });
+
+  test("an aborted read is a download failure", async () => {
+    // What the abort timeout produces on a hung release host.
+    const r = await downloadAndSwap(
+      deps({}, {
+        fetch: (async () => {
+          throw new DOMException("The operation timed out.", "TimeoutError");
+        }) as unknown as typeof fetch,
+      }),
+    );
+    expect(r).toEqual({ ok: false, reason: "download-failed" });
+    expectUntouched();
+  });
+
+  test("a body that fails mid-read is a download failure", async () => {
+    // The response arrives, the bytes do not.
+    const r = await downloadAndSwap(
+      deps({}, {
+        fetch: (async () =>
+          new Response(
+            new ReadableStream({
+              start(controller) {
+                controller.error(new Error("connection reset"));
+              },
+            }),
+          )) as unknown as typeof fetch,
+      }),
+    );
+    expect(r).toEqual({ ok: false, reason: "download-failed" });
+    expectUntouched();
+  });
+
+  test("a candidate write that throws is a write failure", async () => {
+    const body = candidateScript("0.7.0");
+    const r = await downloadAndSwap(
+      deps({ [URL_BIN]: { body }, [`${URL_BIN}.sha256`]: { body: `${sha256Hex(body)}  ${ASSET}\n` } }, {
+        io: {
+          ...fsSwapIO,
+          writeCandidate: async () => {
+            throw Object.assign(new Error("EACCES"), { code: "EACCES" });
+          },
+        },
+      }),
+    );
+    expect(r).toEqual({ ok: false, reason: "write-failed" });
+    expectUntouched();
+    expectNoCandidate();
+  });
+
+  test("a chmod that throws is a write failure", async () => {
+    const body = candidateScript("0.7.0");
+    const r = await downloadAndSwap(
+      deps({ [URL_BIN]: { body }, [`${URL_BIN}.sha256`]: { body: `${sha256Hex(body)}  ${ASSET}\n` } }, {
+        io: {
+          ...fsSwapIO,
+          makeExecutable: async () => {
+            throw Object.assign(new Error("EPERM"), { code: "EPERM" });
+          },
+        },
+      }),
+    );
+    expect(r).toEqual({ ok: false, reason: "write-failed" });
+    expectUntouched();
+    expectNoCandidate();
+  });
+
+  test("a rename that throws is a rename failure, not a write failure", async () => {
+    // The cross-device case: everything was written fine, the swap itself failed.
+    const body = candidateScript("0.7.0");
+    const r = await downloadAndSwap(
+      deps({ [URL_BIN]: { body }, [`${URL_BIN}.sha256`]: { body: `${sha256Hex(body)}  ${ASSET}\n` } }, {
+        io: {
+          ...fsSwapIO,
+          rename: async () => {
+            throw Object.assign(new Error("EXDEV"), { code: "EXDEV" });
+          },
+        },
+      }),
+    );
+    expect(r).toEqual({ ok: false, reason: "rename-failed" });
+    expectUntouched();
+    expectNoCandidate();
+  });
+
+  test("a probe that cannot start the candidate fails the liveness check", async () => {
+    const body = candidateScript("0.7.0");
+    const r = await downloadAndSwap(
+      deps({ [URL_BIN]: { body }, [`${URL_BIN}.sha256`]: { body: `${sha256Hex(body)}  ${ASSET}\n` } }, {
+        io: {
+          ...fsSwapIO,
+          probe: async () => {
+            throw Object.assign(new Error("ENOEXEC"), { code: "ENOEXEC" });
+          },
+        },
+      }),
+    );
+    // A candidate that will not launch is exactly what the liveness check is for;
+    // it is not a filesystem problem.
+    expect(r).toEqual({ ok: false, reason: "smoke-test-failed" });
+    expectUntouched();
+    expectNoCandidate();
+  });
+
+  test("anything else thrown is named as unexpected rather than as a write", async () => {
+    const body = candidateScript("0.7.0");
+    const r = await downloadAndSwap(
+      deps({ [URL_BIN]: { body }, [`${URL_BIN}.sha256`]: { body: `${sha256Hex(body)}  ${ASSET}\n` } }, {
+        io: {
+          ...fsSwapIO,
+          sha256: () => {
+            throw new Error("hasher unavailable");
+          },
+        },
+      }),
+    );
+    expect(r).toEqual({ ok: false, reason: "unexpected-error" });
+    expectUntouched();
+    expectNoCandidate();
   });
 
   test("the candidate uses a fixed name, so a killed worker leaves at most one stale file", async () => {
