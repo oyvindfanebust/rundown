@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.9.0](https://github.com/oyvindfanebust/rundown/compare/v0.8.0...v0.9.0) (2026-08-07)
+
+
+### Features
+
+* attribute Brief evidence quotes via a per-message relationship ([#95](https://github.com/oyvindfanebust/rundown/issues/95)) ([33e218c](https://github.com/oyvindfanebust/rundown/commit/33e218c8d510cd024e03877962da79c77471a748))
+
+
+### Bug Fixes
+
+* clamp evidence attribution at the Brief boundary ([#87](https://github.com/oyvindfanebust/rundown/issues/87)) ([8d9f7b9](https://github.com/oyvindfanebust/rundown/commit/8d9f7b9f949cd31abc59ed597222754cac9c924b)), closes [#86](https://github.com/oyvindfanebust/rundown/issues/86)
+* **update:** discriminate thrown swap failures by stage ([#92](https://github.com/oyvindfanebust/rundown/issues/92)) ([ea0fd2a](https://github.com/oyvindfanebust/rundown/commit/ea0fd2a9fa90b1d8907035c669c59f3f1f6156b7)), closes [#90](https://github.com/oyvindfanebust/rundown/issues/90)
+
 ## [0.8.0](https://github.com/oyvindfanebust/rundown/compare/v0.7.0...v0.8.0) (2026-08-05)
 
 
