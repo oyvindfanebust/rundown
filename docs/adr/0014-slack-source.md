@@ -127,6 +127,32 @@ exactly `{source, kind, timestamp}`. Everything else is branded `Untrusted<T>` a
   page, so the source treats it as a shape to test for rather than a guarantee: a value shaped like
   a user id is resolved, anything else leaves `counterpart` absent.
 
+  **Third amendment (execution, [#94](https://github.com/oyvindfanebust/rundown/issues/94)).** The
+  amendment above puts the counterpart in `who` and keeps the author out of a DM's `where`, so both
+  sides of a DM produce the same caption, and an evidence quote the user wrote was attributed to the
+  person they were talking to ([#93](https://github.com/oyvindfanebust/rundown/issues/93)). The
+  `relationship` row above is the fix. It is now derived from the message rather than from the query
+  that found it: `authored` when the author id is the authenticated user's, otherwise the
+  relationship of the query that surfaced the item. The Planner copies it into Brief evidence next
+  to `where` and `who`, through the same defang and the same clamp, so a consumer can attribute
+  every quote it renders.
+
+  The reply path is fixed by the same derivation. A reconstructed thread (§5) assigned one
+  relationship per thread and gave it to every reply, so a reply the user wrote could read
+  `mentions`. Deriving the value per message labels it `authored`.
+
+  `extras.relationship` keeps its meaning: the query family that surfaced the item, which is the
+  model's clustering material. The two values can now differ (an outgoing DM is `authored` on the
+  attribution and `dms` in `extras`), and that divergence is deliberate rather than an inconsistency
+  to correct later.
+
+  A `fromMe` boolean on the evidence object was rejected. It is a two-valued, viewer-relative
+  projection of a richer fact, it adds a domain concept where `relationship` already exists, and it
+  does not fix the thread-reply mislabelling. An `author` name on the attribution was deferred, not
+  refused: it does not answer "did the user write this", since the Brief carries no account identity
+  and the id comparison belongs where the ids are, inside the source. It composes with this change,
+  and it is the way to attribute bot and webhook messages later.
+
 ### 5. The `threads` option: opt-in full-thread reconstruction
 
 `search.messages` matches individual messages, so a hit deep in a thread reaches the summarizer as

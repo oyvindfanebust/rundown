@@ -200,7 +200,10 @@ amendment).
 - `who` — people involved, most salient first, as a flat label list. Roles (organizer vs attendee,
   assignee vs reporter) deliberately stay in `extras`: this is caption text for a human, not
   clustering material for the model.
-- `relationship` — why the item is the user's (`authored`, `mentions`, `dms`, `assigned`, …).
+- `relationship` — why the item is the user's (`authored`, `mentions`, `dms`, `assigned`, …). Derived
+  from the item, not from the query that found it, so a message the user wrote reads `authored`
+  whatever search surfaced it. The [Brief](#brief)'s evidence carries it, so a consumer can attribute
+  every quote it renders ([ADR-0014](docs/adr/0014-slack-source.md) §4 third amendment).
 
 It splits the two audiences `extras` used to serve at once: `attribution` is human-facing,
 pre-formatted, and code-copied into Brief evidence, while `extras` stays the summarizer's clustering

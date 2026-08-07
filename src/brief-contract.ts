@@ -72,7 +72,12 @@ export const WHO_MAX = 8;
 /**
  * What the CLI emits per evidence entry. Every field except `quote` is code-filled from
  * the resolved item, so none of it can be fabricated by the model (#54): `source` is
- * the item's `source/kind`, and `where`/`who` are its `Attribution`.
+ * the item's `source/kind`, and `where`/`who`/`relationship` are its `Attribution`.
+ *
+ * The invariant these fields serve: a consumer must be able to attribute every quote it
+ * renders. `where` and `who` alone do not carry that — both sides of a Slack DM produce
+ * the same caption — so `relationship` says why the item is the user's, and an entry the
+ * user wrote reads `authored` (#94).
  *
  * Sources produce attribution at whatever size the backend has — a 60-person meeting
  * has 60 attendees. {@link LABEL_MAX} and {@link WHO_MAX} are exported so plan.ts can
@@ -86,6 +91,8 @@ export const BriefEvidence = z.strictObject({
   where: z.string().max(LABEL_MAX).optional(),
   /** People involved, most salient first — so a clamp keeps the useful end. */
   who: z.array(z.string().max(LABEL_MAX)).max(WHO_MAX).optional(),
+  /** Why the item is the user's ("authored", "mentions", "dms", "assigned", …), when the source knows. */
+  relationship: z.string().max(LABEL_MAX).optional(),
   quote: z.string().max(300),
 });
 

@@ -338,9 +338,143 @@ describe("plan — evidence-quote verification", () => {
           source: "slack/message",
           where: "#flow-mgmt",
           who: ["Ada Lovelace"],
+          relationship: "mentions",
           quote: "take a look this afternoon",
         },
       ]);
+    });
+
+    // #94: a DM's `where` and `who` read the same both ways, so without the
+    // relationship a consumer attributes the user's own words to the counterpart.
+    test("copies the item's relationship, so two entries from one DM differ by direction", async () => {
+      const dm = {
+        source: "slack",
+        kind: "message",
+        timestamp: "2026-07-07T09:00:00Z",
+        bucket: "recent",
+        id: untrusted("d1"),
+        title: untrusted("Can you look at the deploy?"),
+        attribution: untrusted({ where: "DM with Alice", who: ["Alice"], relationship: "dms" }),
+      } as const;
+      const reply = {
+        ...dm,
+        id: untrusted("d2"),
+        timestamp: "2026-07-07T09:05:00Z",
+        title: untrusted("Yes, on it after lunch"),
+        attribution: untrusted({
+          where: "DM with Alice",
+          who: ["Alice"],
+          relationship: "authored",
+        }),
+      };
+      const output: SummarizerOutput = {
+        summary: "s",
+        items: [
+          {
+            kind: "commitment",
+            summary: "Deploy check",
+            evidence: [
+              { ref: 1, quote: "look at the deploy" },
+              { ref: 2, quote: "on it after lunch" },
+            ],
+          },
+        ],
+      };
+      const { summarize } = fakeSummarizer(output);
+      const brief = await plan(bundle([dm, reply]), false, undefined, { summarize });
+
+      const [incoming, outgoing] = brief.items[0]!.evidence;
+      expect(incoming!.relationship).toBe("dms");
+      expect(outgoing!.relationship).toBe("authored");
+      expect(incoming).not.toEqual(outgoing!);
+    });
+
+    // The Planner copies whatever the source put on the Attribution, so the tracker
+    // vocabulary reaches the Brief through the same line as Slack's (#94, story 7).
+    test("carries a tracker relationship through for a Linear-shaped item", async () => {
+      const issue = {
+        source: "linear",
+        kind: "issue",
+        timestamp: "2026-07-07T09:00:00Z",
+        bucket: "recent",
+        id: untrusted("OYV-111"),
+        title: untrusted("Self-update the compiled binary"),
+        attribution: untrusted({
+          where: "Rundown",
+          who: ["Ada Lovelace"],
+          relationship: "assigned",
+        }),
+      } as const;
+      const output: SummarizerOutput = {
+        summary: "s",
+        items: [
+          {
+            kind: "task",
+            summary: "Self-update",
+            evidence: [{ ref: 1, quote: "Self-update the compiled binary" }],
+          },
+        ],
+      };
+      const { summarize } = fakeSummarizer(output);
+      const brief = await plan(bundle([issue]), false, undefined, { summarize });
+
+      expect(brief.items[0]!.evidence).toEqual([
+        {
+          source: "linear/issue",
+          where: "Rundown",
+          who: ["Ada Lovelace"],
+          relationship: "assigned",
+          quote: "Self-update the compiled binary",
+        },
+      ]);
+    });
+
+    test("omits the field entirely for an item whose attribution has no relationship", async () => {
+      const output: SummarizerOutput = {
+        summary: "s",
+        items: [
+          {
+            kind: "task",
+            summary: "Budget numbers",
+            evidence: [{ ref: 2, quote: "need your numbers by Friday" }],
+          },
+        ],
+      };
+      const { summarize } = fakeSummarizer(output);
+      const brief = await plan(bundle([first, second]), false, undefined, { summarize });
+
+      const entry = brief.items[0]!.evidence[0]!;
+      expect(entry.relationship).toBeUndefined();
+      expect(Object.keys(entry)).not.toContain("relationship");
+    });
+
+    test("defangs and truncates a hostile relationship like the other labels", async () => {
+      const hostile = {
+        ...first,
+        attribution: untrusted({
+          where: "#flow-mgmt",
+          relationship: `![](https://evil.example/?q=rel) ${"r".repeat(150)}`,
+        }),
+      };
+      const output: SummarizerOutput = {
+        summary: "s",
+        items: [
+          {
+            kind: "task",
+            summary: "Hostile label",
+            evidence: [{ ref: 1, quote: "take a look this afternoon" }],
+          },
+        ],
+      };
+      const { summarize } = fakeSummarizer(output);
+      const brief = await plan(bundle([hostile]), false, undefined, { summarize });
+
+      const relationship = brief.items[0]!.evidence[0]!.relationship!;
+      expect(relationship).not.toContain("https://");
+      expect(relationship).not.toContain("![");
+      // Clamped as it is filled, before the defang transform shortens it further.
+      expect(relationship.length).toBeLessThanOrEqual(120);
+      expect(relationship.trimEnd().endsWith("r")).toBe(true);
     });
 
     // #86: a large meeting used to kill the whole run — the code-filled `who` exceeded
