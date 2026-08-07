@@ -1,8 +1,10 @@
 import { test, expect, describe } from "bun:test";
 import {
   BRIEF_OUTPUT_SCHEMA,
+  BriefEvidence,
   KINDS,
   KIND_DESCRIPTIONS,
+  LABEL_MAX,
   SummarizerOutputSchema,
 } from "../src/brief-contract.ts";
 
@@ -60,6 +62,35 @@ describe("BRIEF_OUTPUT_SCHEMA (generated)", () => {
       }
     };
     walk(schema);
+  });
+});
+
+// `relationship` (#94) is code-filled from the resolved item's Attribution, like
+// `where` and `who`, so it lives on the CLI-facing evidence shape only. It is
+// optional because most sources have no honest answer for it.
+describe("BriefEvidence.relationship", () => {
+  const base = { source: "slack/message", quote: "ok" };
+
+  test("an entry without a relationship parses", () => {
+    const parsed = BriefEvidence.parse(base);
+    expect(parsed.relationship).toBeUndefined();
+  });
+
+  test("an entry with a relationship keeps it", () => {
+    expect(BriefEvidence.parse({ ...base, relationship: "authored" }).relationship).toBe("authored");
+  });
+
+  test("a relationship over the label cap fails the parse", () => {
+    expect(() => BriefEvidence.parse({ ...base, relationship: "a".repeat(LABEL_MAX + 1) })).toThrow();
+    expect(BriefEvidence.parse({ ...base, relationship: "a".repeat(LABEL_MAX) })).toBeDefined();
+  });
+
+  // The addition is CLI-side only: the model still emits {ref, quote}, so the
+  // generated structured-output schema must build unchanged.
+  test("the generated model-facing schema still builds and carries no relationship", () => {
+    const evidence = schema.properties.items.items.properties.evidence.items;
+    expect([...evidence.required].sort()).toEqual(["quote", "ref"]);
+    expect(evidence.properties.relationship).toBeUndefined();
   });
 });
 

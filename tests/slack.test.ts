@@ -344,6 +344,103 @@ describe("SlackSource.read attribution", () => {
   });
 });
 
+// ── read(): the attribution relationship is per message (#94) ───────────────────
+//
+// The attribution's relationship answers "why is this message the user's" for the one
+// message it labels, so a message the user wrote reads `authored` whatever query found
+// it. `extras.relationship` keeps reporting the query family, so the two can differ.
+describe("SlackSource.read attribution relationship", () => {
+  const attributionOf = (item: { attribution?: any }) => unwrap(item.attribution!) as any;
+  const extrasOf = (item: { extras?: any }) => unwrap(item.extras!) as any;
+
+  test("an outgoing DM reads authored while an incoming DM in the same conversation does not", async () => {
+    const out = tsFor("2026-07-08T09:00:00Z");
+    const incoming = tsFor("2026-07-08T09:01:00Z");
+    const dm = { id: "D1", name: "U024BE7LH", is_im: true };
+    const s = source(
+      {
+        search: {
+          dms: [
+            match({ user: "U1", ts: out, channel: dm, text: "on it" }),
+            match({ user: "U024BE7LH", ts: incoming, channel: dm, text: "can you look?" }),
+          ],
+        },
+        users: {
+          U1: { ok: true, user: { profile: { real_name: "Øyvind Fanebust" } } },
+          U024BE7LH: { ok: true, user: { profile: { real_name: "Bent Hansen" } } },
+        },
+      },
+      { relationships: ["dms"] },
+    );
+    const items = await s.read(WINDOW);
+    const outgoing = byId(items, `D1:${out}`)!;
+    const received = byId(items, `D1:${incoming}`)!;
+    expect(attributionOf(outgoing).relationship).toBe("authored");
+    expect(attributionOf(received).relationship).toBe("dms");
+    // The bug in #93 as an assertion: the two directions must not label the same.
+    expect(attributionOf(outgoing)).not.toEqual(attributionOf(received));
+    // The query family is unchanged — it is the summarizer's clustering material.
+    expect(extrasOf(outgoing).relationship).toBe("dms");
+    expect(extrasOf(received).relationship).toBe("dms");
+  });
+
+  test("a thread reply the user wrote reads authored though the thread surfaced under mentions", async () => {
+    const rootTs = tsFor("2026-07-08T11:00:00Z");
+    const mineTs = tsFor("2026-07-08T11:45:00Z");
+    const s = source(
+      {
+        search: { mentions: [match({ user: "U2", thread_ts: rootTs })] },
+        users: {
+          U1: { ok: true, user: { name: "me" } },
+          U2: { ok: true, user: { name: "alice" } },
+        },
+        replies: {
+          [`C1:${rootTs}`]: [
+            { user: "U2", ts: rootTs, text: "root", thread_ts: rootTs },
+            { user: "U1", ts: mineTs, text: "my reply", thread_ts: rootTs },
+          ],
+        },
+      },
+      { relationships: ["mentions"], threads: true },
+    );
+    const items = await s.read(WINDOW);
+    const mine = byId(items, `C1:${mineTs}`)!;
+    const root = byId(items, `C1:${rootTs}`)!;
+    expect(attributionOf(mine).relationship).toBe("authored");
+    expect(attributionOf(root).relationship).toBe("mentions");
+    expect(extrasOf(mine).relationship).toBe("mentions"); // still the surfacing query
+    expect(extrasOf(root).relationship).toBe("mentions");
+  });
+
+  test("a channel message the user wrote reads authored rather than the query's mentions", async () => {
+    // A message can mention the user and be written by them — self-mentions and
+    // follow-ups both do it. The label follows the message, not the search.
+    const s = source(
+      {
+        search: { mentions: [match({ user: "U1", channel: { id: "C1", name: "flow-mgmt", is_channel: true } })] },
+        users: { U1: { ok: true, user: { profile: { real_name: "Øyvind Fanebust" } } } },
+      },
+      { relationships: ["mentions"] },
+    );
+    const item = (await s.read(WINDOW))[0]!;
+    expect(attributionOf(item).relationship).toBe("authored");
+    expect(extrasOf(item).relationship).toBe("mentions");
+  });
+
+  test("a channel message somebody else wrote keeps the relationship of its query", async () => {
+    const s = source(
+      {
+        search: { mentions: [match({ user: "U2", channel: { id: "C1", name: "flow-mgmt", is_channel: true } })] },
+        users: { U2: { ok: true, user: { profile: { real_name: "Ada Lovelace" } } } },
+      },
+      { relationships: ["mentions"] },
+    );
+    const item = (await s.read(WINDOW))[0]!;
+    expect(attributionOf(item).relationship).toBe("mentions");
+    expect(extrasOf(item).relationship).toBe("mentions");
+  });
+});
+
 // ── read(): Slack reference tokens in message text ──────────────────────────────
 //
 // Slack encodes references inside message text as angle-bracket tokens. Left raw,

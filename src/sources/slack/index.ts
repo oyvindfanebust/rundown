@@ -156,6 +156,13 @@ async function dmCounterpart(
  * conversation is with), not the author, who is usually the user. On a channel it is
  * the author. The normalizer dedupes, so an incoming DM whose author and counterpart
  * are the same person yields one name.
+ *
+ * `relationship` is derived from the message, not from the query that found it: a
+ * message the user wrote is `authored` whatever query surfaced it, and everything else
+ * carries the query's relationship. It is what lets a consumer attribute a quote, since
+ * a DM's `where` and `who` read the same both ways (#94). `extras.relationship` keeps
+ * reporting the query family — the Summarizer's clustering material — so the two
+ * values can differ. That divergence is deliberate; neither is the other's bug.
  */
 function slackAttribution(args: {
   channelName: string | undefined;
@@ -163,9 +170,9 @@ function slackAttribution(args: {
   counterpart: string | undefined;
   author: string | undefined;
   fromMe: boolean;
-  relationship: Relationship;
+  queryRelationship: Relationship;
 }): { where?: string; who: Array<string | undefined>; relationship: string } {
-  const { channelName, type, counterpart, author, fromMe, relationship } = args;
+  const { channelName, type, counterpart, author, fromMe, queryRelationship } = args;
   const where =
     type === "dm"
       ? counterpart && `DM with ${counterpart}`
@@ -175,7 +182,7 @@ function slackAttribution(args: {
   return {
     ...(where ? { where } : {}),
     who: type === "dm" ? [counterpart, fromMe ? undefined : author] : [author],
-    relationship,
+    relationship: fromMe ? "authored" : queryRelationship,
   };
 }
 
@@ -497,7 +504,7 @@ async function normalizeMatch(
       counterpart,
       author,
       fromMe,
-      relationship,
+      queryRelationship: relationship,
     }),
     extras: {
       // A DM's channel has no human name, so the counterpart is its label. Omitted
@@ -510,6 +517,8 @@ async function normalizeMatch(
       // participation, so most messages are theirs; without this the summarizer reads
       // the author of the user's own DM message as the person they were talking to.
       fromMe,
+      // The query family that surfaced the item, for the Summarizer to cluster on. The
+      // attribution's relationship is derived per message instead, so it can differ.
       relationship,
     },
   });
@@ -542,7 +551,7 @@ async function normalizeReply(
       counterpart,
       author,
       fromMe,
-      relationship,
+      queryRelationship: relationship,
     }),
     extras: {
       channel: { id: channelId, name: channel.name, type },
