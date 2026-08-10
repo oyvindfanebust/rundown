@@ -7,6 +7,6 @@ dist/
 *.local
 *.log
 .DS_Store
-# local agent tooling — vendored skills are reproducible via skills-lock.json + `npx skills add`
+# local agent tooling — the engineering skills are installed per-user, not per-repo
 .agents/
 .claude/
