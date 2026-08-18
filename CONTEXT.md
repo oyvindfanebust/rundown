@@ -309,7 +309,7 @@ reproduction of the Bundle. Shape: `{ kind, summary, when?, evidence }` (see
 - `when?` — optional, human-phrased timing ("Thu 9am", "due Fri"). Free-text, not a machine
   timestamp (there is no clean trusted linkage back to the sealed Bundle times), so it is
   approximate, not authoritative.
-- `evidence` — a list of `{ source, where?, who?, quote }` attributed snippets. The list is where
+- `evidence` — a list of `{ source, fingerprint?, where?, who?, quote }` attributed snippets. The list is where
   cross-source correlation surfaces (one item can cite a mail, a Slack thread, and an issue) without
   the Aggregator ever reading content. `quote` (verbatim source text, framed as quoted evidence) is
   the injection quarantine: an injected imperative in a meeting title lands there labeled as data.
@@ -319,6 +319,11 @@ reproduction of the Bundle. Shape: `{ kind, summary, when?, evidence }` (see
   [attribution](#attribution) across ([ADR-0005](docs/adr/0005-planning-layer.md) §4 amendment). So
   attribution cannot be fabricated — though it is still untrusted-derived, since the labels
   themselves are source bytes. A quote that cannot be placed in the item it cites is dropped.
+  `fingerprint` is the cited item's stable identity for cross-window dedup
+  ([ADR-0016](docs/adr/0016-evidence-fingerprint.md)): a 16-hex-char digest of
+  `source + kind + backend id`, computed by the normalizer and copied by code — equal
+  fingerprints across Briefs mean the same source item. A digest, not the backend id, so it
+  carries no source bytes and cannot be joined back to the backend object.
 
 The distinct typed fields — rather than one free-text blob — are deliberate: a leaked instruction
 arrives as "a quote from an email titled X", never a bare imperative (ADR-0004, the output-side

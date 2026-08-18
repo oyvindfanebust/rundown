@@ -17,6 +17,7 @@
 // Attribution (#54) is branded and compacted here too, so no source imports trust.ts
 // and the "who and where" invariant is spelled once rather than five times.
 
+import { createHash } from "node:crypto";
 import type { Attribution, NormalizedItem } from "../domain.ts";
 import { untrusted, untrustedOpt } from "../trust.ts";
 
@@ -111,6 +112,20 @@ function isSignal(v: unknown): boolean {
   return !(Array.isArray(v) && v.length === 0);
 }
 
+/**
+ * Stable identity for cross-window dedup (#108): a truncated SHA-256 of
+ * `source + kind + raw backend id`. A one-way digest of the untrusted id, computed
+ * here before branding, so the value that reaches the Brief is a trusted structural
+ * scalar carrying no backend bytes — the raw id itself never leaves the sealed
+ * pipeline, and evidence resolution copies the fingerprint without a new unwrap
+ * site. 16 hex chars (64 bits) is collision-safe at this scale. Deliberately keyed
+ * on identity only, never `timestamp`: a rescheduled or updated item must still
+ * dedup against its earlier appearance.
+ */
+function fingerprintOf(source: string, kind: string, rawId: string): string {
+  return createHash("sha256").update(`${source}\n${kind}\n${rawId}`).digest("hex").slice(0, 16);
+}
+
 function compactExtras(obj: Record<string, unknown>): Record<string, unknown> {
   const out: Record<string, unknown> = {};
   for (const [k, v] of Object.entries(obj)) if (isSignal(v)) out[k] = v;
@@ -164,11 +179,12 @@ export function normalizer(
     const extras = spec.extras === undefined ? undefined : compactExtras(spec.extras);
     const attribution =
       spec.attribution === undefined ? undefined : compactAttribution(spec.attribution);
+    const rawId = String(spec.id ?? "");
     const item: NormalizedItem = {
       source,
       kind: spec.kind,
       timestamp: instant(spec.timestamp, "timestamp", source),
-      id: untrusted(String(spec.id ?? "")),
+      id: untrusted(rawId),
       title: untrusted(text(spec.title) ?? untitled),
       url: untrustedOpt(spec.url),
       attribution: attribution === undefined ? undefined : untrusted(attribution),
@@ -176,6 +192,8 @@ export function normalizer(
     };
     if (spec.end !== undefined) item.end = instant(spec.end, "end", source);
     if (spec.dateOnly === true) item.dateOnly = true;
+    // No fingerprint for an absent id: a shared digest of "" would alias unrelated items.
+    if (rawId !== "") item.fingerprint = fingerprintOf(source, spec.kind, rawId);
     return item;
   };
 }

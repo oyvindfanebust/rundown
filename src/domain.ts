@@ -66,6 +66,14 @@ export interface NormalizedItem {
    * wrong local day (#106).
    */
   dateOnly?: boolean;
+  /**
+   * Stable identity for cross-window dedup (#108): a truncated SHA-256 of
+   * `source + kind + raw backend id`, computed by the normalizer. Trusted because it
+   * is a one-way digest — no backend bytes survive into it — and structural because
+   * rundown's own code derives it. Absent when the backend supplied no id. Same item
+   * in two Briefs → same fingerprint; that is its whole contract.
+   */
+  fingerprint?: string;
 
   // ── untrusted (backend content) — a hostile backend controls these bytes ──
   id: Untrusted<string>;

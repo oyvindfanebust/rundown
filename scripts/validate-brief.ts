@@ -34,6 +34,12 @@ for (const it of brief.items) {
   assert(KINDS.includes(it.kind), `item.kind must be one of ${KINDS.join("/")}`);
   assert(typeof it.summary === "string", "item.summary must be a string");
   assert(Array.isArray(it.evidence), "item.evidence must be an array");
+  for (const e of it.evidence) {
+    assert(
+      e.fingerprint === undefined || /^[0-9a-f]{16}$/.test(e.fingerprint),
+      "evidence.fingerprint must be 16 hex chars when present",
+    );
+  }
 }
 
 const pulled = brief.envelope.sources.reduce((n: number, s: any) => n + (s.itemCount ?? 0), 0);

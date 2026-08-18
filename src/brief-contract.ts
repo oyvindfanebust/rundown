@@ -87,6 +87,14 @@ export const WHO_MAX = 8;
  */
 export const BriefEvidence = z.strictObject({
   source: z.string(),
+  /**
+   * Stable identity of the cited source item (#108): a 16-hex-char digest, code-copied
+   * from the resolved item's structural `fingerprint`. Equal fingerprints across Briefs
+   * (or windows) mean the same source item — the consumer's mechanical dedup key. A
+   * digest, not the backend id: it carries no backend bytes and cannot be joined back
+   * to the source object. Absent when the backend supplied no id.
+   */
+  fingerprint: z.string().regex(/^[0-9a-f]{16}$/).optional(),
   /** Container label ("#flow-mgmt", "DM with Ada Lovelace", "Inbox"), when the source has an honest one. */
   where: z.string().max(LABEL_MAX).optional(),
   /** People involved, most salient first — so a clamp keeps the useful end. */
