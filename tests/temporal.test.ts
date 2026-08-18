@@ -1,5 +1,5 @@
 import { test, expect, describe } from "bun:test";
-import { parseWindowSelector, resolveSelector, WindowError } from "../src/temporal.ts";
+import { parseWindowSelector, resolveSelector, WindowError, zonedIso } from "../src/temporal.ts";
 
 describe("resolveSelector — span math", () => {
   const wed = new Date("2026-07-08T12:00:00Z"); // a Wednesday
@@ -132,5 +132,23 @@ describe("resolveSelector", () => {
     const a = resolveSelector(parseWindowSelector("2026-07-06..2026-07-12"), "UTC", new Date("2020-01-01T00:00:00Z"));
     const b = resolveSelector(parseWindowSelector("2026-07-06..2026-07-12"), "UTC", new Date("2030-01-01T00:00:00Z"));
     expect(a).toEqual(b);
+  });
+});
+
+describe("zonedIso", () => {
+  test("renders a UTC instant unchanged (zero offset → Z), fraction dropped", () => {
+    expect(zonedIso("2026-07-07T09:00:00.123Z", "UTC")).toBe("2026-07-07T09:00:00Z");
+  });
+
+  test("renders local wall time with an explicit positive offset", () => {
+    // Oslo is CEST (+02) in July.
+    expect(zonedIso("2026-07-07T08:00:00Z", "Europe/Oslo")).toBe("2026-07-07T10:00:00+02:00");
+    // …and CET (+01) in January — offset follows the instant, not the season of `now`.
+    expect(zonedIso("2026-01-07T08:00:00Z", "Europe/Oslo")).toBe("2026-01-07T09:00:00+01:00");
+  });
+
+  test("renders a negative offset, crossing the date boundary honestly", () => {
+    // New York is EDT (-04) in July; 02:00Z is still the previous local day.
+    expect(zonedIso("2026-07-07T02:00:00Z", "America/New_York")).toBe("2026-07-06T22:00:00-04:00");
   });
 });

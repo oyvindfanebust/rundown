@@ -254,12 +254,17 @@ export class LinearSource implements Source {
 function normalizeIssue(issue: LinearIssue, relationship: Relationship): NormalizedItem {
   // Open + dated → UTC end-of-day anchor (future=upcoming, overdue=standing/recent);
   // everything else (undated, recently-updated, completed) → updatedAt.
-  const timestamp =
-    isOpen(issue) && issue.dueDate ? dueDateInstant(issue.dueDate) : issue.updatedAt ?? issue.dueDate ?? "";
+  const dueAnchored = Boolean(isOpen(issue) && issue.dueDate);
+  const timestamp = dueAnchored
+    ? dueDateInstant(issue.dueDate!)
+    : issue.updatedAt ?? issue.dueDate ?? "";
   const labels = (issue.labels?.nodes ?? []).map((l) => l.name).filter((n): n is string => Boolean(n));
   return normalize({
     kind: "issue",
     timestamp,
+    // The anchor encodes a bare due DATE; without this it renders as a wall time
+    // and an offset shift can land it on the wrong local day.
+    dateOnly: dueAnchored,
     id: issue.id,
     title: issue.title,
     url: issue.url,

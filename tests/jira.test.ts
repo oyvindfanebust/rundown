@@ -208,11 +208,13 @@ describe("JiraSource.read mapping", () => {
     const item = byId(items, "due")!;
     expect(item.timestamp).toBe("2026-07-20T23:59:59Z");
     expect(item.end).toBeUndefined();
+    expect(item.dateOnly).toBe(true); // the anchor encodes a bare date (#106)
   });
 
   test("open + undated → timestamp = updated", async () => {
     const items = await source(fakeTransport({ assigned: { standing: [issue({ id: "nodue" })] } })).read(WINDOW);
     expect(byId(items, "nodue")!.timestamp).toBe("2026-07-10T00:00:00.000Z");
+    expect(byId(items, "nodue")!.dateOnly).toBeUndefined();
   });
 
   test("done issue uses updated even when it has a duedate", async () => {

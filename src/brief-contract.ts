@@ -100,7 +100,11 @@ export const BriefEvidence = z.strictObject({
 export const ExtractedItem = z.strictObject({
   kind: z.enum(KINDS),
   summary: z.string().max(500),
-  /** Optional, human-phrased timing ("Thu 9am", "due Fri") — approximate, not authoritative. */
+  /**
+   * Optional, human-phrased timing ("Thu 9am", "due Fri") — approximate, not
+   * authoritative. Phrased in the envelope's `timezone`: bundle timestamps are
+   * rendered to the model in that zone with explicit offsets (#106).
+   */
   when: z.string().max(100).optional(),
   evidence: z.array(Evidence),
 });

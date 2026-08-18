@@ -130,6 +130,7 @@ describe("LinearSource.read mapping", () => {
     const item = byId(items, "due")!;
     expect(item.timestamp).toBe("2026-07-20T23:59:59Z");
     expect(item.end).toBeUndefined();
+    expect(item.dateOnly).toBe(true); // the anchor encodes a bare date (#106)
   });
 
   test("open + undated → timestamp = updatedAt", async () => {
@@ -137,6 +138,7 @@ describe("LinearSource.read mapping", () => {
       fakeTransport({ assigned: { standing: [issue({ id: "nodue" })] } }),
     ).read(WINDOW);
     expect(byId(items, "nodue")!.timestamp).toBe("2026-07-10T00:00:00.000Z");
+    expect(byId(items, "nodue")!.dateOnly).toBeUndefined();
   });
 
   test("completed issue uses updatedAt even when it has a dueDate", async () => {

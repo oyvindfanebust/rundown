@@ -152,6 +152,8 @@ async function readCalendar(fetchJson: FetchJson, token: string, window: Window)
       kind: "event",
       timestamp: start,
       end: toInstant(e.end),
+      // All-day bounds are UTC midnights encoding calendar dates, not clock times.
+      dateOnly: e.isAllDay === true,
       id: e.id,
       title: e.subject,
       url: e.webLink,
