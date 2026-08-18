@@ -692,3 +692,40 @@ describe("renderBundle — timezone (#106)", () => {
     expect(rendered).not.toContain("2026-07-11");
   });
 });
+
+describe("plan — evidence fingerprint (#108)", () => {
+  const output: SummarizerOutput = {
+    summary: "One meeting.",
+    items: [
+      {
+        kind: "commitment",
+        summary: "Board meeting",
+        evidence: [{ ref: 1, quote: "Board meeting" }],
+      },
+    ],
+  };
+
+  test("copies the cited item's fingerprint into the resolved entry, stable across runs", async () => {
+    const fingerprinted = { ...item, fingerprint: "0123456789abcdef" };
+    const first = await plan(bundle([fingerprinted]), CTX, fakeSummarizer(output));
+    const second = await plan(bundle([fingerprinted]), CTX, fakeSummarizer(output));
+    expect(first.items[0]!.evidence[0]!.fingerprint).toBe("0123456789abcdef");
+    // The dedup contract: same source item in two Briefs → equal fingerprints.
+    expect(second.items[0]!.evidence[0]!.fingerprint).toBe(
+      first.items[0]!.evidence[0]!.fingerprint!,
+    );
+  });
+
+  test("omits the field when the cited item has no fingerprint", async () => {
+    const brief = await plan(bundle([item]), CTX, fakeSummarizer(output));
+    expect(brief.items[0]!.evidence[0]!.fingerprint).toBeUndefined();
+    expect("fingerprint" in brief.items[0]!.evidence[0]!).toBe(false);
+  });
+
+  test("the model cannot supply a fingerprint — it is not in the Summarizer's schema", async () => {
+    const { summarize, calls } = fakeSummarizer(output);
+    await plan(bundle([{ ...item, fingerprint: "0123456789abcdef" }]), CTX, { summarize });
+    // Never rendered to the model either: the digest is not in the bundle data.
+    expect(calls[0]!.data).not.toContain("0123456789abcdef");
+  });
+});

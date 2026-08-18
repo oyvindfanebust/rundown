@@ -250,3 +250,34 @@ describe("text", () => {
     expect(text(undefined)).toBeUndefined();
   });
 });
+
+describe("fingerprint (#108)", () => {
+  const spec = { kind: "event", timestamp: "2026-07-08T09:00:00Z", title: "T" };
+
+  test("deterministic: same source + kind + id → same 16-hex digest across calls", () => {
+    const a = normalizer("graph")({ ...spec, id: "e1" });
+    const b = normalizer("graph")({ ...spec, id: "e1", timestamp: "2026-07-09T09:00:00Z" });
+    expect(a.fingerprint).toMatch(/^[0-9a-f]{16}$/);
+    // Identity, not version: a different timestamp does not change the fingerprint.
+    expect(b.fingerprint).toBe(a.fingerprint!);
+  });
+
+  test("discriminates by source and by kind, not just by raw id", () => {
+    const graph = normalizer("graph")({ ...spec, id: "1" });
+    const linear = normalizer("linear")({ ...spec, kind: "issue", id: "1" });
+    const message = normalizer("graph")({ ...spec, kind: "message", id: "1" });
+    expect(new Set([graph.fingerprint, linear.fingerprint, message.fingerprint]).size).toBe(3);
+  });
+
+  test("omitted when the backend supplied no id — no shared sentinel digest", () => {
+    expect(normalizer("s")({ ...spec, id: undefined }).fingerprint).toBeUndefined();
+    expect(normalizer("s")({ ...spec, id: null }).fingerprint).toBeUndefined();
+    expect(normalizer("s")({ ...spec, id: "" }).fingerprint).toBeUndefined();
+  });
+
+  test("numeric ids fingerprint via the same String() coercion the branded id gets", () => {
+    const numeric = normalizer("s")({ ...spec, id: 7 });
+    const string = normalizer("s")({ ...spec, id: "7" });
+    expect(numeric.fingerprint).toBe(string.fingerprint!);
+  });
+});

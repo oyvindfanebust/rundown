@@ -325,6 +325,10 @@ function resolveEvidence(items: ExtractedItem[], rendered: RenderedBundle): Brie
         const attribution = cited.item.attribution ? unwrap(cited.item.attribution) : undefined;
         evidence.push({
           source: `${cited.item.source}/${cited.item.kind}`,
+          // Trusted structural digest (#108) — copied, never unwrapped, never model-read.
+          ...(cited.item.fingerprint !== undefined
+            ? { fingerprint: cited.item.fingerprint }
+            : {}),
           ...(attribution?.where !== undefined
             ? { where: attribution.where.slice(0, LABEL_MAX) }
             : {}),
