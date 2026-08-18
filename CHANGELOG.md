@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.10.0](https://github.com/oyvindfanebust/rundown/compare/v0.9.0...v0.10.0) (2026-08-18)
+
+
+### Features
+
+* stable evidence fingerprints for cross-window dedup ([#112](https://github.com/oyvindfanebust/rundown/issues/112)) ([3400005](https://github.com/oyvindfanebust/rundown/commit/3400005d921d3c4e017661f3c6eebbf8d64c4567)), closes [#108](https://github.com/oyvindfanebust/rundown/issues/108)
+
+
+### Bug Fixes
+
+* anchor Brief times to the user's timezone ([#109](https://github.com/oyvindfanebust/rundown/issues/109)) ([c311e8e](https://github.com/oyvindfanebust/rundown/commit/c311e8ef68d35e88ca1eb42308b113ebe3c866bf)), closes [#106](https://github.com/oyvindfanebust/rundown/issues/106)
+
 ## [0.9.0](https://github.com/oyvindfanebust/rundown/compare/v0.8.0...v0.9.0) (2026-08-07)
 
 
