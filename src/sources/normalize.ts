@@ -80,6 +80,8 @@ export interface ItemSpec {
   kind: string;
   timestamp: string;
   end?: string;
+  /** The instants encode a calendar date, not a clock time (all-day event, due-date anchor). */
+  dateOnly?: boolean;
   id: string | number | null | undefined;
   title: string | null | undefined;
   url?: string;
@@ -173,6 +175,7 @@ export function normalizer(
       extras: extras && Object.keys(extras).length > 0 ? untrusted(extras) : undefined,
     };
     if (spec.end !== undefined) item.end = instant(spec.end, "end", source);
+    if (spec.dateOnly === true) item.dateOnly = true;
     return item;
   };
 }

@@ -24,9 +24,14 @@ function fakeSummarizer(output: SummarizerOutput = CANNED) {
 
 const window = { from: "2026-07-06T00:00:00.000Z", to: "2026-07-13T00:00:00.000Z" };
 
+// The trusted planning context most tests share; UTC keeps rendered instants
+// byte-identical to the fixtures' `Z` timestamps.
+const CTX = { windowIsPast: false, timezone: "UTC" };
+const PAST_CTX = { windowIsPast: true, timezone: "UTC" };
+
 // renderBundle returns {data, index} (the ref index feeds evidence resolution, #54);
 // these tests assert on the rendered text.
-const renderText = (b: Bundle) => renderBundle(b).data;
+const renderText = (b: Bundle) => renderBundle(b, "UTC").data;
 
 function bundle(items: Bundle["items"]): Bundle {
   return { window, sources: [{ source: "graph", itemCount: items.length }], items };
@@ -116,7 +121,7 @@ describe("renderBundle — length caps", () => {
 describe("plan", () => {
   test("short-circuits an empty bundle with no model call", async () => {
     const { summarize, calls } = fakeSummarizer();
-    const brief = await plan(bundle([]), false, undefined, { summarize });
+    const brief = await plan(bundle([]), CTX, { summarize });
     expect(brief.summary).toBe("");
     expect(brief.items).toEqual([]);
     expect(brief.envelope.sources).toEqual([{ source: "graph", itemCount: 0 }]);
@@ -136,38 +141,38 @@ describe("plan", () => {
           title: untrusted("Board meeting"),
         },
       ]),
-      false,
-      undefined,
+      CTX,
       { summarize },
     );
     expect(brief.envelope.window).toEqual(window);
+    expect(brief.envelope.timezone).toBe("UTC");
     expect(brief.summary).toContain("meeting");
     expect(brief.items[0]!.kind).toBe("commitment");
   });
 
   test("maps windowIsPast=false to the planning task", async () => {
     const { summarize, calls } = fakeSummarizer();
-    await plan(bundle([item]), false, undefined, { summarize });
+    await plan(bundle([item]), CTX, { summarize });
     expect(calls[0]!.instructions).toContain("plan my week");
   });
 
   test("maps windowIsPast=true to the retrospective task", async () => {
     const { summarize, calls } = fakeSummarizer();
-    await plan(bundle([item]), true, undefined, { summarize });
+    await plan(bundle([item]), PAST_CTX, { summarize });
     expect(calls[0]!.instructions).toContain("look-back");
     expect(calls[0]!.instructions).toContain("retrospective");
   });
 
   test("appends user guidance to the task instructions", async () => {
     const { summarize, calls } = fakeSummarizer();
-    await plan(bundle([item]), false, "focus on the launch", { summarize });
+    await plan(bundle([item]), { ...CTX, guidance: "focus on the launch" }, { summarize });
     expect(calls[0]!.instructions).toContain("Additional guidance from the user:");
     expect(calls[0]!.instructions).toContain("focus on the launch");
   });
 
   test("renders the bundle into the Summarizer's untrusted data string", async () => {
     const { summarize, calls } = fakeSummarizer();
-    await plan(bundle([item]), false, undefined, { summarize });
+    await plan(bundle([item]), CTX, { summarize });
     expect(calls[0]!.data).toContain("title: Board meeting");
   });
 });
@@ -204,7 +209,7 @@ describe("plan — defang transform", () => {
 
   test("strips markdown image/link wrappers to visible text and neutralizes bare URLs everywhere", async () => {
     const { summarize } = fakeSummarizer(HOSTILE);
-    const brief = await plan(bundle([hostileItem]), false, undefined, { summarize });
+    const brief = await plan(bundle([hostileItem]), CTX, { summarize });
 
     expect(brief.summary).toBe("Status:  all good.");
     expect(brief.summary).not.toContain("https://");
@@ -226,7 +231,7 @@ describe("plan — defang transform", () => {
       items: [],
     };
     const { summarize } = fakeSummarizer(output);
-    const brief = await plan(bundle([item]), false, undefined, { summarize });
+    const brief = await plan(bundle([item]), CTX, { summarize });
     expect(brief.summary).toBe("See hxxps://Evil.Example and hxxp://other.example for details.");
   });
 
@@ -243,7 +248,7 @@ describe("plan — defang transform", () => {
       ],
     };
     const { summarize } = fakeSummarizer(output);
-    const brief = await plan(bundle([item]), false, undefined, { summarize });
+    const brief = await plan(bundle([item]), CTX, { summarize });
 
     expect(brief.summary).toBe(output.summary);
     expect(brief.items[0]!.summary).toBe(output.items[0]!.summary);
@@ -281,7 +286,7 @@ describe("plan — evidence-quote verification", () => {
       ],
     };
     const { summarize } = fakeSummarizer(output);
-    const brief = await plan(bundle([verifyItem]), false, undefined, { summarize });
+    const brief = await plan(bundle([verifyItem]), CTX, { summarize });
 
     // The item survives even though one evidence entry was dropped.
     expect(brief.items).toHaveLength(1);
@@ -331,7 +336,7 @@ describe("plan — evidence-quote verification", () => {
         ],
       };
       const { summarize } = fakeSummarizer(output);
-      const brief = await plan(bundle([first, second]), false, undefined, { summarize });
+      const brief = await plan(bundle([first, second]), CTX, { summarize });
 
       expect(brief.items[0]!.evidence).toEqual([
         {
@@ -381,7 +386,7 @@ describe("plan — evidence-quote verification", () => {
         ],
       };
       const { summarize } = fakeSummarizer(output);
-      const brief = await plan(bundle([dm, reply]), false, undefined, { summarize });
+      const brief = await plan(bundle([dm, reply]), CTX, { summarize });
 
       const [incoming, outgoing] = brief.items[0]!.evidence;
       expect(incoming!.relationship).toBe("dms");
@@ -416,7 +421,7 @@ describe("plan — evidence-quote verification", () => {
         ],
       };
       const { summarize } = fakeSummarizer(output);
-      const brief = await plan(bundle([issue]), false, undefined, { summarize });
+      const brief = await plan(bundle([issue]), CTX, { summarize });
 
       expect(brief.items[0]!.evidence).toEqual([
         {
@@ -441,7 +446,7 @@ describe("plan — evidence-quote verification", () => {
         ],
       };
       const { summarize } = fakeSummarizer(output);
-      const brief = await plan(bundle([first, second]), false, undefined, { summarize });
+      const brief = await plan(bundle([first, second]), CTX, { summarize });
 
       const entry = brief.items[0]!.evidence[0]!;
       expect(entry.relationship).toBeUndefined();
@@ -467,7 +472,7 @@ describe("plan — evidence-quote verification", () => {
         ],
       };
       const { summarize } = fakeSummarizer(output);
-      const brief = await plan(bundle([hostile]), false, undefined, { summarize });
+      const brief = await plan(bundle([hostile]), CTX, { summarize });
 
       const relationship = brief.items[0]!.evidence[0]!.relationship!;
       expect(relationship).not.toContain("https://");
@@ -499,7 +504,7 @@ describe("plan — evidence-quote verification", () => {
         ],
       };
       const { summarize } = fakeSummarizer(output);
-      const brief = await plan(bundle([crowded]), false, undefined, { summarize });
+      const brief = await plan(bundle([crowded]), CTX, { summarize });
 
       const who = brief.items[0]!.evidence[0]!.who!;
       expect(who).toHaveLength(8);
@@ -525,7 +530,7 @@ describe("plan — evidence-quote verification", () => {
         ],
       };
       const { summarize } = fakeSummarizer(output);
-      const brief = await plan(bundle([wordy]), false, undefined, { summarize });
+      const brief = await plan(bundle([wordy]), CTX, { summarize });
 
       const entry = brief.items[0]!.evidence[0]!;
       expect(entry.who).toEqual(["N".repeat(120)]);
@@ -546,7 +551,7 @@ describe("plan — evidence-quote verification", () => {
         ],
       };
       const { summarize } = fakeSummarizer(output);
-      const brief = await plan(bundle([first, second]), false, undefined, { summarize });
+      const brief = await plan(bundle([first, second]), CTX, { summarize });
 
       expect(brief.items).toHaveLength(1); // the item survives, its evidence does not
       expect(brief.items[0]!.evidence).toEqual([]);
@@ -568,7 +573,7 @@ describe("plan — evidence-quote verification", () => {
         ],
       };
       const { summarize } = fakeSummarizer(output);
-      const brief = await plan(bundle([first, second]), false, undefined, { summarize });
+      const brief = await plan(bundle([first, second]), CTX, { summarize });
 
       expect(brief.items[0]!.evidence).toEqual([]);
     });
@@ -580,7 +585,7 @@ describe("plan — evidence-quote verification", () => {
         items: [{ kind: "fyi", summary: "x", evidence: [{ ref: 1, quote: "Sounds good" }] }],
       };
       const { summarize } = fakeSummarizer(output);
-      const brief = await plan(bundle([bare]), false, undefined, { summarize });
+      const brief = await plan(bundle([bare]), CTX, { summarize });
 
       expect(brief.items[0]!.evidence).toEqual([{ source: "slack/message", quote: "Sounds good" }]);
     });
@@ -589,17 +594,101 @@ describe("plan — evidence-quote verification", () => {
     // standing → recent → upcoming — so numbering crosses bucket-section boundaries.
     test("numbers items across buckets in render order, not per bucket", async () => {
       const standing = { ...second, bucket: "standing" as const, title: untrusted("Standing item") };
-      const rendered = renderBundle(bundle([first, standing]));
+      const rendered = renderBundle(bundle([first, standing]), "UTC");
       expect(rendered.data).toContain("- [1] [graph/message]"); // standing renders first
       expect(rendered.data).toContain("- [2] [slack/message]");
       expect(unwrap(rendered.index.get(1)!.item.title)).toBe("Standing item");
     });
 
     test("renders attribution for the model alongside extras", () => {
-      const rendered = renderBundle(bundle([first]));
+      const rendered = renderBundle(bundle([first]), "UTC");
       expect(rendered.data).toContain("  where: #flow-mgmt");
       expect(rendered.data).toContain("  who: Ada Lovelace");
       expect(rendered.data).toContain("  relationship: mentions");
     });
+  });
+});
+
+describe("renderBundle — timezone (#106)", () => {
+  test("renders instants as local wall time with an explicit offset, and names the zone", () => {
+    const rendered = renderBundle(
+      bundle([
+        {
+          source: "graph",
+          kind: "event",
+          timestamp: "2026-07-07T08:00:00Z",
+          end: "2026-07-07T09:00:00Z",
+          bucket: "recent",
+          id: untrusted("1"),
+          title: untrusted("Board meeting"),
+        },
+      ]),
+      "Europe/Oslo",
+    ).data;
+    expect(rendered).toContain("Tue 2026-07-07T10:00:00+02:00 – 2026-07-07T11:00:00+02:00");
+    expect(rendered).toContain("(times shown in Europe/Oslo)");
+    // The window line is zoned too.
+    expect(rendered).toContain("Window: 2026-07-06T02:00:00+02:00 to 2026-07-13T02:00:00+02:00");
+  });
+
+  test("a date-only item renders as its UTC calendar date, not an offset-shifted instant", () => {
+    const rendered = renderBundle(
+      bundle([
+        {
+          source: "graph",
+          kind: "event",
+          timestamp: "2026-07-07T00:00:00Z",
+          end: "2026-07-08T00:00:00Z",
+          dateOnly: true,
+          bucket: "recent",
+          id: untrusted("1"),
+          title: untrusted("Offsite"),
+        },
+      ]),
+      // Negative offset is the hazard: naive conversion would land on 2026-07-06.
+      "America/New_York",
+    ).data;
+    expect(rendered).toContain("Tue 2026-07-07");
+    expect(rendered).not.toContain("2026-07-06");
+    expect(rendered).not.toContain("2026-07-07T");
+  });
+
+  test("a multi-day date-only item renders an inclusive date range", () => {
+    const rendered = renderBundle(
+      bundle([
+        {
+          source: "graph",
+          kind: "event",
+          timestamp: "2026-07-07T00:00:00Z",
+          end: "2026-07-10T00:00:00Z", // exclusive bound → last day is the 9th
+          dateOnly: true,
+          bucket: "recent",
+          id: untrusted("1"),
+          title: untrusted("Conference"),
+        },
+      ]),
+      "Europe/Oslo",
+    ).data;
+    expect(rendered).toContain("Tue 2026-07-07 – Thu 2026-07-09");
+  });
+
+  test("a due-date anchor renders as its calendar date in a positive-offset zone", () => {
+    const rendered = renderBundle(
+      bundle([
+        {
+          source: "linear",
+          kind: "issue",
+          timestamp: "2026-07-10T23:59:59Z", // synthetic end-of-day due-date anchor
+          dateOnly: true,
+          bucket: "upcoming",
+          id: untrusted("1"),
+          title: untrusted("Ship the report"),
+        },
+      ]),
+      // Positive offset is the hazard here: naive conversion would land on Sat the 11th.
+      "Europe/Oslo",
+    ).data;
+    expect(rendered).toContain("Fri 2026-07-10");
+    expect(rendered).not.toContain("2026-07-11");
   });
 });

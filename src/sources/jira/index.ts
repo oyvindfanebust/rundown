@@ -466,10 +466,14 @@ function normalizeIssue(issue: JiraIssue, relationship: Relationship, origin: st
   const duedate = f.duedate ?? undefined;
   // Open + dated → UTC end-of-day anchor (future=upcoming, overdue=standing/recent);
   // everything else (undated, recently-updated, done) → updated. Mirrors Linear.
-  const timestamp = isOpen(issue) && duedate ? dueDateInstant(duedate) : f.updated ?? "";
+  const dueAnchored = Boolean(isOpen(issue) && duedate);
+  const timestamp = dueAnchored ? dueDateInstant(duedate!) : f.updated ?? "";
   return normalize({
     kind: "issue",
     timestamp,
+    // The anchor encodes a bare due DATE; without this it renders as a wall time
+    // and an offset shift can land it on the wrong local day. Mirrors Linear.
+    dateOnly: dueAnchored,
     id: issue.id,
     title: f.summary,
     // There is no permalink field; construct it from the site + key (ADR-0013 §4).

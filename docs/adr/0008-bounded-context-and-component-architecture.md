@@ -39,7 +39,7 @@ Inside the context are four components, named by role:
 | Sources | `read(window) → NormalizedItem[]` per source | read-only adapters, one per backend/auth boundary; a registry maps name → source |
 | Aggregator | `aggregate(window, selection) → Bundle` | pulls the selected sources concurrently, merges/buckets/sorts into one Bundle; a pure mechanism that never reads content |
 | Summarizer | `summarize({instructions, data, schema}) → structured` | the tool-less model call; the sole point untrusted content meets a model; owns the security invariants |
-| Planner | `plan(bundle, windowIsPast, guidance) → Brief` | the plan-my-week task; renders the Bundle into the prompt (the sole `Untrusted<T>` unwrap site) and attaches the trusted envelope |
+| Planner | `plan(bundle, {windowIsPast, timezone, guidance}) → Brief` | the plan-my-week task; renders the Bundle into the prompt (the sole `Untrusted<T>` unwrap site) and attaches the trusted envelope |
 
 Three things are not components. They are code that exists beside the pipeline rather than in it —
 composition-root plumbing, or in self-update's case a behavior that runs alongside whatever command

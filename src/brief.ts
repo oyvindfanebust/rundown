@@ -50,5 +50,9 @@ export async function buildBrief(opts: BuildBriefOptions = {}): Promise<Brief> {
   } else {
     progress(`Aggregated ${total} item(s); summarizing with Claude (this can take a bit)…`);
   }
-  return plan(bundle, config.windowIsPast, config.guidance);
+  return plan(bundle, {
+    windowIsPast: config.windowIsPast,
+    timezone: config.timezone,
+    guidance: config.guidance,
+  });
 }

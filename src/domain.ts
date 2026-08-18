@@ -58,6 +58,14 @@ export interface NormalizedItem {
   timestamp: string;
   /** Optional interval end (events, sessions). */
   end?: string;
+  /**
+   * `timestamp`/`end` encode a calendar date, not a clock time — an all-day event's
+   * UTC-midnight bounds, a due date's synthetic end-of-day anchor. Set by the source
+   * module (a domain judgment, not backend bytes); the renderer shows the UTC
+   * calendar date instead of an offset-shifted wall time, which would land on the
+   * wrong local day (#106).
+   */
+  dateOnly?: boolean;
 
   // ── untrusted (backend content) — a hostile backend controls these bytes ──
   id: Untrusted<string>;
@@ -103,10 +111,13 @@ export interface Bundle {
 /**
  * The Planner's output: a trusted envelope around an untrusted-derived core
  * (ADR-0005 §2). The Summarizer emits only `{summary, items}`; the Planner
- * attaches the `envelope` by copying the Bundle's trusted scalars.
+ * attaches the `envelope` by copying the Bundle's trusted scalars plus the run's
+ * timezone. `timezone` is the IANA zone bundle timestamps were rendered in for the
+ * Summarizer — the zone the model's `when` phrasing is anchored to — so a consumer
+ * never has to guess what clock a Brief speaks (#106).
  */
 export interface Brief {
-  envelope: { window: Window; sources: SourceManifestEntry[] };
+  envelope: { window: Window; sources: SourceManifestEntry[]; timezone: string };
   summary: string;
   items: BriefItem[];
 }

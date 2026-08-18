@@ -275,8 +275,10 @@ refusals. A retry re-issues the same sealed call, adding no new leak path.
 The [Planner](#planner)'s output: `{ envelope, summary, items }` (see
 [ADR-0005](docs/adr/0005-planning-layer.md) §2). It is a structured content contract
 (JSON-shaped), not a formatted document; the consuming agent owns all presentation. `envelope` is
-`{ window, sources }`, copied straight from the [Bundle](#bundle)'s trusted scalars and never
-laundered through the model. `summary` is a single untrusted-derived prose synthesis. `items` is a
+`{ window, sources, timezone }` — window and manifest copied straight from the
+[Bundle](#bundle)'s trusted scalars, `timezone` the run's validated IANA zone from config (the
+zone bundle timestamps were rendered in for the summarizer, so a consumer knows which clock
+`when` speaks) — never laundered through the model. `summary` is a single untrusted-derived prose synthesis. `items` is a
 list of [ExtractedItems](#extracteditem). The summarizer emits only `{summary, items}` (that pair
 is its structured-output schema); the Planner attaches the envelope. The Brief's output contract —
 the `{summary, items}` schema, the fixed `kind` enum, and the `Evidence`/`ExtractedItem` shape —

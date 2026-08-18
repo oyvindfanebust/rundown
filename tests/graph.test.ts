@@ -153,6 +153,23 @@ describe("GraphSource.read calendar", () => {
     // `location` is a physical place, not the thing the item lives in, and a calendar
     // title describes itself. Organizer leads `who`; attendees are context.
     expect(item.attribution).toEqual(untrusted({ who: ["Alice", "Bob"] }));
+    expect(item.dateOnly).toBeUndefined(); // timed event — instants are clock times
+  });
+
+  test("an all-day event is marked dateOnly — its UTC midnights encode dates (#106)", async () => {
+    const { fetchJson } = fakeFetch({
+      calendar: {
+        value: [
+          event({
+            isAllDay: true,
+            start: { dateTime: "2026-07-08T00:00:00.0000000" },
+            end: { dateTime: "2026-07-09T00:00:00.0000000" },
+          }),
+        ],
+      },
+    });
+    const items = await graphSource({ fetchJson }, { kinds: ["event"] }).read(WINDOW);
+    expect(byId(items, "e1")!.dateOnly).toBe(true);
   });
 
   test("empty attendee list vanishes — presence is signal (accepted delta)", async () => {

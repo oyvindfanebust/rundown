@@ -31,7 +31,9 @@ describe("brief quality evals (live model)", () => {
       fixture.name,
       async () => {
         const briefs = await Promise.all(
-          Array.from({ length: RUNS_PER_FIXTURE }, () => plan(fixture.bundle, fixture.windowIsPast)),
+          Array.from({ length: RUNS_PER_FIXTURE }, () =>
+            plan(fixture.bundle, { windowIsPast: fixture.windowIsPast, timezone: "UTC" }),
+          ),
         );
         const failures: string[] = [];
         briefs.forEach((brief, i) => {

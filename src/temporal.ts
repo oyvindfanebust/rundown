@@ -69,6 +69,36 @@ function tzOffsetMinutes(tz: string, at: Date): number {
   return sign * (Number(match[2]) * 60 + Number(match[3]));
 }
 
+/**
+ * Render an ISO instant as the local wall time in `tz`, ISO-8601 with an explicit
+ * offset (`2026-08-18T10:00:00+02:00`; zero offset renders `Z`). Fractions are
+ * dropped — wall-clock readability is the point, sub-second precision is not.
+ * This is what makes every timestamp the Summarizer sees self-describing: a bare
+ * UTC instant rendered without a marker reads as local time and skews silently
+ * (#106).
+ */
+export function zonedIso(instant: string, tz: string): string {
+  const at = new Date(instant);
+  const off = tzOffsetMinutes(tz, at);
+  const wall = new Date(at.getTime() + off * 60_000).toISOString().slice(0, 19);
+  if (off === 0) return `${wall}Z`;
+  const sign = off < 0 ? "-" : "+";
+  const abs = Math.abs(off);
+  const pad = (n: number) => String(n).padStart(2, "0");
+  return `${wall}${sign}${pad(Math.floor(abs / 60))}:${pad(abs % 60)}`;
+}
+
+/**
+ * Short weekday name ("Tue") of an instant's local date in `tz`. Rendered next to
+ * zoned timestamps so a reader (the Summarizer included) never derives day-of-week
+ * from a bare date — observed live to miscount (#106).
+ */
+export function zonedWeekday(instant: string, tz: string): string {
+  return new Intl.DateTimeFormat("en-US", { timeZone: tz, weekday: "short" }).format(
+    new Date(instant),
+  );
+}
+
 /** The absolute instant of local midnight on `ymd` in `tz`. */
 function zonedMidnight(tz: string, ymd: Ymd): string {
   const approx = new Date(Date.UTC(ymd.y, ymd.m - 1, ymd.d, 0, 0));

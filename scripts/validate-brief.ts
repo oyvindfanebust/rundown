@@ -26,6 +26,7 @@ function assert(cond: unknown, msg: string): void {
 
 assert(brief.envelope?.window?.from && brief.envelope?.window?.to, "envelope.window missing");
 assert(Array.isArray(brief.envelope?.sources), "envelope.sources missing");
+assert(typeof brief.envelope?.timezone === "string", "envelope.timezone missing");
 assert(typeof brief.summary === "string", "summary must be a string");
 assert(Array.isArray(brief.items), "items must be an array");
 
