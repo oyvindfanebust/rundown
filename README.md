@@ -227,7 +227,7 @@ only `timezone`, `window`, `sources` (selection = presence; the one mandatory fi
 `suppress` drops recurring non-task noise before the model sees it — deterministic, unlike
 `guidance`. Each rule matches by `sender` and/or `title` (case-insensitive substring), or by
 `series` — the `seriesFingerprint` a Brief's evidence shows for any occurrence of a recurring
-calendar event. Criteria within a rule AND together; rules OR; an optional `source` key scopes a
+calendar event or any message in a mail thread. Criteria within a rule AND together; rules OR; an optional `source` key scopes a
 rule to one source. The Brief's envelope carries a `suppressed` audit (the rule, a count, and the
 suppressed items' fingerprints) for every rule that fired, so nothing disappears silently:
 

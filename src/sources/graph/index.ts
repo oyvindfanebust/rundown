@@ -60,8 +60,13 @@ export interface GraphDeps {
  */
 function graphGet(debug: DebugSink = noDebug): FetchJson {
   return async (token: string, url: string): Promise<any> => {
+    // IdType="ImmutableId" (ADR-0018): backend ids survive folder moves, so a mail
+    // item's fingerprint is durable across inbox → archive.
     const r = await fetch(url, {
-      headers: { Authorization: `Bearer ${token}`, Prefer: 'outlook.timezone="UTC"' },
+      headers: {
+        Authorization: `Bearer ${token}`,
+        Prefer: 'outlook.timezone="UTC", IdType="ImmutableId"',
+      },
     });
     const u = new URL(url);
     debug({ kind: "http", source: "graph", method: "GET", host: u.host, pathShape: u.pathname, status: r.status });
@@ -100,6 +105,7 @@ interface GraphEvent {
 }
 interface GraphMessage {
   id?: string;
+  conversationId?: string;
   subject?: string;
   from?: { emailAddress?: GraphEmailAddress };
   toRecipients?: { emailAddress?: GraphEmailAddress }[];
@@ -202,7 +208,7 @@ async function readMailFolder(
 ): Promise<NormalizedItem[]> {
   const messages = (await paginate(fetchJson, token, `/me/mailFolders/${folder}/messages`, {
     $filter: `${timeField} ge ${window.from} and ${timeField} lt ${window.to}`,
-    $select: `id,subject,from,toRecipients,${timeField},bodyPreview,importance,isRead,webLink`,
+    $select: `id,conversationId,subject,from,toRecipients,${timeField},bodyPreview,importance,isRead,webLink`,
     $orderby: timeField,
     $top: "50",
   })) as GraphMessage[];
@@ -220,6 +226,10 @@ async function readMailFolder(
       // `sender` suppression rule (#107) matches either, and the address is the
       // stable one ("GitHub" vs notifications@github.com). Branded, never rendered.
       sender: m.from?.emailAddress?.address,
+      // Thread identity (ADR-0018): a conversation's messages share this group id, so
+      // consumers can group a thread from evidence and a `series` rule can mute one.
+      // Like seriesMasterId, only the digest survives.
+      seriesId: m.conversationId,
       // Mail's wording for the uniform slot (#54). `extras.folder` is a DIRECTION
       // ("inbox"/"sent"), not a folder name, so it is written out as a reader-facing
       // label rather than passed through. `who` leads with whoever is not the user:

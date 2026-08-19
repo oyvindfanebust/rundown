@@ -89,8 +89,9 @@ export interface ItemSpec {
   /** Sender address on message-like items — branded, never rendered (see NormalizedItem). */
   sender?: string | null;
   /**
-   * The backend's recurring-series id, when the item is an occurrence of one. Only
-   * its digest survives (`seriesFingerprint`); the raw id never leaves the normalizer.
+   * The backend's recurring-group id, when the item belongs to one — a calendar
+   * series' master id, a mail thread's conversation id. Only its digest survives
+   * (`seriesFingerprint`); the raw id never leaves the normalizer.
    */
   seriesId?: string | null;
   /**
@@ -202,10 +203,11 @@ export function normalizer(
     if (spec.dateOnly === true) item.dateOnly = true;
     // No fingerprint for an absent id: a shared digest of "" would alias unrelated items.
     if (rawId !== "") item.fingerprint = fingerprintOf(source, spec.kind, rawId);
-    // Series identity (#107): a fixed "event-series" kind component, so an occurrence's
-    // seriesFingerprint never collides with any per-item fingerprint namespace.
+    // Group identity (#107, ADR-0018): a kind-derived "-series" component, so a group's
+    // seriesFingerprint never collides with any per-item fingerprint namespace, and each
+    // kind's groups (calendar series, mail threads) digest in their own namespace.
     const rawSeriesId = spec.seriesId ?? "";
-    if (rawSeriesId !== "") item.seriesFingerprint = fingerprintOf(source, "event-series", rawSeriesId);
+    if (rawSeriesId !== "") item.seriesFingerprint = fingerprintOf(source, `${spec.kind}-series`, rawSeriesId);
     return item;
   };
 }

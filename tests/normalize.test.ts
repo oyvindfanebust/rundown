@@ -295,7 +295,7 @@ describe("sender and seriesFingerprint (#107)", () => {
     expect(n({ ...spec, sender: "" }).sender).toBeUndefined();
   });
 
-  test("seriesFingerprint digests the series id under the fixed event-series kind", () => {
+  test("seriesFingerprint digests the group id under the kind-derived series namespace", () => {
     const n = normalizer("graph");
     const a = n({ ...spec, kind: "event", id: "occ1", seriesId: "series-1" });
     const b = n({ ...spec, kind: "event", id: "occ2", seriesId: "series-1" });
@@ -304,8 +304,13 @@ describe("sender and seriesFingerprint (#107)", () => {
     expect(b.seriesFingerprint).toBe(a.seriesFingerprint!);
     // …while their per-item fingerprints differ.
     expect(b.fingerprint).not.toBe(a.fingerprint!);
-    // Fixed kind component: the series digest is not the item-kind fingerprint of the same id.
+    // Kind-derived component: the series digest is not the item-kind fingerprint of the same id.
     expect(n({ ...spec, kind: "event", id: "series-1" }).fingerprint).not.toBe(a.seriesFingerprint!);
+    // …and each kind's groups digest in their own namespace (ADR-0018): a mail thread's
+    // digest of the same raw id never collides with a calendar series' digest.
+    const thread = n({ ...spec, kind: "message", id: "m1", seriesId: "series-1" });
+    expect(thread.seriesFingerprint).toMatch(/^[0-9a-f]{16}$/);
+    expect(thread.seriesFingerprint).not.toBe(a.seriesFingerprint!);
   });
 
   test("omitted when the item is not an occurrence of a series", () => {
