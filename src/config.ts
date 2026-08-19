@@ -7,7 +7,7 @@ import { readFile } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { homedir } from "node:os";
-import type { Window } from "./domain.ts";
+import type { SuppressRule, Window } from "./domain.ts";
 import { validateOptionValue, type OptionSpec, type Descriptors } from "./sources/source.ts";
 import { WINDOW_SPANS, resolveSelector, type WindowSpan, type WindowSelector } from "./temporal.ts";
 
@@ -25,6 +25,7 @@ export interface ResolvedConfig {
   windowIsPast: boolean;
   selection: Selection[];
   guidance?: string;
+  suppress: SuppressRule[];
 }
 
 /** A user-facing, fail-hard config error (ADR-0007 §6). */
@@ -147,7 +148,55 @@ function validateOption(sourceKey: string, name: string, spec: OptionSpec, value
  * misspelled key that loads silently would leave the user believing a setting is
  * in effect when it is not.
  */
-const TOP_LEVEL_KEYS = ["timezone", "window", "guidance", "autoUpdate", "sources"] as const;
+const TOP_LEVEL_KEYS = ["timezone", "window", "guidance", "autoUpdate", "sources", "suppress"] as const;
+
+/** The criteria a suppress rule may carry (#107, ADR-0017). `source` scopes; the rest match. */
+const SUPPRESS_RULE_KEYS = ["source", "sender", "title", "series"] as const;
+
+/** A `series` value is a seriesFingerprint: 16 lowercase hex chars, as emitted in Brief evidence. */
+const SERIES_FINGERPRINT = /^[0-9a-f]{16}$/;
+
+/**
+ * Validate one suppress rule: an object of known string keys, at least one matching
+ * criterion (a rule with only `source` — or nothing — would suppress everything in
+ * scope, which is never what a typo meant). Fail-hard like every other config error.
+ */
+function validateSuppressRule(raw: unknown, index: number, descriptors: Descriptors): SuppressRule {
+  const where = `"suppress" rule ${index + 1}`;
+  if (typeof raw !== "object" || raw === null || Array.isArray(raw)) {
+    throw new ConfigError(`${where} must be an object.`);
+  }
+  const obj = raw as Record<string, unknown>;
+  for (const key of Object.keys(obj)) {
+    if (!(SUPPRESS_RULE_KEYS as readonly string[]).includes(key)) {
+      const hint = suggest(key, [...SUPPRESS_RULE_KEYS]) || ".";
+      throw new ConfigError(
+        `Unknown key "${key}" in ${where}${hint} Known keys: ${SUPPRESS_RULE_KEYS.join(", ")}.`,
+      );
+    }
+    const value = obj[key];
+    if (typeof value !== "string" || value === "") {
+      throw new ConfigError(`"${key}" in ${where} must be a non-empty string.`);
+    }
+  }
+  const rule = obj as SuppressRule;
+  if (rule.sender === undefined && rule.title === undefined && rule.series === undefined) {
+    throw new ConfigError(
+      `${where} has no matching criterion — set at least one of "sender", "title", "series".`,
+    );
+  }
+  if (rule.source !== undefined && !descriptors[rule.source]) {
+    throw new ConfigError(
+      `Unknown source "${rule.source}" in ${where}${suggest(rule.source, Object.keys(descriptors))}.`,
+    );
+  }
+  if (rule.series !== undefined && !SERIES_FINGERPRINT.test(rule.series)) {
+    throw new ConfigError(
+      `"series" in ${where} must be a 16-hex-char seriesFingerprint (copy it from a Brief's evidence).`,
+    );
+  }
+  return rule;
+}
 
 /** Parse + validate raw config text (strict fail-hard) against the injected descriptor map. Returns the checked config. */
 export function parseConfig(text: string, descriptors: Descriptors): {
@@ -156,6 +205,7 @@ export function parseConfig(text: string, descriptors: Descriptors): {
   selection: Selection[];
   guidance?: string;
   autoUpdate?: boolean;
+  suppress: SuppressRule[];
 } {
   let raw: unknown;
   try {
@@ -216,6 +266,15 @@ export function parseConfig(text: string, descriptors: Descriptors): {
     autoUpdate = obj.autoUpdate;
   }
 
+  // suppress — deterministic pre-model noise filter (#107, ADR-0017)
+  let suppress: SuppressRule[] = [];
+  if (obj.suppress !== undefined) {
+    if (!Array.isArray(obj.suppress)) {
+      throw new ConfigError(`"suppress" must be an array of rules.`);
+    }
+    suppress = obj.suppress.map((rule, i) => validateSuppressRule(rule, i, descriptors));
+  }
+
   // sources — the one mandatory field
   if (obj.sources === undefined) {
     throw new ConfigError(`Missing required "sources". Minimum: {"sources": {"graph": {}}}.`);
@@ -251,7 +310,7 @@ export function parseConfig(text: string, descriptors: Descriptors): {
     selection.push({ sourceKey: key, options });
   }
 
-  return { timezone, window, selection, guidance, autoUpdate };
+  return { timezone, window, selection, guidance, autoUpdate, suppress };
 }
 
 // ── Load + resolve ─────────────────────────────────────────────────────────────
@@ -310,5 +369,13 @@ export async function resolveConfig(descriptors: Descriptors, opts: ResolveOptio
   const windowSpan = selector.kind === "span" ? selector.span : selector.label;
   // Reconcile `now` against the resolved window once, here — so the Planner never needs a clock.
   const windowIsPast = Date.parse(window.to) <= now.getTime();
-  return { timezone, windowSpan, window, windowIsPast, selection, guidance: parsed.guidance };
+  return {
+    timezone,
+    windowSpan,
+    window,
+    windowIsPast,
+    selection,
+    guidance: parsed.guidance,
+    suppress: parsed.suppress,
+  };
 }

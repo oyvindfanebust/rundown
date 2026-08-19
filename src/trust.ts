@@ -84,3 +84,39 @@ export function unwrap<T>(value: Untrusted<T>): T {
 export function untrustedOpt<T>(value: T | undefined): Untrusted<T> | undefined {
   return value === undefined ? undefined : untrusted(value);
 }
+
+// ── Boolean comparison primitives (ADR-0017) ──
+//
+// Suppression rules (config-authored, trusted) must match against untrusted fields
+// without adding an unwrap site outside plan.ts. These primitives compute the
+// comparison HERE, inside trust.ts, and let only a boolean escape: the needle is
+// user-authored config, the haystack never leaves this module. Together with
+// `unwrap()` they ARE the leak-path audit — a short greppable list. Deliberately
+// no `withUntrusted(value, callback)` form: a callback receiving raw bytes is an
+// unwrap in disguise. The one-bit-per-call channel is driven entirely by
+// user-authored patterns, so an attacker controls neither the query nor the readout.
+
+/** Case-insensitive substring test against an untrusted string. Only a boolean escapes. */
+export function untrustedIncludes(
+  value: Untrusted<string> | undefined,
+  needle: string,
+): boolean {
+  if (value === undefined) return false;
+  return unwrap(value).toLowerCase().includes(needle.toLowerCase());
+}
+
+/**
+ * Case-insensitive substring test against one named string field of an untrusted
+ * extras record. A non-string field (or an absent one) never matches. Only a
+ * boolean escapes.
+ */
+export function untrustedExtrasInclude(
+  extras: Untrusted<Record<string, unknown>> | undefined,
+  key: string,
+  needle: string,
+): boolean {
+  if (extras === undefined) return false;
+  const field = unwrap(extras)[key];
+  if (typeof field !== "string") return false;
+  return field.toLowerCase().includes(needle.toLowerCase());
+}

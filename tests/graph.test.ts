@@ -346,3 +346,43 @@ describe("GraphSource.read pagination", () => {
     expect(items.map((i) => unwrap(i.id)).sort()).toEqual(["p1", "p2"]);
   });
 });
+
+// ── read(): suppression identity fields (#107) ───────────────────────────────
+
+describe("GraphSource.read suppression fields (#107)", () => {
+  test("calendar requests seriesMasterId and an occurrence carries a stable seriesFingerprint", async () => {
+    const { fetchJson, urls } = fakeFetch({
+      calendar: {
+        value: [
+          event({ id: "occ1", seriesMasterId: "series-A" }),
+          event({ id: "occ2", seriesMasterId: "series-A" }),
+          event({ id: "solo" }),
+        ],
+      },
+    });
+    const items = await graphSource({ fetchJson }, { kinds: ["event"] }).read(WINDOW);
+    expect(urls[0]).toContain("seriesMasterId");
+    const occ1 = byId(items, "occ1")!;
+    const occ2 = byId(items, "occ2")!;
+    expect(occ1.seriesFingerprint).toMatch(/^[0-9a-f]{16}$/);
+    expect(occ2.seriesFingerprint).toBe(occ1.seriesFingerprint!);
+    expect(occ1.fingerprint).not.toBe(occ2.fingerprint!);
+    expect(byId(items, "solo")!.seriesFingerprint).toBeUndefined();
+  });
+
+  test("mail carries the sender ADDRESS as the branded structural sender", async () => {
+    const { fetchJson } = fakeFetch({ inbox: { value: [message()] } });
+    const items = await graphSource({ fetchJson }, { kinds: ["message"] }).read(WINDOW);
+    const item = byId(items, "m1")!;
+    // Address, not the display name — the stable half a suppress rule names.
+    expect(item.sender).toEqual(untrusted("carol@x.com"));
+  });
+
+  test("mail with no from address carries no sender", async () => {
+    const { fetchJson } = fakeFetch({
+      inbox: { value: [message({ from: { emailAddress: { name: "Carol" } } })] },
+    });
+    const items = await graphSource({ fetchJson }, { kinds: ["message"] }).read(WINDOW);
+    expect(byId(items, "m1")!.sender).toBeUndefined();
+  });
+});

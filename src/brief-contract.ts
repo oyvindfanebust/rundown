@@ -95,6 +95,13 @@ export const BriefEvidence = z.strictObject({
    * to the source object. Absent when the backend supplied no id.
    */
   fingerprint: z.string().regex(/^[0-9a-f]{16}$/).optional(),
+  /**
+   * Stable identity of the recurring series the cited item belongs to (#107) — same
+   * digest scheme as `fingerprint`, constant across a series' occurrences. Copy it
+   * into a config `suppress` rule's `series` field to drop the whole series. Absent
+   * for non-recurring items.
+   */
+  seriesFingerprint: z.string().regex(/^[0-9a-f]{16}$/).optional(),
   /** Container label ("#flow-mgmt", "DM with Ada Lovelace", "Inbox"), when the source has an honest one. */
   where: z.string().max(LABEL_MAX).optional(),
   /** People involved, most salient first — so a clamp keeps the useful end. */

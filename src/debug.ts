@@ -49,6 +49,13 @@ export type DebugEvent =
   /** A local source's filesystem scan: which directory, how many files. */
   | { kind: "scan"; source: string; path: string; fileCount: number }
   /**
+   * One configured suppression rule's tally for this run (#107): its 1-based
+   * position in the config's `suppress` array and how many items it matched —
+   * including zero, which is the "why isn't my rule firing" signal. Position and
+   * count only: the rule's content is user-authored, but the union stays scalar.
+   */
+  | { kind: "suppress"; rule: number; count: number }
+  /**
    * The self-update gate's decision and why (ADR-0001 §5). `reason` is a short
    * structural marker from a closed set the gate owns — never a message, never a
    * path, never anything a backend supplied.
@@ -109,6 +116,8 @@ export function formatDebugEvent(e: DebugEvent): string {
       return `[debug] ${e.source}  route via=${e.via}${e.reason ? ` (${e.reason})` : ""}`;
     case "scan":
       return `[debug] ${e.source}  scan path=${e.path} files=${e.fileCount}`;
+    case "suppress":
+      return `[debug] suppress  rule ${e.rule} → ${e.count} item(s)`;
     case "update-gate":
       return `[debug] update  gate ${e.spawned ? "spawn" : `skip (${e.reason})`}`;
   }
