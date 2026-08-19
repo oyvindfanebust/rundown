@@ -5,7 +5,7 @@
 // attaches the trusted envelope to the summarizer's output. The Brief output schema
 // itself lives in brief-contract.ts, the Zod source of truth.
 
-import type { AnnotatedItem, Brief, Bucket, Bundle } from "./domain.ts";
+import type { AnnotatedItem, Brief, Bucket, Bundle, SuppressedEntry } from "./domain.ts";
 import {
   BRIEF_OUTPUT_SCHEMA,
   BriefOutputSchema,
@@ -325,9 +325,12 @@ function resolveEvidence(items: ExtractedItem[], rendered: RenderedBundle): Brie
         const attribution = cited.item.attribution ? unwrap(cited.item.attribution) : undefined;
         evidence.push({
           source: `${cited.item.source}/${cited.item.kind}`,
-          // Trusted structural digest (#108) — copied, never unwrapped, never model-read.
+          // Trusted structural digests (#108, #107) — copied, never unwrapped, never model-read.
           ...(cited.item.fingerprint !== undefined
             ? { fingerprint: cited.item.fingerprint }
+            : {}),
+          ...(cited.item.seriesFingerprint !== undefined
+            ? { seriesFingerprint: cited.item.seriesFingerprint }
             : {}),
           ...(attribution?.where !== undefined
             ? { where: attribution.where.slice(0, LABEL_MAX) }
@@ -369,6 +372,11 @@ export interface PlanContext {
   timezone: string;
   /** User-authored steering — see the invariant below. */
   guidance?: string;
+  /**
+   * Suppression audit (#107) — trusted config echoes, counts, and digests from the
+   * suppress step, carried into the envelope. Never rendered to the model.
+   */
+  suppressed?: SuppressedEntry[];
 }
 
 /**
@@ -393,7 +401,13 @@ export async function plan(bundle: Bundle, ctx: PlanContext, deps: PlanDeps = {}
   const summarizeFn = deps.summarize ?? summarize;
   // `timezone` rides in the envelope so the Brief self-describes which clock its
   // `when` phrasing (and window) speaks (#106).
-  const envelope = { window: bundle.window, sources: bundle.sources, timezone: ctx.timezone };
+  const envelope = {
+    window: bundle.window,
+    sources: bundle.sources,
+    timezone: ctx.timezone,
+    // Presence is signal: the key appears only when a rule actually suppressed something.
+    ...(ctx.suppressed && ctx.suppressed.length > 0 ? { suppressed: ctx.suppressed } : {}),
+  };
 
   // Empty bundle → empty Brief, no model call (ADR-0005 §8).
   if (bundle.items.length === 0) {

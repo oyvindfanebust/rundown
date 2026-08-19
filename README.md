@@ -221,8 +221,22 @@ what it did and what still needs an env var. Pass an optional source name — `r
 their env credentials alone.
 
 The config file `~/.config/rundown/config.json` (override the path with `RUNDOWN_CONFIG`) owns
-only `timezone`, `window`, `sources` (selection = presence; the one mandatory field), and freeform
-`guidance` for the planner. No secrets, ever.
+only `timezone`, `window`, `sources` (selection = presence; the one mandatory field), freeform
+`guidance` for the planner, and `suppress` rules. No secrets, ever.
+
+`suppress` drops recurring non-task noise before the model sees it — deterministic, unlike
+`guidance`. Each rule matches by `sender` and/or `title` (case-insensitive substring), or by
+`series` — the `seriesFingerprint` a Brief's evidence shows for any occurrence of a recurring
+calendar event. Criteria within a rule AND together; rules OR; an optional `source` key scopes a
+rule to one source. The Brief's envelope carries a `suppressed` audit (the rule, a count, and the
+suppressed items' fingerprints) for every rule that fired, so nothing disappears silently:
+
+```jsonc
+"suppress": [
+  { "sender": "notifications@github.com", "title": "Release Pipeline" },
+  { "series": "0123456789abcdef" }
+]
+```
 
 ## Usage
 

@@ -358,7 +358,7 @@ describe("cli", () => {
       const path = written(`{"gibberish": 1, "sources": {"graph": {}}}`);
       const r = run(["status"], path);
       expect(r.stdout).toContain(`Unknown config key "gibberish"`);
-      expect(r.stdout).toContain("Known keys: timezone, window, guidance, autoUpdate, sources.");
+      expect(r.stdout).toContain("Known keys: timezone, window, guidance, autoUpdate, sources, suppress.");
       expect(r.exitCode).toBe(1);
     });
 

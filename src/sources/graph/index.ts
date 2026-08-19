@@ -90,6 +90,7 @@ interface GraphEvent {
   isAllDay?: boolean;
   showAs?: string;
   isCancelled?: boolean;
+  seriesMasterId?: string;
   organizer?: { emailAddress?: GraphEmailAddress };
   attendees?: { type?: string; emailAddress?: GraphEmailAddress }[];
   location?: { displayName?: string };
@@ -142,7 +143,7 @@ async function readCalendar(fetchJson: FetchJson, token: string, window: Window)
     startDateTime: window.from,
     endDateTime: window.to,
     $select:
-      "id,subject,start,end,isAllDay,showAs,isCancelled,organizer,attendees,location,categories,responseStatus,webLink",
+      "id,subject,start,end,isAllDay,showAs,isCancelled,seriesMasterId,organizer,attendees,location,categories,responseStatus,webLink",
     $orderby: "start/dateTime",
     $top: "50",
   })) as GraphEvent[];
@@ -157,6 +158,9 @@ async function readCalendar(fetchJson: FetchJson, token: string, window: Window)
       id: e.id,
       title: e.subject,
       url: e.webLink,
+      // Series identity for `series` suppression rules (#107) — digested by the
+      // normalizer, the raw id never leaves the sealed pipeline.
+      seriesId: e.seriesMasterId,
       // An event has no honest container, so it carries no `where` (#54). `location` is
       // a physical place, not the thing the item lives in, and a calendar title
       // describes itself — the asymmetry with a chat message that #54 opens with.
@@ -212,6 +216,10 @@ async function readMailFolder(
       id: m.id,
       title: m.subject,
       url: m.webLink,
+      // The sender ADDRESS, distinct from the display name in `extras.from`: a
+      // `sender` suppression rule (#107) matches either, and the address is the
+      // stable one ("GitHub" vs notifications@github.com). Branded, never rendered.
+      sender: m.from?.emailAddress?.address,
       // Mail's wording for the uniform slot (#54). `extras.folder` is a DIRECTION
       // ("inbox"/"sent"), not a folder name, so it is written out as a reader-facing
       // label rather than passed through. `who` leads with whoever is not the user:

@@ -281,3 +281,37 @@ describe("fingerprint (#108)", () => {
     expect(numeric.fingerprint).toBe(string.fingerprint!);
   });
 });
+
+describe("sender and seriesFingerprint (#107)", () => {
+  const spec = { kind: "message", timestamp: "2026-07-08T09:00:00Z", id: "m1", title: "T" };
+
+  test("sender is branded untrusted; absence collapses like every other free-text field", () => {
+    const n = normalizer("graph");
+    expect(n({ ...spec, sender: "notifications@github.com" }).sender).toEqual(
+      untrusted("notifications@github.com"),
+    );
+    expect(n(spec).sender).toBeUndefined();
+    expect(n({ ...spec, sender: null }).sender).toBeUndefined();
+    expect(n({ ...spec, sender: "" }).sender).toBeUndefined();
+  });
+
+  test("seriesFingerprint digests the series id under the fixed event-series kind", () => {
+    const n = normalizer("graph");
+    const a = n({ ...spec, kind: "event", id: "occ1", seriesId: "series-1" });
+    const b = n({ ...spec, kind: "event", id: "occ2", seriesId: "series-1" });
+    expect(a.seriesFingerprint).toMatch(/^[0-9a-f]{16}$/);
+    // The whole contract: two occurrences of one series share the digest…
+    expect(b.seriesFingerprint).toBe(a.seriesFingerprint!);
+    // …while their per-item fingerprints differ.
+    expect(b.fingerprint).not.toBe(a.fingerprint!);
+    // Fixed kind component: the series digest is not the item-kind fingerprint of the same id.
+    expect(n({ ...spec, kind: "event", id: "series-1" }).fingerprint).not.toBe(a.seriesFingerprint!);
+  });
+
+  test("omitted when the item is not an occurrence of a series", () => {
+    const n = normalizer("graph");
+    expect(n({ ...spec, kind: "event" }).seriesFingerprint).toBeUndefined();
+    expect(n({ ...spec, kind: "event", seriesId: null }).seriesFingerprint).toBeUndefined();
+    expect(n({ ...spec, kind: "event", seriesId: "" }).seriesFingerprint).toBeUndefined();
+  });
+});

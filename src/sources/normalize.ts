@@ -86,6 +86,13 @@ export interface ItemSpec {
   id: string | number | null | undefined;
   title: string | null | undefined;
   url?: string;
+  /** Sender address on message-like items — branded, never rendered (see NormalizedItem). */
+  sender?: string | null;
+  /**
+   * The backend's recurring-series id, when the item is an occurrence of one. Only
+   * its digest survives (`seriesFingerprint`); the raw id never leaves the normalizer.
+   */
+  seriesId?: string | null;
   /**
    * Who and where, as bare values — the normalizer brands and compacts it (#54). A
    * source writes its own honest label; see {@link Attribution}. Absent `where`, an
@@ -187,6 +194,7 @@ export function normalizer(
       id: untrusted(rawId),
       title: untrusted(text(spec.title) ?? untitled),
       url: untrustedOpt(spec.url),
+      sender: untrustedOpt(text(spec.sender)),
       attribution: attribution === undefined ? undefined : untrusted(attribution),
       extras: extras && Object.keys(extras).length > 0 ? untrusted(extras) : undefined,
     };
@@ -194,6 +202,10 @@ export function normalizer(
     if (spec.dateOnly === true) item.dateOnly = true;
     // No fingerprint for an absent id: a shared digest of "" would alias unrelated items.
     if (rawId !== "") item.fingerprint = fingerprintOf(source, spec.kind, rawId);
+    // Series identity (#107): a fixed "event-series" kind component, so an occurrence's
+    // seriesFingerprint never collides with any per-item fingerprint namespace.
+    const rawSeriesId = spec.seriesId ?? "";
+    if (rawSeriesId !== "") item.seriesFingerprint = fingerprintOf(source, "event-series", rawSeriesId);
     return item;
   };
 }

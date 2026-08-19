@@ -285,3 +285,64 @@ describe("resolveConfig", () => {
     });
   });
 });
+
+describe("suppress (#107)", () => {
+  const src = `"sources": {"graph": {}}`;
+
+  test("parses valid rules and defaults to an empty list when absent", () => {
+    const parsed = parseConfig(
+      `{"suppress": [
+         {"sender": "notifications@github.com", "title": "Release Pipeline"},
+         {"series": "0123456789abcdef"},
+         {"source": "graph", "title": "standup"}
+       ], ${src}}`,
+      descriptors,
+    );
+    expect(parsed.suppress).toHaveLength(3);
+    expect(parsed.suppress[1]).toEqual({ series: "0123456789abcdef" });
+    expect(parseConfig(`{${src}}`, descriptors).suppress).toEqual([]);
+  });
+
+  test("rejects a non-array suppress", () => {
+    expect(() => parseConfig(`{"suppress": {}, ${src}}`, descriptors)).toThrow(/array of rules/);
+  });
+
+  test("rejects a rule with an unknown key, with a did-you-mean", () => {
+    expect(() => parseConfig(`{"suppress": [{"tittle": "x"}], ${src}}`, descriptors)).toThrow(
+      /Unknown key "tittle" in "suppress" rule 1.*title/,
+    );
+  });
+
+  test("rejects a rule with no matching criterion — including source-only", () => {
+    expect(() => parseConfig(`{"suppress": [{}], ${src}}`, descriptors)).toThrow(
+      /no matching criterion/,
+    );
+    expect(() => parseConfig(`{"suppress": [{"source": "graph"}], ${src}}`, descriptors)).toThrow(
+      /no matching criterion/,
+    );
+  });
+
+  test("rejects non-string and empty criterion values", () => {
+    expect(() => parseConfig(`{"suppress": [{"title": 3}], ${src}}`, descriptors)).toThrow(
+      /"title" in "suppress" rule 1 must be a non-empty string/,
+    );
+    expect(() => parseConfig(`{"suppress": [{"title": ""}], ${src}}`, descriptors)).toThrow(
+      /non-empty string/,
+    );
+  });
+
+  test("rejects an unknown source scope, naming the rule", () => {
+    expect(() => parseConfig(`{"suppress": [{"source": "jra", "title": "x"}], ${src}}`, descriptors)).toThrow(
+      /Unknown source "jra" in "suppress" rule 1/,
+    );
+  });
+
+  test("rejects a malformed series fingerprint and points at Brief evidence", () => {
+    expect(() => parseConfig(`{"suppress": [{"series": "not-hex"}], ${src}}`, descriptors)).toThrow(
+      /16-hex-char seriesFingerprint/,
+    );
+    expect(() => parseConfig(`{"suppress": [{"series": "ABCDEF0123456789"}], ${src}}`, descriptors)).toThrow(
+      /16-hex-char seriesFingerprint/,
+    );
+  });
+});
