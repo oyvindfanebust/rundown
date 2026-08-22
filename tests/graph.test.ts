@@ -282,6 +282,31 @@ describe("GraphSource.read kinds", () => {
   });
 });
 
+// ── read(): the real bearer-fetch's Prefer header (ADR-0018) ─────────────────
+// The header lives inside graphGet, below the fetchJson seam, so it is asserted
+// by mocking global fetch: UTC rendering and immutable ids ride one Prefer value.
+
+describe("GraphSource.read request headers", () => {
+  const realFetch = globalThis.fetch;
+  afterEach(() => {
+    globalThis.fetch = realFetch;
+  });
+
+  test("every request prefers UTC timezone and immutable ids", async () => {
+    const headers: Record<string, string>[] = [];
+    globalThis.fetch = (async (_url: string, init?: { headers?: Record<string, string> }) => {
+      headers.push(init?.headers ?? {});
+      return { ok: true, status: 200, json: async () => ({ value: [] }) };
+    }) as unknown as typeof fetch;
+    // No fetchJson injected → the real graphGet runs against the mocked fetch.
+    await new GraphSource({}, { auth: fakeAuth() }).read(WINDOW);
+    expect(headers.length).toBeGreaterThan(0);
+    for (const h of headers) {
+      expect(h.Prefer).toBe('outlook.timezone="UTC", IdType="ImmutableId"');
+    }
+  });
+});
+
 // ── read(): thrown errors scrub the backend response body ────────────────────
 // The real default fetchJson (graphGet) is exercised by mocking global fetch;
 // a non-2xx Graph response must throw the HTTP status ONLY — no response-body
@@ -368,6 +393,26 @@ describe("GraphSource.read suppression fields (#107)", () => {
     expect(occ2.seriesFingerprint).toBe(occ1.seriesFingerprint!);
     expect(occ1.fingerprint).not.toBe(occ2.fingerprint!);
     expect(byId(items, "solo")!.seriesFingerprint).toBeUndefined();
+  });
+
+  test("mail requests conversationId and a thread's messages share a seriesFingerprint (ADR-0018)", async () => {
+    const { fetchJson, urls } = fakeFetch({
+      inbox: {
+        value: [
+          message({ id: "t1", conversationId: "conv-A" }),
+          message({ id: "t2", conversationId: "conv-A" }),
+          message({ id: "lone", conversationId: undefined }),
+        ],
+      },
+    });
+    const items = await graphSource({ fetchJson }, { kinds: ["message"] }).read(WINDOW);
+    expect(urls.every((u) => u.includes("conversationId"))).toBe(true);
+    const t1 = byId(items, "t1")!;
+    const t2 = byId(items, "t2")!;
+    expect(t1.seriesFingerprint).toMatch(/^[0-9a-f]{16}$/);
+    expect(t2.seriesFingerprint).toBe(t1.seriesFingerprint!);
+    expect(t1.fingerprint).not.toBe(t2.fingerprint!);
+    expect(byId(items, "lone")!.seriesFingerprint).toBeUndefined();
   });
 
   test("mail carries the sender ADDRESS as the branded structural sender", async () => {

@@ -75,12 +75,13 @@ export interface NormalizedItem {
    */
   fingerprint?: string;
   /**
-   * Stable identity of the recurring series an occurrence belongs to (#107): a
-   * truncated SHA-256 of `source + "event-series" + raw series id`, computed by the
-   * normalizer like `fingerprint`. Calendar backends expand recurrences into
-   * occurrences with per-occurrence ids, so `fingerprint` differs every occurrence;
-   * this digest is constant across them and is what a `series` suppression rule
-   * matches. Absent for non-recurring items.
+   * Stable identity of the recurring group an item belongs to (#107, ADR-0018): a
+   * truncated SHA-256 of `source + kind + "-series" + raw group id`, computed by the
+   * normalizer like `fingerprint`. A calendar backend expands recurrences into
+   * occurrences with per-occurrence ids, and a mail thread is several messages each
+   * with its own id, so `fingerprint` differs per item; this digest is constant
+   * across a series' occurrences or a thread's messages and is what a `series`
+   * suppression rule matches. Absent for items that belong to no group.
    */
   seriesFingerprint?: string;
 
