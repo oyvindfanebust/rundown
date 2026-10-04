@@ -90,7 +90,7 @@ here by path.
 | `counts.chat.records` | trusted | Chat messages read in the window. |
 | `counts.chat.entries` | trusted | Chat conversation entries in the digest. |
 | `unsummarized` | trusted | Mail and chat entries the model skipped; they carry no summary. |
-| `summary` | model | Overview of the window, at most 800 chars: what happened before `generatedAt` and what is scheduled after. Empty for an empty window. |
+| `summary` | model | Overview of the window, at most 2,000 chars: what happened before `generatedAt` and what is scheduled after. Empty for an empty window. |
 | `meetings[].id` | trusted | Stable entry id, 16 hex chars. The same series or meeting has the same id in every digest. |
 | `meetings[].type` | trusted | Always `meeting`. |
 | `meetings[].title` | label | The meeting title, at most 255 chars. |

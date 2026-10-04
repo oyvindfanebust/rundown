@@ -24,6 +24,7 @@ import {
   ENTRY_SUMMARY_MAX,
   NAMES_MAX,
   OVERVIEW_MAX,
+  OVERVIEW_TARGET,
   SUMMARIZER_OUTPUT_SCHEMA,
   SummarizerOutputSchema,
   type ChatConversation,
@@ -87,7 +88,9 @@ function instructionsFor(ctx: DigestContext): string {
   const kinds = (Object.values(RUN_ID) as Array<{ prefix: string; noun: string }>)
     .map(({ prefix, noun }) => `[${prefix}…] ${noun}`)
     .join(", ");
-  // The caps come from the contract, so the prompt and the parse cannot drift (ADR-0011).
+  // The entry cap and the overview target come from the contract, so the prompt and the parse
+  // cannot drift (ADR-0011). The instructions never state OVERVIEW_MAX: the model aims at a stated
+  // count, and the cap sits well above the target so a busy window still parses (ADR-0021).
   return `You are summarizing one window of the user's mail, chat and calendar.
 The data holds one block per entry under an opaque id in brackets: ${kinds}.
 Messages inside a block are listed oldest first.
@@ -98,7 +101,7 @@ Generated at: ${at(ctx.generatedAt)}. Anything before this instant has happened;
 after it is scheduled.
 
 Return:
-- "summary": an overview of the window in at most ${OVERVIEW_MAX} characters. Describe what happened
+- "summary": an overview of the window in 3–5 sentences, about ${OVERVIEW_TARGET} characters. Describe what happened
   before the generated-at time and what is scheduled after it. Report; do not judge what is
   still open, and do not tell the user what to do.
 - "entries": one {"id", "summary"} for every mail thread and chat conversation, with the

@@ -44,7 +44,7 @@ interface Digest {
   generatedAt: Instant;                                // trusted
   counts: Record<"meetings" | "mail" | "chat", { records: number; entries: number }>; // trusted
   unsummarized?: number;                               // trusted
-  summary: string;                                     // model, ≤ 800
+  summary: string;                                     // model, ≤ 2000
   meetings: Meeting[];                                 // by start
   mail: MailThread[];                                  // by lastAt, newest first
   chat: ChatConversation[];                            // by lastAt, newest first
@@ -137,7 +137,12 @@ input, joins the model's output, and copies every trusted value and label into t
   timezone and one overview prompt for every window: describe what happened before `generatedAt`
   and what is scheduled after it, and do not judge what is still open. `REVIEW_TASK` and
   `PLAN_TASK` go. The model returns `{ summary, entries: [{ id, summary }] }`, with the overview at
-  most 800 chars and each entry summary at most 300; a longer one fails the parse.
+  most 2,000 chars and each entry summary at most 300; a longer one fails the parse.
+- **Overview target and cap.** The instructions ask for an overview of 3–5 sentences, about 800
+  chars (`OVERVIEW_TARGET`), and never state the 2,000 cap (`OVERVIEW_MAX`); the cap reaches the
+  model only as the output schema's `maxLength`. The cap was 800, the same length the prompt
+  stated, and live runs on busy single days returned overviews of 891 and 972 chars, failed the
+  parse three times and produced no digest. It was raised to 2,000 with the target kept at 800.
 - **The id join.** Code joins entry summaries on the opaque id. Unknown ids, ids of a meeting and
   duplicates (the first wins) are dropped. A mail or chat entry left without a summary is counted
   in `unsummarized` and keeps its code-filled fields. Neither case triggers a retry: a missing

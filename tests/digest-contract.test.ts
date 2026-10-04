@@ -201,9 +201,9 @@ describe("SummarizerOutputSchema.parse", () => {
     expect(parsed).toEqual({ summary: "ok", entries: [{ id: "m1", summary: "ok" }] });
   });
 
-  test("an overview over 800 chars fails; at 800 it passes", () => {
-    expect(() => SummarizerOutputSchema.parse({ ...base(), summary: "a".repeat(801) })).toThrow();
-    expect(() => SummarizerOutputSchema.parse({ ...base(), summary: "a".repeat(800) })).not.toThrow();
+  test("an overview over 2,000 chars fails; at 2,000 it passes", () => {
+    expect(() => SummarizerOutputSchema.parse({ ...base(), summary: "a".repeat(2_001) })).toThrow();
+    expect(() => SummarizerOutputSchema.parse({ ...base(), summary: "a".repeat(2_000) })).not.toThrow();
   });
 
   test("an entry summary over 300 chars fails; at 300 it passes", () => {
@@ -253,6 +253,11 @@ describe("DigestSchema", () => {
       chat: [chatConversation()],
     };
     expect(parses(digest)).toBe(true);
+  });
+
+  test("an overview over 2,000 chars fails; at 2,000 it passes", () => {
+    expect(parses({ ...emptyDigest(), summary: "a".repeat(2_001) })).toBe(false);
+    expect(parses({ ...emptyDigest(), summary: "a".repeat(2_000) })).toBe(true);
   });
 
   test("an unknown key fails, at the top level and in an entry", () => {

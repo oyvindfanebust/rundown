@@ -338,7 +338,7 @@ describe("injection corpus: 6. oversized payloads", () => {
   });
 
   const OUTPUTS: Array<[label: string, output: unknown]> = [
-    ["an 801-char overview", { summary: "x".repeat(801), entries: [{ id: "e1", summary: "ok" }] }],
+    ["a 2,001-char overview", { summary: "x".repeat(2_001), entries: [{ id: "e1", summary: "ok" }] }],
     ["a 301-char entry summary", { summary: "ok", entries: [{ id: "e1", summary: "x".repeat(301) }] }],
   ];
 
@@ -348,10 +348,10 @@ describe("injection corpus: 6. oversized payloads", () => {
     await expect(attempt).rejects.toThrow(/did not parse after 3 attempts/);
   });
 
-  test("an 800-char overview and a 300-char entry summary are at the cap and pass", async () => {
-    const { result, calls } = await pipeline([mail()], { summary: "o".repeat(800), entries: [{ id: "e1", summary: "s".repeat(300) }] });
+  test("a 2,000-char overview and a 300-char entry summary are at the cap and pass", async () => {
+    const { result, calls } = await pipeline([mail()], { summary: "o".repeat(2_000), entries: [{ id: "e1", summary: "s".repeat(300) }] });
     expect(calls).toHaveLength(1);
-    expect(result.summary).toHaveLength(800);
+    expect(result.summary).toHaveLength(2_000);
     expect(result.mail[0]!.summary).toHaveLength(300);
   });
 });

@@ -457,14 +457,35 @@ describe("digest — defang gaps a renderer would still act on", () => {
   });
 });
 
+describe("digest — overview length", () => {
+  test("a 1,500-char overview is accepted and emitted whole", async () => {
+    const overview = "o".repeat(1_500);
+    const { result } = await run([mail()], () => ({ summary: overview, entries: [{ id: "e1", summary: "ok" }] }));
+    expect(result.summary).toBe(overview);
+  });
+
+  test("an overview over 2,000 chars fails the parse", async () => {
+    const attempt = run([mail()], () => ({ summary: "o".repeat(2_001), entries: [{ id: "e1", summary: "ok" }] }));
+    await expect(attempt).rejects.toThrow(/too_big[\s\S]*summary/);
+  });
+
+  test("the instruction region asks for about 800 characters and never states the 2,000 cap", async () => {
+    const { calls } = await run([mail()]);
+    const { instructions } = calls[0]!;
+    expect(instructions).toContain("3–5 sentences, about 800 characters");
+    expect(instructions).not.toContain("2000");
+    expect(instructions).not.toContain("2,000");
+  });
+});
+
 describe("digest — caps hold after defang", () => {
   test("a summary at its cap that defang lengthens is clamped, not a failed run", async () => {
     const entry = `${"s".repeat(296)}<a](`;
-    const overview = `${"o".repeat(796)}<a](`;
+    const overview = `${"o".repeat(1_996)}<a](`;
     const { result } = await run([mail()], () => ({ summary: overview, entries: [{ id: "e1", summary: entry }] }));
     expect(result.mail[0]!.summary!.length).toBe(300);
     expect(result.mail[0]!.summary!.endsWith("…")).toBe(true);
-    expect(result.summary.length).toBe(800);
+    expect(result.summary.length).toBe(2_000);
   });
 });
 

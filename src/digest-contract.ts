@@ -50,8 +50,10 @@ function container<T extends z.ZodType>(schema: T, description: string): T {
 
 // ── Caps ──
 
-/** Longest overview summary. */
-export const OVERVIEW_MAX = 800;
+/** Longest overview summary: the hard cap the parse enforces. */
+export const OVERVIEW_MAX = 2000;
+/** Overview length the prompt asks for; well under `OVERVIEW_MAX` so a busy window still parses. */
+export const OVERVIEW_TARGET = 800;
 /** Longest mail or chat entry summary. */
 export const ENTRY_SUMMARY_MAX = 300;
 /** Most names a `people` or `attendees` list carries; the rest are counted. */
