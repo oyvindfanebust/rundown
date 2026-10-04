@@ -331,6 +331,16 @@ The distinct typed fields — rather than one free-text blob — are deliberate:
 arrives as "a quote from an email titled X", never a bare imperative (ADR-0004, the output-side
 confinement of leaked content).
 
+### digest entry
+
+Planned, not yet built (map [#117](https://github.com/oyvindfanebust/rundown/issues/117)). One
+line in the digest: one conversation or calendar commitment, grouping the typed records that
+belong to it within the window. A mail thread, a Slack conversation (DM, group DM or channel) over
+the whole window, a recurring calendar series with its occurrences, or a one-off event. Only
+records inside the window belong to an entry; one that began earlier is flagged as continuing,
+not extended backwards. The unit is the same whatever the window's length.
+_Avoid_: digest item (collides with [ExtractedItem](#extracteditem)), message, event (those are records).
+
 ### Emission
 
 The composition-root step where the [Brief](#brief) leaves `rundown`. `rundown brief` serializes
