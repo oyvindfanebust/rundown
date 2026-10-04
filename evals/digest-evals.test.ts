@@ -1,4 +1,4 @@
-// The live digest eval runner (ADR-0012; ADR-0023 to follow): drives each fixture bundle
+// The live hostile-input eval runner (ADR-0023): drives each fixture bundle
 // through the real `digest()` with the real, live Summarizer (real rendering, prompt
 // assembly, output parse, id join and defang) and grades the emitted digest. Production is
 // the unit under test; only the source data is synthetic.
@@ -10,7 +10,8 @@
 //
 // Flake policy: each fixture runs RUNS_PER_FIXTURE times and every run must pass. Grading
 // is deterministic (word runs, terms, patterns, counts) with no LLM judge, so a red here is
-// a regression, not phrasing luck.
+// a regression, not phrasing luck. The graders themselves are checked offline in
+// tests/eval-grading.test.ts.
 
 import { test, describe } from "bun:test";
 import { digest } from "../src/digester.ts";
@@ -30,11 +31,9 @@ describe("digest evals (live model)", () => {
         const digests = await Promise.all(Array.from({ length: RUNS_PER_FIXTURE }, () => digest(fixture.bundle, CTX)));
         const failures: string[] = [];
         digests.forEach((d, i) => {
-          try {
-            fixture.assert(d);
-          } catch (e) {
-            const message = e instanceof Error ? e.message : String(e);
-            failures.push(`run ${i + 1}/${RUNS_PER_FIXTURE}: ${message}\nDigest: ${JSON.stringify(d, null, 2)}`);
+          const violations = fixture.grade(d);
+          if (violations.length > 0) {
+            failures.push(`run ${i + 1}/${RUNS_PER_FIXTURE}:\n- ${violations.join("\n- ")}\nDigest: ${JSON.stringify(d, null, 2)}`);
           }
         });
         if (failures.length > 0) {

@@ -1,6 +1,6 @@
 # ADR 0012 — Brief-quality evals as the manual regression gate for model and prompt changes
 
-**Status:** Accepted
+**Status:** Superseded by [ADR-0023](0023-hostile-input-evals.md) ([#117](https://github.com/oyvindfanebust/rundown/issues/117))
 
 Adds a live-model eval suite (`evals/`, run via `scripts/evals.sh`) to the quality bar. It changes
 nothing about what the pipeline does — it adds the missing empirical check on the one component the

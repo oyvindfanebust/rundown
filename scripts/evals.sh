@@ -1,5 +1,5 @@
 #!/bin/sh
-# Digest eval gate (ADR-0012): drive the real Digester and the live Summarizer over the
+# Live hostile-input eval gate (ADR-0023): drive the real Digester and the live Summarizer over the
 # synthetic hostile-input fixtures in evals/ and grade the emitted digest. Calls the live
 # Anthropic API (needs ANTHROPIC_API_KEY), so it is not run in CI. Run it manually before
 # merging any DEFAULT_MODEL bump or prompt change (summarize.ts hardening, the Digester's
