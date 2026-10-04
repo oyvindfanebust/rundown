@@ -273,7 +273,7 @@ summarizer's `data` string (grouped by [bucket](#bucket), with labeled field slo
 output. It fails hard on summarizer failure, refusal, or invalid output (no partial brief), and
 short-circuits an empty bundle by returning an empty Brief with no model call. Retries live in the
 summarizer, by class: bounded for transient API and schema-validation failures, never for
-refusals. A retry re-issues the same sealed call, adding no new leak path.
+refusals or a `max_tokens` stop. A retry re-issues the same sealed call, adding no new leak path.
 
 ### Brief
 

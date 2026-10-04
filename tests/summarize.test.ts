@@ -1,6 +1,7 @@
 import { test, expect, describe } from "bun:test";
-import type Anthropic from "@anthropic-ai/sdk";
+import Anthropic from "@anthropic-ai/sdk";
 import {
+  anthropicTransport,
   summarize,
   SummarizerError,
   SummarizerRefusal,
@@ -20,6 +21,13 @@ function textResponse(text: string): Anthropic.Message {
 
 function refusalResponse(): Anthropic.Message {
   return { stop_reason: "refusal", content: [] } as unknown as Anthropic.Message;
+}
+
+function maxTokensResponse(): Anthropic.Message {
+  return {
+    stop_reason: "max_tokens",
+    content: [{ type: "text", text: '{"summary": "cut' }],
+  } as unknown as Anthropic.Message;
 }
 
 /**
@@ -48,6 +56,15 @@ describe("summarize retry classes", () => {
   test("refusal never retries — one call, throws SummarizerRefusal", async () => {
     const { transport, calls } = scripted([refusalResponse()]);
     await expect(summarize(INPUT, { transport })).rejects.toBeInstanceOf(SummarizerRefusal);
+    expect(calls).toHaveLength(1);
+  });
+
+  test("a max_tokens stop is terminal: one call, a message to shorten the window", async () => {
+    const { transport, calls } = scripted([maxTokensResponse(), textResponse(JSON.stringify({ summary: "ok" }))]);
+    const err = await summarize(INPUT, { transport }).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(SummarizerError);
+    expect(err).not.toBeInstanceOf(SummarizerRefusal);
+    expect(String((err as Error).message)).toMatch(/shorten the window/i);
     expect(calls).toHaveLength(1);
   });
 
@@ -92,6 +109,9 @@ describe("summarize request assembly (ADR-0004 invariants stay inside)", () => {
     const userContent = req.messages[0]!.content;
     expect(userContent).toBe("<untrusted-data-pinnednonce>\nMEETING: launch review\n</untrusted-data-pinnednonce>");
     expect(system).not.toContain("launch review");
+
+    // A 64K output ceiling: room for a full window's summaries (#146).
+    expect(req.max_tokens).toBe(64_000);
 
     // Structured output via the response format, and ZERO tools (the crown-jewel rule).
     expect((req.output_config as any)?.format?.type).toBe("json_schema");
@@ -269,5 +289,78 @@ describe("summarize output validation (the parse seam)", () => {
     const out = await summarize({ ...INPUT, parse }, { transport });
     expect(out).toEqual({ summary: "ok", items: [] });
     expect(calls).toHaveLength(2); // one retry sufficed
+  });
+});
+
+describe("the default transport (real SDK client over a fake HTTP edge)", () => {
+  // Drives the production transport through the installed SDK with a scripted `fetch`, so the
+  // test covers what the SDK does with a 64K request: it must stream, because the SDK refuses
+  // non-streaming requests whose max_tokens implies more than ten minutes (about 21,333).
+  function sse(events: Array<Record<string, unknown>>): Response {
+    const body = events.map((e) => `event: ${e.type}\ndata: ${JSON.stringify(e)}\n\n`).join("");
+    return new Response(body, { status: 200, headers: { "content-type": "text/event-stream" } });
+  }
+
+  function streamedMessage(text: string, stopReason: string): Array<Record<string, unknown>> {
+    return [
+      {
+        type: "message_start",
+        message: {
+          id: "msg_test",
+          type: "message",
+          role: "assistant",
+          model: "claude-sonnet-5",
+          content: [],
+          stop_reason: null,
+          stop_sequence: null,
+          usage: { input_tokens: 10, output_tokens: 0 },
+        },
+      },
+      { type: "content_block_start", index: 0, content_block: { type: "text", text: "" } },
+      { type: "content_block_delta", index: 0, delta: { type: "text_delta", text: text.slice(0, 5) } },
+      { type: "content_block_delta", index: 0, delta: { type: "text_delta", text: text.slice(5) } },
+      { type: "content_block_stop", index: 0 },
+      { type: "message_delta", delta: { stop_reason: stopReason, stop_sequence: null }, usage: { output_tokens: 7 } },
+      { type: "message_stop" },
+    ];
+  }
+
+  function fakeClient(events: Array<Record<string, unknown>>): { client: Anthropic; bodies: any[] } {
+    const bodies: any[] = [];
+    const fakeFetch = (async (_url: unknown, init?: RequestInit) => {
+      bodies.push(JSON.parse(String(init?.body)));
+      return sse(events);
+    }) as unknown as typeof globalThis.fetch;
+    return { client: new Anthropic({ apiKey: "test-key", maxRetries: 0, fetch: fakeFetch }), bodies };
+  }
+
+  test("streams the 64K request and returns the assembled final message", async () => {
+    const out = JSON.stringify({ summary: "ok", items: [] });
+    const { client, bodies } = fakeClient(streamedMessage(out, "end_turn"));
+    const result = await summarize(INPUT, { transport: anthropicTransport(client) });
+
+    expect(result).toEqual({ summary: "ok", items: [] });
+    expect(bodies).toHaveLength(1);
+    expect(bodies[0].stream).toBe(true);
+    expect(bodies[0].max_tokens).toBe(64_000);
+    expect(bodies[0].tools).toBeUndefined();
+  });
+
+  test("a streamed max_tokens stop is terminal: one request, shorten-the-window message", async () => {
+    const { client, bodies } = fakeClient(streamedMessage('{"summary": "cut', "max_tokens"));
+    const err = await summarize(INPUT, { transport: anthropicTransport(client) }).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(SummarizerError);
+    expect(String((err as Error).message)).toMatch(/shorten the window/i);
+    expect(bodies).toHaveLength(1);
+  });
+
+  test("an error event mid-stream fails hard: one request, no schema retry, nothing partial", async () => {
+    // The SDK retries transient failures only until the response starts. An error event after
+    // that rejects the stream, and summarize lets it propagate (fail-hard, ADR-0005 §8).
+    const events = streamedMessage('{"summary": "ok"}', "end_turn").slice(0, 3);
+    events.push({ type: "error", error: { type: "overloaded_error", message: "Overloaded" } });
+    const { client, bodies } = fakeClient(events);
+    await expect(summarize(INPUT, { transport: anthropicTransport(client) })).rejects.toThrow("Overloaded");
+    expect(bodies).toHaveLength(1);
   });
 });

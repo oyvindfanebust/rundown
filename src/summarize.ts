@@ -5,6 +5,7 @@
 //   • wrap `data` in the <untrusted-data> delimiter (hardening + delimiter together,
 //     so they cannot drift)
 //   • make the tool-less API call (zero tools defined — the core rule)
+//   • stream the response, so the output ceiling can exceed the SDK's non-streaming limit
 //   • enforce structured output via the API's response format (json_schema), NEVER
 //     a tool (a tool would breach "zero tools")
 //   • own all retries, by failure class (ADR-0005 §8)
@@ -21,7 +22,10 @@ import Anthropic from "@anthropic-ai/sdk";
 // ops knob, env-first — deliberately NOT part of the personalization config
 // (ADR-0007's four fields), since the model is an internal choice, not user config.
 const DEFAULT_MODEL = "claude-sonnet-5";
-const MAX_TOKENS = 16_000;
+// The output ceiling for one call. A full window's digest needs room for about 150 entry
+// summaries. The default transport streams, because the SDK refuses a non-streaming request
+// this large (see `anthropicTransport`).
+const MAX_TOKENS = 64_000;
 const MAX_SCHEMA_RETRIES = 2;
 
 // The delimiter base name. The nonce'd tag, the defense-in-depth escape regex, and the
@@ -121,7 +125,9 @@ export interface SummarizeInput<T = unknown> {
  * `<untrusted-data>` delimiter, the tool-less shape, and structured-output
  * enforcement are all assembled by `summarize` and stay interface-invisible, so no
  * fake can weaken an ADR-0004 invariant. The seam is internal to the compiled
- * binary, so ADR-0004's structural seal is untouched.
+ * binary, so ADR-0004's structural seal is untouched. The params type is the SDK's
+ * non-streaming request because the caller never sets `stream`; the transport decides
+ * how to send it, and the default one streams.
  */
 export type MessageTransport = (
   params: Anthropic.MessageCreateParamsNonStreaming,
@@ -135,10 +141,21 @@ export interface SummarizeDeps {
 }
 
 /**
- * The default transport: the real Anthropic client, used purely as the message
- * pipe. Owns the transient-failure retries (SDK `maxRetries` — 429/5xx/network with
- * exponential backoff) and the `ANTHROPIC_API_KEY` requirement, so both live on the
- * production path only — an injected fake needs neither.
+ * A transport over an Anthropic client, used purely as the message pipe. It streams the
+ * request and resolves with the final assembled message, so the seam keeps its
+ * request → `Message` shape. Streaming is required at `MAX_TOKENS`: the SDK refuses a
+ * non-streaming request whose `max_tokens` implies more than ten minutes (above about
+ * 21,333 tokens). Exported so tests can drive it through the real SDK over a fake `fetch`.
+ */
+export function anthropicTransport(client: Anthropic): MessageTransport {
+  return (params) => client.messages.stream(params).finalMessage();
+}
+
+/**
+ * The default transport: the real Anthropic client. Owns the transient-failure retries
+ * (SDK `maxRetries`: 429/5xx/network with exponential backoff, until the response starts
+ * streaming) and the `ANTHROPIC_API_KEY` requirement, so both live on the production path
+ * only; an injected fake needs neither.
  */
 function defaultTransport(): MessageTransport {
   const apiKey = process.env.ANTHROPIC_API_KEY;
@@ -147,15 +164,14 @@ function defaultTransport(): MessageTransport {
       "ANTHROPIC_API_KEY is not set. Export it in your environment (rundown status reports this).",
     );
   }
-  const client = new Anthropic({ apiKey, maxRetries: 5 });
-  return (params) => client.messages.create(params) as Promise<Anthropic.Message>;
+  return anthropicTransport(new Anthropic({ apiKey, maxRetries: 5 }));
 }
 
 /**
  * Summarize untrusted `data` under trusted `instructions`, returning structured
  * output validated against `schema`. Fail-hard: transient errors retry (in the
- * transport — SDK-bounded), invalid output retries a bounded number of times,
- * refusals do not retry. `deps.transport` overrides the real Anthropic call for tests.
+ * transport, SDK-bounded), invalid output retries a bounded number of times, refusals
+ * and `max_tokens` stops do not retry. `deps.transport` overrides the real Anthropic call for tests.
  */
 export async function summarize<T>(
   { instructions, data, schema, parse }: SummarizeInput<T>,
@@ -192,6 +208,13 @@ export async function summarize<T>(
 
     if (response.stop_reason === "refusal") {
       throw new SummarizerRefusal("The summarizer model refused the request.");
+    }
+    // The output hit MAX_TOKENS. Not retried: an identical call stops identically and
+    // costs the same again. The JSON is cut off, so nothing partial is returned.
+    if (response.stop_reason === "max_tokens") {
+      throw new SummarizerError(
+        `The summarizer reached its ${MAX_TOKENS.toLocaleString("en-US")}-token output limit. Shorten the window (--window) and run again.`,
+      );
     }
 
     const text = response.content
