@@ -1,0 +1,211 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Digest rendering prototype</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/marked/12.0.2/marked.min.js"></script>
+<style>
+:root { --bg:#f6f5f2; --fg:#1d1d1b; --muted:#6b6a65; --card:#fff; --line:#e3e1db; --accent:#3b5bdb; --bar:#1d1d1b; --barfg:#fff; }
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) { --bg:#171716; --fg:#e8e6e1; --muted:#9a988f; --card:#21211f; --line:#33322f; --accent:#91a7ff; --bar:#e8e6e1; --barfg:#171716; } }
+:root[data-theme="dark"] { --bg:#171716; --fg:#e8e6e1; --muted:#9a988f; --card:#21211f; --line:#33322f; --accent:#91a7ff; --bar:#e8e6e1; --barfg:#171716; }
+* { box-sizing: border-box; }
+body { margin:0; background:var(--bg); color:var(--fg); font:15px/1.5 -apple-system, system-ui, sans-serif; padding:16px 16px 96px; }
+.wrap { max-width: 860px; margin: 0 auto; }
+.note { color:var(--muted); font-size:13px; border-left:3px solid var(--line); padding:4px 12px; margin-bottom:16px; }
+.meta { color:var(--muted); font-size:13px; margin:8px 0 12px; }
+.chat { background:var(--card); border:1px solid var(--line); border-radius:12px; padding:8px 24px 16px; overflow-wrap:anywhere; }
+.chat h2 { font-size:18px; margin:20px 0 6px; } .chat h3 { font-size:15px; margin:16px 0 4px; }
+.chat ul { padding-left:20px; margin:4px 0; } .chat li { margin:2px 0; }
+.chat details { margin:6px 0; } .chat summary { cursor:pointer; color:var(--accent); }
+.chat blockquote { margin:6px 0; padding-left:12px; border-left:3px solid var(--line); color:var(--muted); }
+pre { white-space:pre-wrap; background:var(--card); border:1px solid var(--line); border-radius:12px; padding:16px; font-size:12px; }
+.bar { position:fixed; bottom:16px; left:50%; transform:translateX(-50%); background:var(--bar); color:var(--barfg); border-radius:999px; display:flex; align-items:center; gap:8px; padding:6px 10px; box-shadow:0 4px 16px rgba(0,0,0,.3); font-size:14px; white-space:nowrap; }
+.bar button { background:none; border:0; color:inherit; font-size:18px; cursor:pointer; padding:2px 8px; }
+.bar label { font-size:12px; opacity:.8; cursor:pointer; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="note"><b>PROTOTYPE, throwaway.</b> How the <code>rundown</code> skill could render one week's digest in chat. Data: the 12 synthetic entries from <code>sample-week.json</code> (with <code>attention</code> removed, now out of scope), padded with synthetic filler to a real week's size (23 meetings, about 108 mail threads, 56 chats). Assumption: the window is the past week, read on Sunday evening. Flip variants with ← → or the bar.</div>
+  <div class="meta" id="meta"></div>
+  <div id="out"></div>
+</div>
+<div class="bar">
+  <button id="prev" aria-label="Previous variant">←</button>
+  <span id="label"></span>
+  <button id="next" aria-label="Next variant">→</button>
+  <label><input type="checkbox" id="src"> markdown</label>
+</div>
+<script>
+const SAMPLE = {"window": {"from": "2026-09-28T00:00:00+02:00", "to": "2026-10-05T00:00:00+02:00"}, "timezone": "Europe/Oslo", "counts": {"meetings": {"records": 8, "entries": 4}, "mail": {"records": 7, "entries": 4}, "chat": {"records": 33, "entries": 4}}, "summary": "A meeting-heavy week. You run the architecture review on Thursday and owe Acme an answer on the contract renewal. The Q4 budget thread is waiting on Grace. Friday's standup moved to 10:00.", "meetings": [{"id": "9a04c7e2f15b3d68", "type": "meeting", "title": "Platform standup", "recurring": true, "online": true, "organizer": "Grace Hopper", "yourResponse": "accepted", "attendees": ["Grace Hopper", "Ada Lovelace", "Alan Turing", "Barbara Liskov", "Edsger Dijkstra"], "occurrences": [{"start": "2026-09-28T09:00:00+02:00", "end": "2026-09-28T09:15:00+02:00"}, {"start": "2026-09-29T09:00:00+02:00", "end": "2026-09-29T09:15:00+02:00"}, {"start": "2026-09-30T09:00:00+02:00", "end": "2026-09-30T09:15:00+02:00"}, {"start": "2026-10-01T09:00:00+02:00", "end": "2026-10-01T09:15:00+02:00", "cancelled": true}, {"start": "2026-10-02T10:00:00+02:00", "end": "2026-10-02T10:15:00+02:00", "movedFrom": "2026-10-02T09:00:00+02:00", "yourResponse": "notResponded"}]}, {"id": "c85d1e3a7f20b946", "type": "meeting", "title": "Team lead sync", "recurring": true, "rooms": ["Hopper"], "organizer": "Margaret Hamilton", "yourResponse": "tentative", "showAs": "tentative", "attendees": ["Margaret Hamilton", "Grace Hopper", "Linus Torvalds"], "occurrences": [{"start": "2026-09-29T14:00:00+02:00", "end": "2026-09-29T15:00:00+02:00"}]}, {"id": "7c1e04b9a2d35f81", "type": "meeting", "title": "Architecture review: event store", "start": "2026-10-01T13:00:00+02:00", "end": "2026-10-01T14:30:00+02:00", "rooms": ["Kepler"], "online": true, "youOrganize": true, "attendees": ["Ada Lovelace", "Grace Hopper", "Barbara Liskov", "Edsger Dijkstra", "Alan Turing", "Margaret Hamilton", "Linus Torvalds", "Katherine Johnson"], "moreAttendees": 3}, {"id": "2b7f90e4c1a8d563", "type": "meeting", "title": "Ada out of office", "start": "2026-10-02", "end": "2026-10-03", "allDay": true, "organizer": "Ada Lovelace", "yourResponse": "notResponded", "showAs": "free", "attendees": ["Ada Lovelace"]}], "mail": [{"id": "e2a9c4417b0d6f35", "type": "mail", "subject": "Acme renewal: terms for 2027–2029", "messages": 1, "firstAt": "2026-10-02T16:42:00+02:00", "lastAt": "2026-10-02T16:42:00+02:00", "lastFrom": "Katherine Johnson", "people": ["Katherine Johnson", "Alan Turing"], "unread": 1, "importance": "high", "attachments": true, "summary": "Katherine (Acme) sends revised renewal terms with a three-year option at a lower rate and asks for a decision by Friday. Draft contract attached."}, {"id": "d0c37a5e2b91f846", "type": "mail", "subject": "Re: invoice 4471 overdue, pay here: hxxps://billing-portal.example/4471", "messages": 2, "firstAt": "2026-09-30T08:05:00+02:00", "lastAt": "2026-10-01T11:20:00+02:00", "lastFrom": "Billing Team", "people": ["Billing Team"], "unread": 2, "continuesFromBefore": true, "summary": "Two reminders about an overdue invoice 4471 from an unfamiliar billing address, each urging payment through a link."}, {"id": "3f6b2a90d1c4e758", "type": "mail", "subject": "Re: Q4 budget draft", "messages": 3, "fromYou": 1, "firstAt": "2026-09-29T10:12:00+02:00", "lastAt": "2026-09-30T15:48:00+02:00", "lastFromYou": true, "people": ["Grace Hopper", "Margaret Hamilton"], "flagged": true, "attachments": true, "continuesFromBefore": true, "summary": "Grace shared the Q4 draft; Margaret questioned the cloud line. You replied on Wednesday asking Grace to split cloud cost by team before you sign off."}, {"id": "61e8b5d03c7a29f4", "type": "mail", "subject": "Your weekly digest from GitHub", "messages": 1, "firstAt": "2026-09-28T07:00:00+02:00", "lastAt": "2026-09-28T07:00:00+02:00", "lastFrom": "GitHub", "people": ["GitHub"], "summary": "Automated weekly activity digest for the platform repositories."}], "chat": [{"id": "5d8f31c0e94a7b26", "type": "chat", "kind": "channel", "channel": "acme-integration", "external": true, "messages": 5, "fromYou": 1, "mentionsYou": 1, "firstAt": "2026-10-01T09:30:00+02:00", "lastAt": "2026-10-02T17:05:00+02:00", "lastFrom": "Katherine Johnson", "people": ["Katherine Johnson", "Alan Turing"], "summary": "Katherine pinged you to confirm you had seen the renewal email; Alan noted the API rate limits in the new terms differ from today's."}, {"id": "a7d2f6083be15c49", "type": "chat", "kind": "dm", "messages": 12, "fromYou": 6, "firstAt": "2026-09-28T13:14:00+02:00", "lastAt": "2026-10-01T18:02:00+02:00", "lastFromYou": true, "people": ["Ada Lovelace"], "summary": "You and Ada worked through the event-store proposal; she wants it first on Thursday's agenda. Your last message confirmed it."}, {"id": "b40e9d2c7a61f358", "type": "chat", "kind": "channel", "channel": "platform-team", "messages": 9, "fromYou": 2, "mentionsYou": 2, "firstAt": "2026-09-29T08:41:00+02:00", "lastAt": "2026-09-30T16:10:00+02:00", "lastFrom": "Edsger Dijkstra", "people": ["Edsger Dijkstra", "Barbara Liskov", "Grace Hopper", "Alan Turing"], "continuesFromBefore": true, "summary": "A thread from last week on retry semantics continued; you were asked twice whether the review covers idempotency keys. Edsger posted a draft answer."}, {"id": "f19c62a8e0d74b35", "type": "chat", "kind": "group-dm", "messages": 7, "fromYou": 2, "firstAt": "2026-09-30T12:02:00+02:00", "lastAt": "2026-09-30T12:40:00+02:00", "lastFrom": "Barbara Liskov", "people": ["Ada Lovelace", "Grace Hopper", "Barbara Liskov"], "summary": "Lunch plans and a short exchange about the offsite date; settled on 14 October."}]};
+
+// ── synthetic filler, deterministic ──
+let seed = 7; const rnd = () => (seed = (seed * 16807) % 2147483647) / 2147483647;
+const pick = a => a[Math.floor(rnd() * a.length)];
+const people = ["Ada Lovelace","Grace Hopper","Alan Turing","Barbara Liskov","Edsger Dijkstra","Margaret Hamilton","Linus Torvalds","Katherine Johnson","Donald Knuth","Frances Allen","John Backus","Radia Perlman","Ken Thompson","Hedy Lamarr","Tim Berners-Lee","Shafi Goldwasser"];
+const at = (dayIdx, h, m) => { const dt = new Date(Date.UTC(2026, 8, 28 + dayIdx, h - 2, m)); return dt.toISOString().replace(".000Z", "+00:00"); };
+const topics = ["the migration runbook","on-call handover","the Kafka upgrade","Q4 hiring plan","the incident on Tuesday","SSO for the partner portal","cost report for September","the API deprecation notice","test flakiness in CI","the onboarding doc","release 4.2 notes","the data retention policy","quarterly OKRs","the vendor security review","the offsite agenda"];
+const id = () => Math.floor(rnd() * 2 ** 52).toString(16).padStart(16, "0");
+
+function fillMeetings() {
+  const out = [];
+  const series = [["1:1 Grace / you","Grace Hopper",[1],10,30],["Ops review","Margaret Hamilton",[2],11,60],["Sprint planning","Barbara Liskov",[0],13,60],["Data platform guild","Donald Knuth",[3],15,45],["Security office hours","Radia Perlman",[2,4],12,30],["Product sync","Frances Allen",[0,3],14,30]];
+  for (const [title, org, days, h, mins] of series) {
+    out.push({ id:id(), type:"meeting", title, recurring:true, online:true, organizer:org, yourResponse: pick(["accepted","accepted","accepted","tentative"]),
+      attendees:[org, pick(people), pick(people)].filter((v,i,a)=>a.indexOf(v)===i),
+      occurrences: days.map(d => ({ start: at(d,h,0), end: at(d,h,mins) })) });
+  }
+  const oneoffs = [["Customer call: Initech onboarding",0,15],["Interview: senior backend engineer",1,13],["Interview: platform engineer",3,10],["Lunch & learn: Rust at work",2,11],["Budget walkthrough with finance",1,15],["Incident review: payment timeouts",2,9],["Vendor demo: log analytics",3,16],["Planning poker for the migration",4,13],["Farewell drinks for Ken",4,16],["Design crit: notifications",0,11],["Partner workshop prep",4,9],["Board deck review",3,8],["Recruiting debrief",4,11]];
+  for (const [title,d,h] of oneoffs) {
+    const youOrg = rnd() < .2;
+    const e = { id:id(), type:"meeting", title, start:at(d,h,0), end:at(d,h,rnd()<.5?30:60), online: rnd()<.8 || undefined, attendees:[pick(people),pick(people),pick(people)].filter((v,i,a)=>a.indexOf(v)===i) };
+    if (youOrg) e.youOrganize = true; else { e.organizer = e.attendees[0]; e.yourResponse = pick(["accepted","accepted","accepted","notResponded","declined","tentative"]); }
+    if (rnd() < .08) e.cancelled = true;
+    out.push(e);
+  }
+  return out;
+}
+
+function fillMail() {
+  const out = [];
+  const bots = [["GitHub","[platform/api] Pull request #%n: %t"],["Workday","Action required: approve time off request"],["IT Service Desk","Ticket INC-%n has been updated"],["Confluence","%p mentioned you on a page"],["Microsoft Teams","You have missed activity in Teams"],["Company News","This week at the company"],["Security Awareness","Reminder: complete your phishing training"],["Expensify","Your report is ready for review"],["PagerDuty","[Resolved] api-gateway latency"],["Google Calendar","Updated invitation: %t"]];
+  for (let i = 0; i < 46; i++) {
+    const [from, subj] = pick(bots); const d = Math.floor(rnd()*7);
+    const s = subj.replace("%n", 1000 + Math.floor(rnd()*9000)).replace("%t", pick(topics)).replace("%p", pick(people));
+    const t = at(d, 6 + Math.floor(rnd()*14), Math.floor(rnd()*60));
+    out.push({ id:id(), type:"mail", subject:s, messages:1, firstAt:t, lastAt:t, lastFrom:from, people:[from], ...(rnd()<.6?{unread:1}:{}), summary:`Automated notice from ${from} about ${pick(topics)}.` });
+  }
+  for (let i = 0; i < 34; i++) {
+    const p = pick(people), t2 = pick(topics), d = Math.floor(rnd()*6), n = 1 + Math.floor(rnd()*4);
+    out.push({ id:id(), type:"mail", subject:`${pick(["","Re: ","Fw: "])}${t2[0].toUpperCase()+t2.slice(1)}`, messages:n, firstAt:at(d,9,0), lastAt:at(d,9+n,15), lastFrom:p, people:[p,pick(people)].filter((v,i,a)=>a.indexOf(v)===i), ...(rnd()<.3?{unread:1}:{}), summary:`${p.split(" ")[0]} shares an update on ${t2}; ${pick(["no question for you","FYI only","you are on cc","for the record"])}.` });
+  }
+  for (let i = 0; i < 12; i++) {
+    const p = pick(people), t2 = pick(topics), d = Math.floor(rnd()*6);
+    out.push({ id:id(), type:"mail", subject:`${pick(["Quick question: ","Re: ","Need your input: "])}${t2}`, messages:1+Math.floor(rnd()*3), firstAt:at(d,10,0), lastAt:at(d,14,30), lastFrom:p, people:[p], unread:rnd()<.6?1:undefined, ...(rnd()<.3?{flagged:true}:{}), summary:`${p.split(" ")[0]} asks whether you can ${pick(["review","sign off on","comment on","own"])} ${t2} ${pick(["by Wednesday","this week","before the release","when you have time"])}.` });
+  }
+  for (let i = 0; i < 12; i++) {
+    const p = pick(people), t2 = pick(topics), d = Math.floor(rnd()*6);
+    out.push({ id:id(), type:"mail", subject:`Re: ${t2}`, messages:2+Math.floor(rnd()*3), fromYou:1, firstAt:at(d,9,0), lastAt:at(d,16,0), lastFromYou:true, people:[p], summary:`You asked ${p.split(" ")[0]} about ${t2}; no reply yet.` });
+  }
+  return out;
+}
+
+function fillChat() {
+  const out = [];
+  for (let i = 0; i < 21; i++) {
+    const p = pick(people), d = Math.floor(rnd()*7), mine = rnd() < .5, n = 1 + Math.floor(rnd()*14);
+    out.push({ id:id(), type:"chat", kind:"dm", messages:n, fromYou:Math.ceil(n/2), firstAt:at(d,9,0), lastAt:at(d,10+Math.floor(rnd()*8),0), ...(mine?{lastFromYou:true}:{lastFrom:p}), people:[p], summary: mine ? `You and ${p.split(" ")[0]} talked about ${pick(topics)}; you had the last word.` : `${p.split(" ")[0]} ${pick(["asked about","sent a link on","flagged a problem with","said thanks for help with"])} ${pick(topics)}.` });
+  }
+  for (let i = 0; i < 16; i++) {
+    const ps = [pick(people),pick(people),pick(people)].filter((v,i,a)=>a.indexOf(v)===i), d = Math.floor(rnd()*7), n = 2+Math.floor(rnd()*20);
+    out.push({ id:id(), type:"chat", kind:"group-dm", messages:n, ...(rnd()<.6?{fromYou:Math.floor(n/4)}:{}), firstAt:at(d,9,0), lastAt:at(d,15,0), lastFrom:ps[0], people:ps, summary:`${ps.map(x=>x.split(" ")[0]).join(", ")} discussed ${pick(topics)}.` });
+  }
+  const chans = ["platform-alerts","general","random","release-train","incident-42","architecture","data-eng","hiring","frontend","security"];
+  for (let i = 0; i < 15; i++) {
+    const c = chans[i % chans.length] + (i >= chans.length ? "-2" : ""), d = Math.floor(rnd()*7), mention = rnd() < .4;
+    out.push({ id:id(), type:"chat", kind:"channel", channel:c, messages:1+Math.floor(rnd()*6), ...(rnd()<.7?{fromYou:1}:{}), ...(mention?{mentionsYou:1}:{}), firstAt:at(d,9,0), lastAt:at(d,13,0), lastFrom:pick(people), people:[pick(people)], summary: mention ? `${pick(people).split(" ")[0]} mentioned you about ${pick(topics)}.` : `You posted about ${pick(topics)}.` });
+  }
+  return out;
+}
+
+const W = { ...SAMPLE, meetings:[...SAMPLE.meetings, ...fillMeetings()], mail:[...SAMPLE.mail, ...fillMail()], chat:[...SAMPLE.chat, ...fillChat()] };
+
+// ── helpers ──
+const TZ = "Europe/Oslo";
+const dt = s => new Date(s.length === 10 ? s + "T00:00:00+02:00" : s);
+const wd = s => dt(s).toLocaleDateString("en-GB", { weekday:"short", timeZone:TZ });
+const dayKey = s => dt(s).toLocaleDateString("en-CA", { timeZone:TZ });
+const dayName = k => new Date(k + "T12:00:00+02:00").toLocaleDateString("en-GB", { weekday:"long", day:"numeric", month:"short", timeZone:TZ });
+const hm = s => s.length === 10 ? "all day" : dt(s).toLocaleTimeString("en-GB", { hour:"2-digit", minute:"2-digit", timeZone:TZ });
+const first = n => n.split(" ")[0];
+const q = s => `“${s}”`; // summaries render as quoted data (SKILL.md rule 4)
+const who = e => e.kind === "channel" ? `#${e.channel}` : e.kind === "dm" ? `DM ${e.people[0]}` : `group: ${e.people.map(first).join(", ")}`;
+const resp = r => ({ accepted:"", tentative:" · tentative", notResponded:" · **not answered**", declined:" · declined" })[r] ?? "";
+const occ = e => e.recurring ? e.occurrences : [{ start:e.start, end:e.end, cancelled:e.cancelled }];
+const oneWay = m => m.messages === 1 && !m.fromYou && m.people.length === 1 && !m.flagged && m.importance !== "high";
+const yourMove = e => !e.lastFromYou && (e.type === "mail" ? (!oneWay(e) && (e.unread || e.flagged || e.importance === "high")) : (e.kind === "dm" || e.mentionsYou));
+const meetingLine = e => {
+  const o = occ(e), when = e.recurring ? `${o.length}× (${o.map(x => wd(x.start)).join(", ")}) ${hm(o[0].start)}` : `${wd(e.start)} ${hm(e.start)}`;
+  const flags = [e.youOrganize ? "you organize" : e.organizer && `by ${e.organizer}`, e.cancelled && "cancelled", o.some(x => x.cancelled) && "one cancelled", o.some(x => x.movedFrom) && "one moved"].filter(Boolean).join(", ");
+  return `**${e.title}**, ${when}${flags ? ` · ${flags}` : ""}${resp(e.yourResponse)}`;
+};
+const mailLine = m => `**${m.subject}**, ${m.lastFromYou ? "you wrote last" : first(m.lastFrom)}${m.messages > 1 ? ` · ${m.messages} msgs` : ""}${m.unread ? " · unread" : ""}${m.flagged ? " · flagged" : ""}${m.importance === "high" ? " · high" : ""} — ${q(m.summary)}`;
+const chatLine = c => `**${who(c)}**, ${c.messages} msgs${c.lastFromYou ? " · you wrote last" : ""}${c.mentionsYou ? " · mentions you" : ""} — ${q(c.summary)}`;
+const counts = () => `${W.meetings.length} meetings · ${W.mail.length} mail threads · ${W.chat.length} chats`;
+const cmp = (x, y) => dt(x) - dt(y);
+const byLast = (a, b) => cmp(b.lastAt, a.lastAt);
+
+// ── variants ──
+const VARIANTS = {
+  A: ["By type, everything", () => {
+    let md = `## Your week, 28 Sep – 4 Oct\n\n${q(W.summary)}\n\n${counts()}\n\n### Meetings\n`;
+    md += W.meetings.slice().sort((a, b) => cmp(occ(a)[0].start, occ(b)[0].start)).map(e => `- ${meetingLine(e)}`).join("\n");
+    md += `\n\n### Mail\n` + W.mail.slice().sort(byLast).map(m => `- ${mailLine(m)}`).join("\n");
+    md += `\n\n### Chat\n` + W.chat.slice().sort(byLast).map(c => `- ${chatLine(c)}`).join("\n");
+    return md;
+  }],
+  B: ["By day, bulk folded", () => {
+    let md = `## Your week, 28 Sep – 4 Oct\n\n${q(W.summary)}\n`;
+    const days = {};
+    const put = (k, x) => (days[k] ??= { meet:[], conv:[], bulk:[] })[x.kind].push(x.e);
+    for (const e of W.meetings) for (const o of occ(e)) put(dayKey(o.start), { kind:"meet", e:{ ...e, _o:o } });
+    for (const m of W.mail) put(dayKey(m.lastAt), { kind: oneWay(m) ? "bulk" : "conv", e:m });
+    for (const c of W.chat) put(dayKey(c.lastAt), { kind:"conv", e:c });
+    for (const k of Object.keys(days).sort()) {
+      const d = days[k];
+      md += `\n### ${dayName(k)}\n`;
+      for (const e of d.meet.sort((a, b) => cmp(a._o.start, b._o.start)))
+        md += `- ${hm(e._o.start)} **${e.title}**${e._o.cancelled || e.cancelled ? " · cancelled" : ""}${e._o.movedFrom ? ` · moved from ${hm(e._o.movedFrom)}` : ""}${e.youOrganize ? " · you organize" : ""}${resp(e._o.yourResponse ?? e.yourResponse)}\n`;
+      for (const e of d.conv.sort(byLast)) md += `- ${e.type === "mail" ? "✉ " + mailLine(e) : "💬 " + chatLine(e)}\n`;
+      if (d.bulk.length) {
+        const by = {}; d.bulk.forEach(m => by[m.lastFrom] = (by[m.lastFrom] ?? 0) + 1);
+        md += `- _${d.bulk.length} one-way mails: ${Object.entries(by).sort((a, b) => b[1] - a[1]).map(([f, n]) => n > 1 ? `${f} ×${n}` : f).join(", ")}_\n`;
+      }
+    }
+    return md;
+  }],
+  C: ["Triage, built by the skill", () => {
+    const conv = [...W.mail, ...W.chat];
+    const yours = conv.filter(yourMove).sort(byLast);
+    const waiting = conv.filter(e => e.lastFromYou).sort(byLast);
+    const invites = W.meetings.filter(e => ["notResponded", "tentative"].includes(e.yourResponse) && !e.cancelled);
+    const rest = conv.filter(e => !yours.includes(e) && !waiting.includes(e));
+    let md = `## Your week, 28 Sep – 4 Oct\n\n${q(W.summary)}\n\n`;
+    md += `### Probably your move (${yours.length})\n_Last word is someone else's, and it is unread, flagged, high importance, a DM or a mention._\n`;
+    md += yours.map(e => `- ${e.type === "mail" ? "✉ " + mailLine(e) : "💬 " + chatLine(e)}`).join("\n");
+    md += `\n\n### You're waiting on others (${waiting.length})\n` + waiting.map(e => `- ${e.type === "mail" ? `✉ **${e.subject}** → ${e.people.map(first).join(", ")}` : `💬 **${who(e)}**`}, ${wd(e.lastAt)}`).join("\n");
+    md += `\n\n### Invites without a firm answer (${invites.length})\n` + invites.map(e => `- ${meetingLine(e)}`).join("\n");
+    const busiest = {}; W.meetings.forEach(e => occ(e).forEach(o => { if (!o.cancelled) busiest[dayKey(o.start)] = (busiest[dayKey(o.start)] ?? 0) + 1; }));
+    md += `\n\n### Meetings (${W.meetings.length})\n${Object.entries(busiest).sort().map(([k, n]) => `${dayName(k).split(" ")[0]} ${n}`).join(" · ")}. You organized: ${W.meetings.filter(e => e.youOrganize).map(e => e.title).join("; ")}.`;
+    const bulk = rest.filter(e => e.type === "mail" && oneWay(e)), other = rest.filter(e => !bulk.includes(e));
+    const by = {}; bulk.forEach(m => by[m.lastFrom] = (by[m.lastFrom] ?? 0) + 1);
+    md += `\n\n### Everything else (${rest.length})\n${bulk.length} one-way mails (${Object.entries(by).sort((a, b) => b[1] - a[1]).map(([f, n]) => `${f} ${n}`).join(", ")}); ${other.length} conversations with nothing open.\n\n<details><summary>Show all ${rest.length}</summary>\n\n` + rest.sort(byLast).map(e => `- ${e.type === "mail" ? "✉ " + mailLine(e) : "💬 " + chatLine(e)}`).join("\n") + `\n\n</details>`;
+    return md;
+  }],
+};
+
+// ── switcher ──
+const keys = Object.keys(VARIANTS);
+function show() {
+  const p = new URLSearchParams(location.search), v = keys.includes(p.get("variant")) ? p.get("variant") : "A";
+  const md = VARIANTS[v][1](), src = document.getElementById("src").checked;
+  document.getElementById("label").textContent = `${v} (${VARIANTS[v][0]})`;
+  document.getElementById("meta").textContent = `${counts()} · rendered reply ${md.length.toLocaleString()} chars, ${md.split("\n").filter(Boolean).length} lines, about ${Math.round(md.length / 4).toLocaleString()} output tokens`;
+  const out = document.getElementById("out");
+  if (src) { out.innerHTML = ""; const pre = document.createElement("pre"); pre.textContent = md; out.append(pre); }
+  else out.innerHTML = `<div class="chat">${marked.parse(md)}</div>`;
+}
+function go(step) {
+  const p = new URLSearchParams(location.search), cur = keys.indexOf(p.get("variant") ?? "A");
+  p.set("variant", keys[(Math.max(cur, 0) + step + keys.length) % keys.length]);
+  history.replaceState(null, "", "?" + p); show();
+}
+document.getElementById("prev").onclick = () => go(-1);
+document.getElementById("next").onclick = () => go(1);
+document.getElementById("src").onchange = show;
+addEventListener("keydown", e => { if (e.target.closest?.("input,textarea,[contenteditable]")) return; if (e.key === "ArrowLeft") go(-1); if (e.key === "ArrowRight") go(1); });
+show();
+</script>
+</body>
+</html>

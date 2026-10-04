@@ -6,6 +6,7 @@ Throwaway, for [Sketch the typed records and a sample digest for one week](https
 - `output.ts`: the output, and `FIELD_TRUST`, the trust class of every field.
 - `sample-week.ts`: one synthetic week, typed against `output.ts`. `bun prototypes/typed-records-digest/emit.ts` writes `sample-week.json`.
 - `real-week.ts` + `real-week.html`: pulls one real week from Graph and Slack (`slack-week.ts`, for [Compare chat entries against one real Slack week](https://github.com/oyvindfanebust/rundown/issues/130)), maps it to the output (no model parts) and writes an HTML page comparing each entry with its raw Graph objects. `OUT_DIR=<dir outside the repo> bun prototypes/typed-records-digest/real-week.ts [from] [to]`. The output holds real mail: never commit or publish it.
+- `skill-render.html`: three ways the `rundown` skill could render one week's digest in chat, for [Prototype how the rundown skill renders one week's digest](https://github.com/oyvindfanebust/rundown/issues/134). Synthetic only: the sample week padded with filler to a real week's size. Open the file; ← → switch variants.
 - `shape.ts`: label, clamp, zoned-instant and digest helpers shared by both.
 - Typecheck: `bunx tsc --noEmit -p prototypes/typed-records-digest`.
 
