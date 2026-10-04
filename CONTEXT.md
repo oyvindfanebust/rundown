@@ -245,6 +245,12 @@ The derived, structural-trusted label on each item in a [Bundle](#bundle): `stan
 inside the window means `recent`; after now means `upcoming`. It is a pure function of trusted
 fields, so it is safe to surface structurally; it is not a source-provided field.
 
+Retired with the digest (map [#117](https://github.com/oyvindfanebust/rundown/issues/117), decided
+on [#138](https://github.com/oyvindfanebust/rundown/issues/138)). A [digest entry](#digest-entry)
+has no bucket: a calendar series can have occurrences on both sides of now, and `standing` has no
+source left to reach it. An entry's place in time is read from its first and last times, its
+continuing flag and [generatedAt](#generatedat).
+
 ### Summarizer
 
 The **Summarizer** component is the sandboxed, tool-less Anthropic call — the only place where
@@ -331,6 +337,29 @@ The distinct typed fields — rather than one free-text blob — are deliberate:
 arrives as "a quote from an email titled X", never a bare imperative (ADR-0004, the output-side
 confinement of leaked content).
 
+### digest entry
+
+Planned, not yet built (map [#117](https://github.com/oyvindfanebust/rundown/issues/117)). One
+flat object in the digest: one conversation or calendar commitment, grouping the typed records
+that belong to it within the window. A mail thread (merged with any others the same sender started
+under the same subject), a Slack conversation (DM, group DM or channel) over the whole window, a
+recurring calendar series with its occurrences, or a one-off event. Only records inside the window
+belong to an entry; one that began earlier is flagged as continuing, not extended backwards. The
+unit is the same whatever the window's length. An entry is summarized, never planned: `rundown`
+extracts no commitments, tasks or waiting items from it; planning is the consumer's job.
+_Avoid_: digest item (collides with [ExtractedItem](#extracteditem)), message, event (those are records).
+
+### generatedAt
+
+Planned, not yet built (map [#117](https://github.com/oyvindfanebust/rundown/issues/117), decided
+on [#138](https://github.com/oyvindfanebust/rundown/issues/138)). The instant a run produced its
+digest, taken once from the run's clock and written like the window's bounds. It sits in the
+envelope next to `window` and `timezone`, and the [Summarizer](#summarizer) is given it as a
+trusted fact. It replaces `windowIsPast`: a window can be partly past, and one boolean cannot say
+which entries lie behind and which ahead. The digest's overview describes what happened up to it
+and what is scheduled after it, under one prompt for every window. Trusted by type.
+_Avoid_: now (ambiguous between the run and the reader), `windowIsPast`.
+
 ### Emission
 
 The composition-root step where the [Brief](#brief) leaves `rundown`. `rundown brief` serializes
@@ -381,6 +410,12 @@ sources (untrusted → data block). It is allowed to steer the model precisely b
 user-authored and trusted — the mirror of the untrusted data it steers the model to describe.
 Render-time personalization (sections, ordering, format) is applied after the Brief by the agent,
 not here.
+
+Retired with the digest (map [#117](https://github.com/oyvindfanebust/rundown/issues/117), decided
+on [#138](https://github.com/oyvindfanebust/rundown/issues/138)). The digest is summarized, not
+planned, so there is nothing to steer; steering is the consumer's job. The `guidance` config key
+goes, and a config that still sets it (or `suppress`) fails with an error that names the removed
+key and why, rather than the generic unknown-key message.
 
 ### Config
 
