@@ -5,7 +5,7 @@
 //
 // This file is one of the two places untrusted bytes are read (ADR-0022): `unwrap()` here
 // feeds Summarizer input and grouping (the mail merge, people dedup). The other is
-// `label()`, through which every string that leaves in the digest passes. Nothing unwrapped
+// `label()`, through which every label that leaves in the digest passes. Nothing unwrapped
 // here is copied into the digest directly.
 
 import {

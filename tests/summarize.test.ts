@@ -173,7 +173,7 @@ describe("summarize delimiter breakout (ADR-0004 §2 Layer-1)", () => {
 describe("summarize invisible-Unicode stripping (defense-in-depth)", () => {
   // The nonce'd delimiter protects the quarantine boundary; it says nothing about what the
   // model reads INSIDE it. Invisible/smuggled Unicode in source content can hide instructions
-  // that survive any human review of the rendered brief. All test literals use explicit
+  // that survive any human review of the rendered digest input. All test literals use explicit
   // `\u`/`\u{...}` escapes rather than literal invisible characters, for the same reviewability
   // reason the stripped constant itself is defined that way.
   const NONCE = "unicodenonce";

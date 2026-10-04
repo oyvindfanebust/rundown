@@ -87,7 +87,7 @@ otherwise just as strict, fail-hard, and targeted in its messages as ADR-0007 §
   explicit windows. It is used only for progress and `status` display, never as control flow.
 - A wholly-past explicit window (e.g. `--window 2026-06-01..2026-06-07`) automatically gets the
   retrospective task. The config resolver already reconciles `window.to <= now` into the neutral
-  `windowIsPast` boolean that the [Planner](../../src/plan.ts) maps to the review-vs-plan prompt
+  `windowIsPast` boolean that the Planner (`src/plan.ts`, since removed) maps to the review-vs-plan prompt
   switch, so no new logic is needed: the past-window review behavior extends to explicit dates
   without further work. Single-clock reconciliation lives in config, per
   [ADR-0005](0005-planning-layer.md).

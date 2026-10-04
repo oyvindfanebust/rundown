@@ -238,14 +238,10 @@ interface ChatMessage extends RecordBase {
 - Until the Digester landed, the Planner kept a mapping from each record type to the old item
   fields, so the Brief and its evidence kept their shape. The mapping went with the Planner in
   [#150](https://github.com/oyvindfanebust/rundown/issues/150).
-- The Brief prompt changes slightly for calendar: the `url` and `categories` lines go, a `rooms`
-  line joins, and the `location` line keeps only what the location says beyond the room names.
-  `showAs` and `myResponse` render their parsed values.
-- The Brief prompt changes slightly for mail: the `url` line goes, since records carry no URL, and
-  previews keep up to 255 chars instead of 200. The prompt's structure is unchanged.
-- The Brief prompt changes slightly for Slack: the `url` line and the query-family `relationship`
-  extra go, the `channel` extra carries the conversation's `entryKey` digest in place of the
-  channel id and `channel` in place of `public` or `private`, and an `external` line marks a
-  Slack Connect conversation.
+- Until the Digester landed, the Brief prompt changed slightly per record type. Calendar lost its
+  `url` and `categories` lines and gained a `rooms` line, with `location` keeping only what it says
+  beyond the room names; mail lost its `url` line and kept previews of up to 255 chars; Slack lost
+  its `url` line and the query-family `relationship` extra, and gained an `external` line. The
+  Digester's rendering replaced that prompt ([ADR-0021](0021-the-digest.md)).
 - With `dms` on by default and every search page read, a week's Slack bundle grows from at most
   100 matches per query to every match.

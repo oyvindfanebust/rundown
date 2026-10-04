@@ -7,6 +7,8 @@ import { test, expect, describe, afterEach, afterAll, mock } from "bun:test";
 // summarizer). Restoring here keeps that leak from depending on load order.
 import * as realSummarizeModule from "../src/summarize.ts";
 const REAL_SUMMARIZE_EXPORTS = { ...realSummarizeModule };
+import * as realRegistryModule from "../src/sources/registry.ts";
+const REAL_REGISTRY_EXPORTS = { ...realRegistryModule };
 import { mkdtempSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -19,9 +21,8 @@ import type { Source, SourceDescriptor } from "../src/sources/source.ts";
 // selected sources → aggregate → digest, threading ONE shared `now`. It wires in
 // the module-global registry (ADR-0008 §5: the real one in production), so we
 // mock that module to inject a fake descriptor + buildRegistry, and mock the
-// Summarizer so the items>0 path needs no network. Both mocks are safe to install
-// here: no other test file imports registry.ts, and bun resets module mocks
-// between test files (plan.test.ts + summarize.test.ts already rely on that).
+// Summarizer so the items>0 path needs no network. Both mocks are restored in
+// afterAll, for the reason given at the top of this file.
 
 // A single fake source driven by module-level state, so each test sets what it
 // returns and can read back what `read()` was handed — the shared clock reaches
@@ -71,9 +72,10 @@ mock.module("../src/summarize.ts", () => ({
   SummarizerRefusal: class extends Error {},
 }));
 
-// Restore the real summarize.ts so the mock does not leak into later-loading files.
+// Restore the real modules so the mocks do not leak into later-loading files.
 afterAll(() => {
   mock.module("../src/summarize.ts", () => REAL_SUMMARIZE_EXPORTS);
+  mock.module("../src/sources/registry.ts", () => REAL_REGISTRY_EXPORTS);
 });
 
 const { buildDigest } = await import("../src/digest.ts");
