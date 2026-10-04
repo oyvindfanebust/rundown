@@ -37,14 +37,6 @@ and self-update are ADR-0001. To work in the repo instead, run from source with 
    - Slack: create an app at api.slack.com/apps, add `http://localhost:53912` as a redirect URL,
      add the user token scopes `search:read` and `users:read`, and export the app's credentials as
      `SLACK_CLIENT_ID` and `SLACK_CLIENT_SECRET`. Slack then authenticates through `rundown login`.
-   - Linear: create a read-only personal API key in Linear → Settings → Security & access →
-     Personal API keys, and export it as `LINEAR_API_KEY`. Linear is not part of `login` — the key
-     alone is the credential; `rundown status` verifies it with a live call and tells you if it is
-     missing or rejected.
-   - Jira: create an API token at id.atlassian.com → Security → API tokens, and export
-     `JIRA_EMAIL` (the Atlassian account email) and `JIRA_API_TOKEN`. Jira also needs the `site`
-     option in `config.json` (e.g. `"your-domain.atlassian.net"`) — that one is config, not a
-     secret, so set it yourself in step 2. Jira is not part of `login` either.
    - Claude Code session logs need nothing: no credentials, no login.
    - Run `rundown login` — the one interactive command. It opens a browser for each interactive
      source (Microsoft, Slack) and is safe to re-run; it skips sources that are already

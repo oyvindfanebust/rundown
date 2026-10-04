@@ -43,7 +43,7 @@ echo "E2E acceptance: PASS"
 # HUMAN to perform by hand.
 #
 # WHY MANUAL (do not automate this): the check requires seeding a live injection
-# payload into a real Microsoft 365 / Linear account, and an agent must NEVER
+# payload into a real Microsoft 365 / Slack account, and an agent must NEVER
 # author attacker-controlled instruction text into a user's production work
 # sources — that is exactly the class of action the trust boundary exists to
 # contain, and doing it automatically would both risk the account and normalize

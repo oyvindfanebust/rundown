@@ -71,9 +71,9 @@ function renderSourceEntry(key: string): string {
     optionLines.push(`      // ${spec.description}`);
     optionLines.push(`      ${JSON.stringify(name)}: ${def}${comma}`);
   });
-  // Interactive sources need `rundown login`; credential-only sources name the env
-  // secrets to set; genuinely no-auth local sources say so — rather than print a
-  // misleading hint. `interactive` and `credentials` are static declarations (#27),
+  // Interactive sources need `rundown login`; credential-only sources (none
+  // registered today) name the env secrets to set; genuinely no-auth local
+  // sources say so — rather than print a misleading hint. `interactive` and `credentials` are static declarations (#27),
   // read here where no instance exists yet.
   const auth = descriptor.interactive
     ? "Auth: rundown login"
@@ -212,9 +212,9 @@ async function cmdStatus(debug: DebugSink): Promise<void> {
 // (with a positional) target one source by its registry key ─────────────────
 
 /**
- * A `not-configured` detail conventionally reads "set VAR[, VAR2]" (Graph, Linear
- * both phrase it this way) — strip that prefix so the credential can be named on
- * its own (e.g. in "authenticates via LINEAR_API_KEY"). Details that don't follow
+ * A `not-configured` detail conventionally reads "set VAR[ and VAR2]" (Graph
+ * phrases it this way) — strip that prefix so the credential can be named on
+ * its own (e.g. in "authenticates via SOME_API_KEY"). Details that don't follow
  * the convention pass through unchanged rather than being mangled.
  */
 function credentialHint(detail: string): string {
@@ -467,12 +467,12 @@ Debug:
 
 Source:
   --source narrows this run to a subset of the configured sources; repeat it to
-  keep several (--source graph --source linear). Omit it to run them all.`;
+  keep several (--source graph --source slack). Omit it to run them all.`;
 
 try {
   switch (command) {
     case "brief": {
-      // Repeatable --source (`--source graph --source linear`) narrows this run
+      // Repeatable --source (`--source graph --source slack`) narrows this run
       // to a subset of the configured sources; absent = the full selection.
       const { values } = parseCommandArgs("brief", {
         window: { type: "string" },

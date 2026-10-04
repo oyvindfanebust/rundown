@@ -138,10 +138,10 @@ describe("narrateStatus", () => {
   });
 
   test("not-configured with a detail: ○ + detail note + the status remedy", () => {
-    expect(narrateStatus({ state: "not-configured", detail: "set LINEAR_API_KEY" }, { interactive: false })).toEqual({
+    expect(narrateStatus({ state: "not-configured", detail: "set SOME_API_KEY" }, { interactive: false })).toEqual({
       glyph: "○",
       label: "not configured",
-      note: "set LINEAR_API_KEY",
+      note: "set SOME_API_KEY",
       remedy: "rundown status",
     });
   });

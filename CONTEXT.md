@@ -133,7 +133,7 @@ provenance attestations it now ships alongside; that is a separate decision (ADR
 ### Source
 
 A **Source** is the [Sources](#architecture) component's unit: a read-only adapter for one backend
-system / one auth boundary — Microsoft Graph, Slack, Jira, Linear, Claude Code logs. Graph is one
+system / one auth boundary — Microsoft Graph, Slack, Claude Code logs. Graph is one
 source (calendar and mail are `kind`s within it, not separate sources), because auth is
 per-backend. A Source's job is to `read` a time window and emit a list of
 [normalized items](#normalizeditem). It never writes back.
@@ -141,8 +141,7 @@ per-backend. A Source's job is to `read` a time window and emit a list of
 Interface (see [ADR-0002](docs/adr/0002-source-abstraction.md)):
 
 - `read(window) → NormalizedItem[]` — required. `window` is an absolute time window (two ISO-8601
-  instants); the source maps it to its native time field. Standing/open items (e.g. open Jira
-  issues) may be returned even when their activity predates the window.
+  instants); the source maps it to its native time field.
 - `status()` — required; reports readiness as a discriminated union
   `{ state: "ready" | "not-authenticated" | "not-configured" }` (identity on `ready`, a fix-it
   `detail` on `not-configured`). Every source has a total answer — a local source is always
@@ -195,9 +194,9 @@ way to tell which channel or which person ([ADR-0002](docs/adr/0002-source-abstr
 amendment).
 
 - `where` — a human label for the container the item lives in: `#flow-mgmt`, `DM with Ada Lovelace`,
-  `Inbox`, `rundown (OYV)`. A uniform slot with source-specific wording: each source writes its own
-  honest label, so "is Linear's locus the project or the team?" is that source's wording decision
-  rather than an abstraction problem. Absent when a source has no honest container — a calendar
+  `Inbox`. A uniform slot with source-specific wording: each source writes its own honest label,
+  so "is a Slack DM's locus the channel or the person?" is that source's wording decision rather
+  than an abstraction problem. Absent when a source has no honest container — a calendar
   event has none, since `location` is a physical place, not the thing the item lives in.
 - `who` — people involved, most salient first, as a flat label list. Roles (organizer vs attendee,
   assignee vs reporter) deliberately stay in `extras`: this is caption text for a human, not

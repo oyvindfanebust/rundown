@@ -42,10 +42,6 @@ export type DebugEvent =
   | { kind: "auth-verify"; source: string; outcome: "ready" | "rejected"; httpStatus?: number }
   /** One source's read: wall time and how many items it returned. */
   | { kind: "source-run"; source: string; ms: number; itemCount: number }
-  /** One page fetched by a paginating source. */
-  | { kind: "pagination"; source: string; page: number; items: number }
-  /** A transport routing decision (e.g. Jira's gateway-vs-instance fallback). */
-  | { kind: "route"; source: string; via: string; reason?: "preferred" | "fallback" }
   /** A local source's filesystem scan: which directory, how many files. */
   | { kind: "scan"; source: string; path: string; fileCount: number }
   /**
@@ -110,10 +106,6 @@ export function formatDebugEvent(e: DebugEvent): string {
       return `[debug] ${e.source}  auth-verify ${e.outcome}${e.httpStatus !== undefined ? ` (HTTP ${e.httpStatus})` : ""}`;
     case "source-run":
       return `[debug] ${e.source}  source-run ${e.ms}ms ${e.itemCount} item(s)`;
-    case "pagination":
-      return `[debug] ${e.source}  page ${e.page} → ${e.items} item(s)`;
-    case "route":
-      return `[debug] ${e.source}  route via=${e.via}${e.reason ? ` (${e.reason})` : ""}`;
     case "scan":
       return `[debug] ${e.source}  scan path=${e.path} files=${e.fileCount}`;
     case "suppress":

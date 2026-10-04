@@ -23,7 +23,7 @@ export interface Window {
  *
  * 1. Uniform slot, source-specific wording. Each source writes its own honest label
  *    into `where` — Slack decides between "#flow-mgmt" and "DM with Ada Lovelace",
- *    Linear decides whether the locus is the project or the team. The container is
+ *    Graph mail says "Inbox" or "Sent". The container is
  *    not forced into a shared vocabulary it does not have.
  * 2. It splits the two audiences `extras` used to serve at once. `attribution` is
  *    human-facing: pre-formatted labels, code-copied into Brief evidence, never

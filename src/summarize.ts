@@ -120,8 +120,8 @@ export interface SummarizeInput<T = unknown> {
  * It carries ONLY the assembled request → response; the hardening prompt, the
  * `<untrusted-data>` delimiter, the tool-less shape, and structured-output
  * enforcement are all assembled by `summarize` and stay interface-invisible, so no
- * fake can weaken an ADR-0004 invariant. Mirrors Linear's raw-transport seam. The
- * seam is internal to the compiled binary, so ADR-0004's structural seal is untouched.
+ * fake can weaken an ADR-0004 invariant. The seam is internal to the compiled
+ * binary, so ADR-0004's structural seal is untouched.
  */
 export type MessageTransport = (
   params: Anthropic.MessageCreateParamsNonStreaming,

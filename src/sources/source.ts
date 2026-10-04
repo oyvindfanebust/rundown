@@ -159,7 +159,7 @@ export interface SourceDescriptor {
   interactive: boolean;
   /**
    * Env var names a non-interactive source reads for auth, documented verbatim in
-   * the `init` template so a credential-only source (Linear, Jira) says what to set
+   * the `init` template so a credential-only source says what to set
    * rather than "No auth required". Absent for interactive sources (they log in) and
    * genuinely no-auth local sources.
    */

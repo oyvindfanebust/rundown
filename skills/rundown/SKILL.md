@@ -31,8 +31,8 @@ rundown brief                                # this week, every configured sourc
 rundown brief --window today                 # a symbolic span
 rundown brief --window 2026-07-14            # a single calendar day
 rundown brief --window 2026-07-06..2026-07-12   # an explicit, end-inclusive range
-rundown brief --source linear                # only Linear this run
-rundown brief --source graph --source linear # only these two
+rundown brief --source slack                 # only Slack this run
+rundown brief --source graph --source slack  # only these two
 ```
 
 `--window` takes one of three forms:
@@ -56,8 +56,8 @@ translation is ambiguous (e.g. "recently", or a month without a year), ask the u
 running rather than guessing.
 
 `--source` narrows a run to a subset of the configured sources. Repeat it to keep several
-(`--source graph --source linear`); omit it to run them all. Use it when the user asks for a
-rundown scoped to one source ("just Linear", "only my calendar and email"). Each name must be one
+(`--source graph --source slack`); omit it to run them all. Use it when the user asks for a
+rundown scoped to one source ("just Slack", "only my calendar and email"). Each name must be one
 the config selects — an unconfigured name is a fail-hard error, not a silent skip. It only narrows
 what is already configured; it can't add a source the user hasn't set up.
 
@@ -66,10 +66,9 @@ if that happens, tell the user what the error said; do not fabricate a rundown.
 
 Not configured yet? If `rundown brief` or `rundown status` reports missing config, credentials,
 or authentication, follow [references/onboarding.md](references/onboarding.md) to set it up —
-don't guess at config. Sources declare their own credentials: Microsoft Graph and Slack are
-interactive and authenticate through `rundown login`, while Linear (`LINEAR_API_KEY`) and Jira
-(`JIRA_EMAIL`, `JIRA_API_TOKEN`) need only environment credentials and no `login` — `rundown
-status` verifies each one and names anything missing.
+don't guess at config. Microsoft Graph and Slack are interactive and authenticate through
+`rundown login`; Claude Code logs need no auth. `rundown status` verifies each source and names
+anything missing.
 
 ## The Brief shape
 

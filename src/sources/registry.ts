@@ -12,8 +12,6 @@ import { noDebug, type DebugSink } from "../debug.ts";
 import type { Selection } from "../config.ts";
 import { GraphSource, GRAPH_OPTIONS } from "./graph/index.ts";
 import { ClaudeCodeLogsSource, CLAUDE_CODE_LOGS_OPTIONS } from "./claude-code-logs/index.ts";
-import { LinearSource, LINEAR_OPTIONS } from "./linear/index.ts";
-import { JiraSource, JIRA_OPTIONS } from "./jira/index.ts";
 import { SlackSource, SLACK_OPTIONS } from "./slack/index.ts";
 
 export const descriptors: Descriptors = {
@@ -30,22 +28,6 @@ export const descriptors: Descriptors = {
     options: CLAUDE_CODE_LOGS_OPTIONS,
     interactive: false,
     build: (_options, debug) => new ClaudeCodeLogsSource(undefined, { debug }),
-  },
-  linear: {
-    key: "linear",
-    label: "Linear",
-    options: LINEAR_OPTIONS,
-    interactive: false,
-    credentials: ["LINEAR_API_KEY"],
-    build: (options, debug) => new LinearSource(options, { debug }),
-  },
-  jira: {
-    key: "jira",
-    label: "Jira",
-    options: JIRA_OPTIONS,
-    interactive: false,
-    credentials: ["JIRA_EMAIL", "JIRA_API_TOKEN"],
-    build: (options, debug) => new JiraSource(options, { debug }),
   },
   slack: {
     key: "slack",

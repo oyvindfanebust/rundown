@@ -24,14 +24,10 @@ function run(args: string[], configPath: string, entrypoint = "src/cli.ts", extr
   const env: Record<string, string> = {};
   for (const [k, v] of Object.entries(process.env)) if (v !== undefined) env[k] = v;
   env.RUNDOWN_CONFIG = configPath;
-  // Neutralize inherited credentials so `graph`/`linear`/`jira` report a
-  // deterministic (unconfigured) state, offline — no live MSAL, Linear, or Jira
-  // network calls.
+  // Neutralize inherited credentials so `graph` reports a deterministic
+  // (unconfigured) state, offline — no live MSAL network calls.
   delete env.AZURE_TENANT_ID;
   delete env.AZURE_CLIENT_ID;
-  delete env.LINEAR_API_KEY;
-  delete env.JIRA_EMAIL;
-  delete env.JIRA_API_TOKEN;
   // The auto-update off-switch too, so the version line's default reading does not
   // depend on the developer's shell (ADR-0001 §5); the disabled case sets it back
   // explicitly via extraEnv.
@@ -135,8 +131,8 @@ describe("cli", () => {
   describe("brief --source", () => {
     test("a --source not in the config fails cleanly on stderr before summarizing", () => {
       const path = written(`{"timezone":"UTC","sources":{"graph":{}}}`);
-      const r = run(["brief", "--source", "linear"], path);
-      expect(r.stderr).toContain(`--source "linear" is not a configured source`);
+      const r = run(["brief", "--source", "slack"], path);
+      expect(r.stderr).toContain(`--source "slack" is not a configured source`);
       expect(r.stdout).toBe("");
       expect(r.exitCode).toBe(1);
     });
@@ -177,13 +173,8 @@ describe("cli", () => {
       expect(template).toContain(`"guidance"`);
       expect(template).toContain(`"graph"`);
       expect(template).toContain(`"claude-code-logs"`);
-      expect(template).toContain(`"linear"`);
-      expect(template).toContain(`"jira"`);
-      // Credential-only sources document their env secrets in the auth line (§7),
-      // rather than the misleading "No auth required" a non-interactive source used
-      // to print — the site option is documented via its own option description.
-      expect(template).toContain("set LINEAR_API_KEY in your environment");
-      expect(template).toContain("set JIRA_EMAIL, JIRA_API_TOKEN in your environment");
+      // Linear and Jira are no longer sources (#143).
+      expect(template).not.toMatch(/linear|jira/i);
       // The autoUpdate off-switch ships commented, documenting the default and the
       // durable half of pinning a version (ADR-0001 §5).
       expect(template).toContain(`// "autoUpdate": true,`);
@@ -378,6 +369,31 @@ describe("cli", () => {
     });
   });
 
+  // Linear and Jira were removed as sources (#143). A config that still names
+  // one fails as an unknown source; nothing lists them any more.
+  describe("removed sources: linear and jira", () => {
+    for (const key of ["linear", "jira"]) {
+      test(`status rejects a config that still names ${key} as an unknown source`, () => {
+        const r = run(["status"], written(`{"timezone":"UTC","sources":{"graph":{},"${key}":{}}}`));
+        expect(r.stdout).toContain("✗ invalid");
+        expect(r.stdout).toContain(`Unknown source "${key}"`);
+        expect(r.exitCode).toBe(1);
+      });
+
+      test(`login ${key} is an unknown source`, () => {
+        const r = run(["login", key], missing());
+        expect(r.stderr).toContain(`Unknown source "${key}"`);
+        expect(r.exitCode).toBe(1);
+      });
+    }
+
+    test("status on a valid config lists neither", () => {
+      const r = run(["status"], written(`{"timezone":"UTC","sources":{"graph":{},"slack":{}}}`));
+      expect(r.stdout).not.toMatch(/linear|jira/i);
+      expect(r.stderr).not.toMatch(/linear|jira/i);
+    });
+  });
+
   // Each remaining command routes to its own distinct handler. The deep behaviors
   // (aggregation, auth walks) are covered elsewhere; here we only assert dispatch.
   describe("command routing", () => {
@@ -420,26 +436,8 @@ describe("cli", () => {
       expect(r.exitCode).toBe(1);
     });
 
-    test("naming a non-interactive source (no login()) errors precisely and exits non-zero", () => {
-      // linear declares no `login` — it's credential-only (LINEAR_API_KEY, deleted
-      // from the env above), so targeting it is a precise, structural error.
-      const r = run(["login", "linear"], missing());
-      expect(r.stderr).toContain("linear authenticates via LINEAR_API_KEY — nothing to log in");
-      expect(r.exitCode).toBe(1);
-    });
-
-    test("naming jira (credential-only, half-configurable) names its env secrets in the error", () => {
-      // jira declares no `login` — it's credential-only (JIRA_EMAIL/JIRA_API_TOKEN,
-      // deleted from the env above). Built config-independently ({}), so `site` is
-      // also unset; the error names the env secrets that authenticate it.
-      const r = run(["login", "jira"], missing());
-      expect(r.stderr).toContain("jira authenticates via JIRA_EMAIL");
-      expect(r.exitCode).toBe(1);
-    });
-
     test("naming a no-auth source (no login(), never not-configured) still errors, differently worded", () => {
-      // claude-code-logs is local + always ready — "nothing to log in" for a
-      // different structural reason than linear's declared env-credential.
+      // claude-code-logs is local + always ready, so there is nothing to log in.
       const r = run(["login", "claude-code-logs"], missing());
       expect(r.stderr).toContain("claude-code-logs requires no authentication — nothing to log in");
       expect(r.exitCode).toBe(1);
@@ -450,23 +448,8 @@ describe("cli", () => {
       expect(r.stderr).toContain('Unknown source "bogus"');
       expect(r.stderr).toContain("graph");
       expect(r.stderr).toContain("claude-code-logs");
-      expect(r.stderr).toContain("linear");
-      expect(r.stderr).toContain("jira");
+      expect(r.stderr).toContain("slack");
       expect(r.exitCode).toBe(1);
-    });
-  });
-
-  // The login walk must never print a bare success while a configured
-  // env-credential source (no `login()`, but currently `not-configured`) is
-  // unreadable — `status` stays the full diagnostic; `login` just refuses to lie.
-  describe("login: honest exit summary for env-credential sources", () => {
-    test("a configured, unreadable linear gets a named fix-it line instead of a bare Done", () => {
-      const r = run(["login"], written(`{"timezone":"UTC","sources":{"claude-code-logs":{},"linear":{}}}`));
-      expect(r.stdout).toContain("linear   needs LINEAR_API_KEY in your environment");
-      expect(r.stdout).toContain("Next: export LINEAR_API_KEY, then re-run rundown login");
-      expect(r.stdout).not.toContain("All configured sources already authenticated.");
-      expect(r.stdout).not.toContain("Done. Next: rundown status");
-      expect(r.exitCode).toBe(0);
     });
   });
 
