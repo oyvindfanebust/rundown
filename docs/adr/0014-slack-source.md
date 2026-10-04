@@ -20,6 +20,31 @@ path, describe the removed option.
 In §8, the descriptor no longer carries `interactive: true`: `login()` is required of every source
 ([#144](https://github.com/oyvindfanebust/rundown/issues/144), ADR-0002 amended).
 
+**Amendment (typed records, [#149](https://github.com/oyvindfanebust/rundown/issues/149)).** §1 and
+§4 change; the scope ceiling in §6 does not.
+
+- §1: `dms` is on by default. Omitting `relationships` runs all three queries (`from:<@me>`,
+  `<@me>`, `is:dm`); the option's shape is unchanged. Matches are still deduplicated by
+  `channel.id` + `ts`.
+- §4: a message is a typed `ChatMessage` record ([ADR-0019](0019-typed-records.md)) instead of a
+  NormalizedItem. `title`, `url`, `attribution`, `extras`, the `counterpart`, `fromMe` and
+  `relationship` extras and the permalink are gone. The record carries `conversation` (`kind` of
+  `dm`, `group_dm` or `channel`, `isExternal`, the name for channels only, and `members`), the
+  `author` as a Person with `isMe`, `byMe`, `mentionsMe` and the readable `text`.
+- §4, participants: a DM's counterpart is the IM's `channel.name` when it is shaped like a user id.
+  A group DM's members are read from its `mpdm-<handle>--<handle>--…-<n>` name, with the user among
+  them, and mapped to user ids and names through `users.list`. A name that does not parse, or a
+  handle `users.list` does not know, falls back to the authors seen in that conversation in the
+  window, so silent members are missing. No `conversations.*` call is made.
+- §6: participants come from `search.messages`, `users.info` and `users.list`, all under
+  `search:read` and `users:read`. No new scope, no `im:read` or `mpim:read`, and no re-login.
+- Paging ([#132](https://github.com/oyvindfanebust/rundown/issues/132)): §6 says search pages on
+  `response_metadata.next_cursor`, which `search.messages` never sets, so only the first 100
+  matches per query were read. The first call now passes `cursor=*` and the source follows
+  `messages.paging.next_cursor` until it is empty.
+- Thread membership is not read. Search matches carry no `thread_ts`, so a record has no thread
+  field and a chat record's `continuesFromBefore` is always false.
+
 This ADR fixes the design of the Slack source: a read-only adapter under `src/sources/slack/` that
 follows the Source pattern in [ADR-0002](0002-source-abstraction.md), brands all backend content
 `Untrusted<T>` at the normalizer per [ADR-0004](0004-trust-boundary-enforcement.md), and receives

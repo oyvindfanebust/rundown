@@ -12,7 +12,7 @@ only external surface never emits untrusted content (see [ADR-0004](docs/adr/000
 Inside the context are four components, named by role — there is no "layer" and no L-numbering
 (see [ADR-0008](docs/adr/0008-bounded-context-and-component-architecture.md)):
 
-- **[Sources](#source)** — read-only adapters, one per backend/auth boundary. `read(window) → (NormalizedItem | SourceRecord)[]` while sources move to [typed records](#typed-record).
+- **[Sources](#source)** — read-only adapters, one per backend/auth boundary. `read(window) → SourceRecord[]` over [typed records](#typed-record).
 - **[Aggregator](#aggregator)** — pulls the selected sources into one [Bundle](#bundle). `aggregate(window, selection) → Bundle`.
 - **[Summarizer](#summarizer)** — the tool-less model call; the only place untrusted content meets a model. `summarize({instructions, data, schema}) → structured`.
 - **[Planner](#planner)** — turns a Bundle into a [Brief](#brief). `plan(bundle, windowIsPast, guidance) → Brief`.
@@ -34,7 +34,7 @@ src/
   config.ts         load + validate ~/.config/rundown/config.json; delegate window resolution to temporal.ts → { selection, window, windowIsPast, guidance, timezone }
   temporal.ts       window selector parsing + timezone resolution → absolute Window (span/date/range → instants)
   trust.ts          Untrusted<T> brand + the single unwrap primitive
-  domain.ts         shared vocabulary types: typed records and Person, NormalizedItem, Bundle, bucket, Brief (re-exports the Brief-contract types)
+  domain.ts         shared vocabulary types: typed records and Person, Bundle, bucket, Brief (re-exports the Brief-contract types)
   brief-contract.ts the Brief output contract — Zod source of truth: schema (→ JSON Schema), kinds + descriptions, inferred types
   sources/
     source.ts       the Source interface + option-schema declaration + the option validate/default helpers
@@ -134,14 +134,13 @@ A **Source** is the [Sources](#architecture) component's unit: a read-only adapt
 system / one auth boundary — Microsoft Graph, Slack. Graph is one
 source (calendar and mail are record types or `kind`s within it, not separate sources), because
 auth is per-backend. A Source's job is to `read` a time window and emit a list of
-[typed records](#typed-record), or [normalized items](#normalizeditem) where a source has not moved
-yet. It never writes back.
+[typed records](#typed-record). It never writes back.
 
 Interface (see [ADR-0002](docs/adr/0002-source-abstraction.md)):
 
-- `read(window) → (NormalizedItem | SourceRecord)[]` — required. `window` is an absolute time
+- `read(window) → SourceRecord[]` — required. `window` is an absolute time
   window (two ISO-8601 instants); the source maps it to its native time field. Graph returns
-  `Email` and `CalendarEvent` records; Slack still returns NormalizedItems
+  `Email` and `CalendarEvent` records; Slack returns `ChatMessage` records
   ([ADR-0019](docs/adr/0019-typed-records.md)).
 - `status()` — required; reports readiness as a discriminated union
   `{ state: "ready" | "not-authenticated" | "not-configured" }` (identity on `ready`, a fix-it
@@ -157,15 +156,16 @@ environment. Sources register in a static map, `sources/registry.ts`
 
 ### typed record
 
-What a [Source](#source) emits in place of a [NormalizedItem](#normalizeditem): one record type per
-thing a backend holds, discriminated on `type`. `Email` (Graph mail) and `CalendarEvent` (Graph
-calendar) are built; `ChatMessage` (Slack) follows. Each carries `fingerprint` (a digest of the
+What a [Source](#source) emits: one record type per thing a backend holds, discriminated on
+`type`: `Email` (Graph mail), `CalendarEvent` (Graph calendar) and `ChatMessage` (Slack). Each carries `fingerprint` (a digest of the
 record's own backend id), `entryKey` (a digest of the group it belongs to: a mail
 `conversationId`, a Slack channel, a calendar series) and `continuesFromBefore`. Free text and ids
 stay boxed as [`Untrusted<T>`](#untrustedt); every unboxed field is a
 [trusted value](#trusted-value), parsed by the source and dropped when the parse fails. Built by
-the normalizer, like NormalizedItems. See [ADR-0019](docs/adr/0019-typed-records.md).
-_Avoid_: item (the NormalizedItem it replaces), entry (a [digest entry](#digest-entry) groups records).
+the normalizer (`sources/normalize.ts`), the sole `trust.ts` importer among sources. Records
+replaced the NormalizedItem, the flat shape with an `extras` bag that every source emitted before.
+See [ADR-0019](docs/adr/0019-typed-records.md).
+_Avoid_: item (the NormalizedItem it replaced), entry (a [digest entry](#digest-entry) groups records).
 
 ### Person
 
@@ -175,39 +175,12 @@ and `isMe`, set by the source from the account it knows, never by the model. Gra
 handle against the user's addresses from `/me` (mail, UPN and `smtp:` aliases); Slack compares the
 user id with its signed-in one. Per source: the same human on mail and on Slack is two Persons.
 
-### NormalizedItem
-
-The common shape a Source emits until it moves to [typed records](#typed-record), so the
-[Aggregator](#aggregator) can treat events, emails, chat messages, issues, and sessions uniformly.
-It is a thin structural core the aggregator uses to group, order, and attribute, plus an `extras`
-bag of source-specific fields for the summarizer.
-
-- Structural (trusted) — `source`, `kind` (`event` | `message` | `issue` | `session` | …),
-  `timestamp` (primary instant, the ordering key), `end?` (interval end). Produced by rundown's
-  own source module; safe to surface structurally.
-- Untrusted (backend content) — `id`, `title`, `url?`, [`attribution?`](#attribution), and
-  everything in `extras` (people/roles, body/preview, status, importance, channel, location, …).
-  Only the summarizer reasons over these; tool-capable code treats them as opaque. See the trust
-  rule in `CLAUDE.md`; enforcement is the [`Untrusted<T>`](#untrustedt) brand, applied by the
-  normalizer ([ADR-0004](docs/adr/0004-trust-boundary-enforcement.md) §3).
-
-Standing / recent / upcoming is derived by the Aggregator by comparing `timestamp` to the
-requested window, not stored as a field.
-
-Branding and compaction are owned by the normalizer (`sources/normalize.ts`), the sole `trust.ts`
-importer among sources and the only way a Source constructs a NormalizedItem. Each source module
-makes one via `normalizer(source, {untitled})` and hands it each item's extracted fields; it
-brands the backend content Untrusted, truncates every title, falls back on absent titles, and
-compacts `extras` by the union policy — presence is signal: `undefined`/`null`/`""`/`false`/empty
-arrays vanish, `0`/`true` stay. The `text()` marker (truncate to 255, empty → absent) is applied
-by sources to free-text extras; only domain judgment stays at call sites. `attribution` goes through
-the same funnel: branded, label-truncated, `who` deduplicated, and collapsed to absent when nothing
-in it carries information.
-
 ### Attribution
 
-Who and where — the one attribution every source has, under a different name each time. An optional
-untrusted field on a [NormalizedItem](#normalizeditem): `{ where?, who?, relationship? }`. It exists
+Who and where — the one attribution every source has, under a different name each time:
+`{ where?, who?, relationship? }`. It was an untrusted field on the NormalizedItem; since
+[typed records](#typed-record), the [Planner](#planner) builds it from a record by code until the
+digest replaces the Brief ([#150](https://github.com/oyvindfanebust/rundown/issues/150)). It exists
 because the two universal notions were scattered across five source vocabularies (`folder`,
 `project` + `team`, `channel` + `counterpart`, `projectPath` + `gitBranch`), leaving the
 [Brief](#brief) nothing uniform to carry — so evidence reached the agent as `slack/message`, with no
@@ -252,7 +225,7 @@ The single normalized structure the [Aggregator](#aggregator) hands toward the s
 one `{source, itemCount}` per source that ran, giving provenance and counts but no status, since a
 bundle exists only when all sources succeeded. `items` is a flat, chronologically-sorted list of
 [AnnotatedItems](#bucket). Grouping (by source, bucket, or project) is not baked in; it is a
-rendering choice for the [Planner](#planner). The whole bundle is untrusted (it carries `extras`)
+rendering choice for the [Planner](#planner). The whole bundle is untrusted (it carries record text)
 and flows only Aggregator → Summarizer as a sealed in-process value inside `rundown brief`, never
 to the consuming agent. Only the manifest scalars (`source`, `itemCount`, `window`) are safe to
 surface to the agent ([ADR-0004](docs/adr/0004-trust-boundary-enforcement.md) §5).
@@ -326,7 +299,7 @@ It spans commitments worth knowing about and derived actionables; it is not a fa
 reproduction of the Bundle. Shape: `{ kind, summary, when?, evidence }` (see
 [ADR-0005](docs/adr/0005-planning-layer.md) §3–4).
 
-- `kind` — a fixed enum on the nature-of-attention axis (distinct from `NormalizedItem.kind`,
+- `kind` — a fixed enum on the nature-of-attention axis (distinct from a record's `type`,
   which is structural and never reaches the agent, and from [bucket](#bucket), which is temporal):
   `commitment` (expected somewhere at a time) | `task` (an action you owe — collapses replies,
   decisions, prep) | `waiting` (blocked on someone else, the GTD "waiting-for") | `fyi` (worth
@@ -536,7 +509,7 @@ but validates a code against an allowlist rather than extracting a status, so it
 
 ### Untrusted&lt;T&gt;
 
-The branded wrapper type every untrusted field carries (`id`, `url`, `title`, all of `extras`),
+The branded wrapper type every untrusted field carries (record text, names, handles, labels),
 defined in `src/trust.ts`. Getting the raw bytes requires an explicit `unwrap()`, and the
 summarizer-prompt assembly is the sole unwrap site — every other sink (manifest, `status`, logs,
 error formatting) structurally cannot touch untrusted bytes. The unwrap call sites are the

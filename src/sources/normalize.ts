@@ -1,23 +1,15 @@
-// The normalizer (ADR-0002 §4): the shared NormalizedItem constructor —
-// the branding + compaction ritual every Source repeated, spelled once. A source
-// module makes ONE normalizer (`normalizer(source, {untitled})`) and hands each
-// item's extracted fields to it; the normalizer owns the whole invariant: total
-// branding via untrusted()/untrustedOpt(), String() id-coercion, title fallback +
-// truncation, union compaction, and validating the structural
-// instants (timestamp/end), the one operation that can throw: a non-ISO instant
-// is backend garbage and fails hard here (ADR-0007 §6) rather than sliding through
-// as a "trusted" string. Otherwise total, no I/O — and the sole trust.ts importer
-// among sources: the only way a Source constructs
-// a NormalizedItem. What stays at call sites is domain judgment only (e.g. graph's
-// "normal" importance elision). ADR-0002 names the NormalizedItem
-// *shape*; this deepens under it. Never unwrapped here (sole unwrap site is
-// plan.ts; CLAUDE.md).
-//
-// Attribution (#54) is branded and compacted here too, so no source imports trust.ts
-// and the "who and where" invariant is spelled once rather than five times.
+// The normalizer: the record builders every Source hands its parsed fields to
+// (ADR-0019 §6). It owns branding (every free-text field and id boxed Untrusted),
+// truncation of free text to TEXT_MAX, the digests (`fingerprint`, `entryKey`), and
+// validating the structural instants, the one check that can throw: a non-ISO instant
+// is backend garbage and fails hard here (ADR-0007 §6) rather than sliding through as a
+// trusted string. No I/O. It is the sole trust.ts importer among sources and the only
+// way a Source constructs a record. Domain judgment (parsing enums and flags, group
+// membership) stays at call sites. Never unwrapped here (sole unwrap site is plan.ts;
+// CLAUDE.md).
 
 import { createHash } from "node:crypto";
-import type { Attendee, Attribution, CalendarEvent, Email, NormalizedItem, Person } from "../domain.ts";
+import type { Attendee, CalendarEvent, ChatMessage, Conversation, Email, Person } from "../domain.ts";
 import { untrusted, untrustedOpt } from "../trust.ts";
 
 /**
@@ -75,42 +67,6 @@ function instant(v: string, field: string, source: string): string {
   return v;
 }
 
-/** The fields one item hands its normalizer: structural verbatim + bare backend content. */
-export interface ItemSpec {
-  kind: string;
-  timestamp: string;
-  end?: string;
-  /** The instants encode a calendar date, not a clock time (all-day event, due-date anchor). */
-  dateOnly?: boolean;
-  id: string | number | null | undefined;
-  title: string | null | undefined;
-  url?: string;
-  /**
-   * Who and where, as bare values — the normalizer brands and compacts it (#54). A
-   * source writes its own honest label; see {@link Attribution}. Absent `where`, an
-   * empty/all-absent `who`, and an absent `relationship` all vanish under the same
-   * "presence is signal" policy as `extras`, so a source can pass what it has without
-   * guarding each field.
-   */
-  attribution?: {
-    where?: string | null;
-    who?: Array<string | null | undefined>;
-    relationship?: string | null;
-  };
-  extras?: Record<string, unknown>;
-}
-
-/**
- * The union compaction policy — "presence is signal": a value earns its
- * key by carrying information. `undefined`, `null`, `""`, `false`, and empty
- * arrays are absence and vanish; `0` and `true` are signal and stay. Declaration
- * order is preserved for deterministic rendering.
- */
-function isSignal(v: unknown): boolean {
-  if (v === undefined || v === null || v === "" || v === false) return false;
-  return !(Array.isArray(v) && v.length === 0);
-}
-
 /**
  * Stable identity for cross-window dedup (#108): a truncated SHA-256 of
  * `source + kind + raw backend id`. A one-way digest of the untrusted id, computed
@@ -125,82 +81,9 @@ function fingerprintOf(source: string, kind: string, rawId: string): string {
   return createHash("sha256").update(`${source}\n${kind}\n${rawId}`).digest("hex").slice(0, 16);
 }
 
-function compactExtras(obj: Record<string, unknown>): Record<string, unknown> {
-  const out: Record<string, unknown> = {};
-  for (const [k, v] of Object.entries(obj)) if (isSignal(v)) out[k] = v;
-  return out;
-}
-
-/**
- * Compact one attribution under the same "presence is signal" policy: drop absent
- * `where`/`relationship`, drop absent entries from `who`, truncate every label to
- * {@link TEXT_MAX} (these are hostile free text like titles are), and collapse the
- * whole thing to `undefined` when nothing survives — so an all-absent attribution
- * costs no key on the item and no line in the rendered bundle.
- *
- * `who` is deduplicated, order-preserving: Slack's `author` and `counterpart` are the
- * same person on an incoming DM, and a caption listing them twice reads as a bug.
- */
-function compactAttribution(spec: NonNullable<ItemSpec["attribution"]>): Attribution | undefined {
-  const out: Attribution = {};
-  const where = text(spec.where ?? undefined);
-  if (where !== undefined) out.where = where;
-  const relationship = text(spec.relationship ?? undefined);
-  if (relationship !== undefined) out.relationship = relationship;
-  if (spec.who !== undefined) {
-    const seen = new Set<string>();
-    const who: string[] = [];
-    for (const raw of spec.who) {
-      const label = text(raw ?? undefined);
-      if (label === undefined || seen.has(label)) continue;
-      seen.add(label);
-      who.push(label);
-    }
-    if (who.length > 0) out.who = who;
-  }
-  return Object.keys(out).length > 0 ? out : undefined;
-}
-
-/**
- * Make a Source's normalizer: brand the backend content Untrusted
- * (`id`/`title`/`url`/`extras`), keep the structural core (`source`/`kind`/
- * `timestamp`/`end`) trusted — validating each instant via {@link instant} so a
- * non-ISO `timestamp`/`end` fails hard here — truncate every title (titles are hostile free text
- * by definition; no policy knob), fall back to `untitled` when the title is
- * absent, and compact `extras` — omitting it entirely when compaction empties it.
- */
-export function normalizer(
-  source: string,
-  opts: { untitled?: string } = {},
-): (spec: ItemSpec) => NormalizedItem {
-  const untitled = opts.untitled ?? "(untitled)";
-  return (spec) => {
-    const extras = spec.extras === undefined ? undefined : compactExtras(spec.extras);
-    const attribution =
-      spec.attribution === undefined ? undefined : compactAttribution(spec.attribution);
-    const rawId = String(spec.id ?? "");
-    const item: NormalizedItem = {
-      source,
-      kind: spec.kind,
-      timestamp: instant(spec.timestamp, "timestamp", source),
-      id: untrusted(rawId),
-      title: untrusted(text(spec.title) ?? untitled),
-      url: untrustedOpt(spec.url),
-      attribution: attribution === undefined ? undefined : untrusted(attribution),
-      extras: extras && Object.keys(extras).length > 0 ? untrusted(extras) : undefined,
-    };
-    if (spec.end !== undefined) item.end = instant(spec.end, "end", source);
-    if (spec.dateOnly === true) item.dateOnly = true;
-    // No fingerprint for an absent id: a shared digest of "" would alias unrelated items.
-    if (rawId !== "") item.fingerprint = fingerprintOf(source, spec.kind, rawId);
-    return item;
-  };
-}
-
 // ── Typed records (ADR-0019) ──
 //
-// The record builders: the same branding, truncation and instant validation as the
-// normalizer, for typed records. A source parses its trusted values (enums, flags,
+// The record builders. A source parses its trusted values (enums, flags,
 // group membership) itself, since those are domain judgments about its backend, and
 // hands the builder bare strings for everything that stays boxed.
 
@@ -280,6 +163,58 @@ export function emailRecord(spec: EmailSpec): Email {
   };
   if (sentBy !== undefined) record.sentBy = sentBy;
   return record;
+}
+
+/** The fields one Slack message hands the builder: parsed trusted values plus bare text. */
+export interface ChatMessageSpec {
+  /** Backend channel id; digested into `entryKey`, and with `ts` into `fingerprint`. Never kept. */
+  channelId: string;
+  /** Slack's message `ts`, the message id within its channel. Never kept. */
+  ts: string;
+  at: string;
+  conversation: {
+    kind: Conversation["kind"];
+    isExternal: boolean;
+    name?: string | null;
+    members?: PersonSpec[];
+  };
+  author: PersonSpec;
+  mentionsMe: boolean;
+  text: string | null | undefined;
+}
+
+/**
+ * Build one {@link ChatMessage}. `at` must be a strict ISO-8601 instant and the channel
+ * id and `ts` must be present; anything else is backend garbage and fails hard (ADR-0007
+ * §6), without echoing the value. `byMe` is derived here so it always agrees with
+ * `author`. The conversation name is kept for channels only.
+ */
+export function chatMessageRecord(spec: ChatMessageSpec): ChatMessage {
+  const source = "slack";
+  if (spec.channelId === "" || spec.ts === "") throw new Error(`Source "${source}" emitted a message with no id.`);
+  const author = person(spec.author);
+  const { kind, isExternal, name, members } = spec.conversation;
+  const conversation: Conversation = { kind, isExternal };
+  const label = kind === "channel" ? text(name) : undefined;
+  if (label !== undefined) conversation.name = untrusted(label);
+  if (members !== undefined) conversation.members = members.map(person);
+  return {
+    type: "chat-message",
+    source,
+    // The record type keeps the old NormalizedItem kind `message`, so a Slack message
+    // keeps the fingerprint it had before records.
+    fingerprint: fingerprintOf(source, "message", `${spec.channelId}:${spec.ts}`),
+    // Domain-separated from the record digest, so a conversation key never equals a message key.
+    entryKey: fingerprintOf(source, "chat-conversation", spec.channelId),
+    // Earlier messages in a conversation are not fetched, so it is never known to be free.
+    continuesFromBefore: false,
+    at: instant(spec.at, "message time", source),
+    conversation,
+    author,
+    byMe: author.isMe,
+    mentionsMe: spec.mentionsMe,
+    text: untrusted(text(spec.text) ?? ""),
+  };
 }
 
 /** One attendee as the source read them: a person spec plus the parsed answer and role. */

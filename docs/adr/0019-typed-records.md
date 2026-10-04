@@ -6,8 +6,8 @@ Supersedes [ADR-0002](0002-source-abstraction.md). Decided on the map
 [#117](https://github.com/oyvindfanebust/rundown/issues/117) and specified in
 [#141](https://github.com/oyvindfanebust/rundown/issues/141). Graph mail
 ([#147](https://github.com/oyvindfanebust/rundown/issues/147)) and Graph calendar
-([#148](https://github.com/oyvindfanebust/rundown/issues/148)) are records; Slack
-([#149](https://github.com/oyvindfanebust/rundown/issues/149)) follows, and this ADR grows with it.
+([#148](https://github.com/oyvindfanebust/rundown/issues/148)) and Slack
+([#149](https://github.com/oyvindfanebust/rundown/issues/149)) are records.
 
 ## Context
 
@@ -32,10 +32,12 @@ per thing a backend holds: `Email` (Graph mail), `CalendarEvent` (Graph calendar
 `kind` go once every source emits records. In code the union is `SourceRecord`, since `Record` is a
 TypeScript built-in.
 
-Until then the Aggregator carries `NormalizedItem | SourceRecord` (`BundleItem` in
-`src/domain.ts`), orders it by each item's own instant, and the Planner maps a record onto the
-fields it rendered before, so the Brief keeps its shape. The union goes when Slack moves to records
-([#149](https://github.com/oyvindfanebust/rundown/issues/149)) and the Planner with the Digester
+While sources moved one at a time, the Aggregator carried a temporary `NormalizedItem |
+SourceRecord` union. With Slack on records
+([#149](https://github.com/oyvindfanebust/rundown/issues/149)) every source emits records, so the
+union and `NormalizedItem` are gone: the Aggregator orders records by each one's own instant, and
+the Planner maps a record onto the fields it rendered before, so the Brief keeps its shape. The
+mapping goes with the Planner when the Digester replaces it
 ([#150](https://github.com/oyvindfanebust/rundown/issues/150)).
 
 ### 2. Trust follows type
@@ -168,13 +170,56 @@ Calendar:
 - `fingerprint` digests `event`, the old NormalizedItem kind, not the record type
   `calendar-event`, so calendar fingerprints do not change.
 
-### 5. Kept from ADR-0002
+### 5. Slack
+
+```ts
+interface ChatMessage extends RecordBase {
+  type: "chat-message"; source: "slack";
+  at: Instant;
+  conversation: {
+    kind: "dm" | "group_dm" | "channel";
+    isExternal: boolean;      // Slack Connect: `is_ext_shared`
+    name?: Untrusted<string>; // channels only
+    members?: Person[];       // DM counterpart or group-DM members, from the conversation name
+  };
+  author: Person;
+  byMe: boolean;              // author.isMe
+  mentionsMe: boolean;
+  text: Untrusted<string>;
+}
+```
+
+- One record per `search.messages` match in the window, over the `from:<@me>`, `<@me>` and
+  `is:dm` queries, deduplicated by channel id and `ts`. Every page is read: the first call passes
+  `cursor=*` and the source follows `messages.paging.next_cursor` until it is empty
+  ([#132](https://github.com/oyvindfanebust/rundown/issues/132)).
+- `isMe` and `byMe` compare the author's user id with the signed-in user id cached at login (the
+  OAuth exchange's `authed_user.id`, the id `auth.test` reports).
+  `mentionsMe` is set when the `<@me>` query found the message or its text carries a mention
+  token for that id.
+- `members`: a DM's counterpart is the IM's `channel.name` when it is shaped like a user id. A
+  group DM's members, the user among them, come from its `mpdm-<handle>--<handle>--…-<n>` name,
+  mapped to user ids and names through `users.list`, fetched once per read and only when a group
+  DM is read. A name that does not parse, or a handle `users.list` does not know, falls back to
+  the authors seen in that conversation in the window, without the user for a DM. There is no marker for the fallback; the
+  digest schema documents it. No `conversations.*` call is made and no scope is added
+  ([ADR-0014](0014-slack-source.md) amendment for #149).
+- `text` is the message text with Slack's reference tokens made readable, as before. File-only,
+  blocks-only and bot messages are kept; a bot has an empty `handle` and its `username` as name.
+- Thread membership is not read: search matches carry no `thread_ts`. The spec's `inThread` flag is
+  therefore not on the record, and `continuesFromBefore` is always false, since earlier messages
+  are not fetched.
+- `entryKey` digests the channel id under the type `chat-conversation`. `fingerprint` digests
+  channel id and `ts` under `message`, the old NormalizedItem kind, so Slack fingerprints do not
+  change. The permalink is not kept.
+
+### 6. Kept from ADR-0002
 
 - Sources are read-only adapters, one per backend and auth boundary, registered in the one binary.
 - `read` takes one absolute window; sources do no timezone handling.
 - `status()` and `login()` are required, as ADR-0002 amended them.
 - The normalizer (`sources/normalize.ts`) stays the only `trust.ts` importer among sources: it
-  brands, truncates and validates records as it does NormalizedItems. Its free-text cap
+  brands, truncates and validates records. Its free-text cap
   (`TEXT_MAX`) rises from 200 to 255, so a subject of Outlook's full length survives to the label
   clamp.
 
@@ -193,3 +238,13 @@ Calendar:
   `showAs` and `myResponse` render their parsed values.
 - The Brief prompt changes slightly for mail: the `url` line goes, since records carry no URL, and
   previews keep up to 255 chars instead of 200. The prompt's structure is unchanged.
+- Until the Digester lands, the Planner maps a `ChatMessage` onto the old Slack item fields. The
+  Brief's Slack evidence keeps `source: "slack/message"`, `where`, `who`, `relationship` and
+  `fingerprint`. `relationship` is now derived from the record alone: `authored` when `byMe`, else
+  `mentions` when `mentionsMe`, else `dms` for a DM or group DM.
+- The Brief prompt changes slightly for Slack: the `url` line and the query-family `relationship`
+  extra go, the `channel` extra carries the conversation's `entryKey` digest in place of the
+  channel id and `channel` in place of `public` or `private`, and an `external` line marks a
+  Slack Connect conversation.
+- With `dms` on by default and every search page read, a week's Slack bundle grows from at most
+  100 matches per query to every match.

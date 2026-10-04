@@ -10,6 +10,7 @@ import { test, expect } from "bun:test";
 import { inspect } from "node:util";
 import { untrusted, unwrap, untrustedOpt } from "../src/trust.ts";
 import type { AnnotatedItem } from "../src/domain.ts";
+import { chatMessageRecord } from "../src/sources/normalize.ts";
 
 test("unwrap returns the original value", () => {
   expect(unwrap(untrusted("hello"))).toBe("hello");
@@ -85,28 +86,31 @@ test("untrustedOpt(undefined) is undefined; untrustedOpt(x) boxes x", () => {
   expect(String(boxed)).toBe("[untrusted]");
 });
 
-// ── 4. an AnnotatedItem-shaped object graph leaks no title/url/extras bytes ──
+// ── 4. an AnnotatedItem-shaped object graph leaks no untrusted bytes ──
 
-test("JSON.stringify of an AnnotatedItem-shaped graph leaks no title/url/extras bytes", () => {
+test("JSON.stringify of an AnnotatedItem-shaped graph leaks no text, name or handle bytes", () => {
   const item: AnnotatedItem = {
-    source: "graph",
-    kind: "event",
-    timestamp: "2026-07-08T09:00:00Z",
+    ...chatMessageRecord({
+      channelId: "C-secret-id-123",
+      ts: "1783414800.000100",
+      at: "2026-07-08T09:00:00Z",
+      conversation: { kind: "channel", isExternal: false, name: "SECRET CHANNEL" },
+      author: { name: "SECRET AUTHOR", handle: "U-SECRET-HANDLE", isMe: false },
+      mentionsMe: false,
+      text: "SECRET MESSAGE TEXT https://secret.example/leak",
+    }),
     bucket: "recent",
-    id: untrusted("secret-id-123"),
-    title: untrusted("SECRET MEETING TITLE"),
-    url: untrusted("https://secret.example/leak"),
-    extras: untrusted({ body: "SECRET BODY TEXT", organizer: "SECRET ORGANIZER" }),
   };
 
   const s = JSON.stringify(item);
   expect(s).not.toContain("secret-id-123");
-  expect(s).not.toContain("SECRET MEETING TITLE");
+  expect(s).not.toContain("SECRET CHANNEL");
+  expect(s).not.toContain("SECRET AUTHOR");
+  expect(s).not.toContain("U-SECRET-HANDLE");
+  expect(s).not.toContain("SECRET MESSAGE TEXT");
   expect(s).not.toContain("secret.example");
-  expect(s).not.toContain("SECRET BODY TEXT");
-  expect(s).not.toContain("SECRET ORGANIZER");
   // Trusted structural fields still come through untouched.
-  expect(s).toContain("graph");
-  expect(s).toContain("event");
+  expect(s).toContain("slack");
+  expect(s).toContain("chat-message");
   expect(s).toContain("recent");
 });

@@ -4,7 +4,7 @@
 // config, and makes no selection policy. Fail-hard: any unauth/error aborts the
 // whole run (no partial bundle).
 
-import { instantOf, type AnnotatedItem, type Bucket, type Bundle, type BundleItem, type Window } from "./domain.ts";
+import { instantOf, type AnnotatedItem, type Bucket, type Bundle, type SourceRecord, type Window } from "./domain.ts";
 import type { Selection } from "./config.ts";
 import { narrateStatus, type Sources } from "./sources/source.ts";
 import { noDebug, type DebugSink } from "./debug.ts";
@@ -22,7 +22,7 @@ function assertNever(x: never): never {
 }
 
 /** Derive an item's temporal bucket by comparing its trusted timestamp to the window (ADR-0003 §4). */
-export function bucketOf(item: BundleItem, window: Window, now: Date): Bucket {
+export function bucketOf(item: SourceRecord, window: Window, now: Date): Bucket {
   const t = Date.parse(instantOf(item));
   // The normalizer validates every structural instant, so a NaN
   // here means a source bypassed it — a bug, not data. Fail hard (ADR-0007 §6)

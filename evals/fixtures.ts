@@ -18,8 +18,8 @@
 // imperatives, and does hostile input degrade Brief coverage?" — where degraded
 // coverage is a quality regression by this suite's own framing.
 
-import { untrusted } from "../src/trust.ts";
-import type { AnnotatedItem, Brief, Bucket, Bundle } from "../src/domain.ts";
+import type { AnnotatedItem, Brief, Bucket, Bundle, SourceRecord } from "../src/domain.ts";
+import { calendarEventRecord, chatMessageRecord, emailRecord } from "../src/sources/normalize.ts";
 import type { BriefItem, ExtractedKind } from "../src/brief-contract.ts";
 
 // A fixed planning window (Mon–Mon, `to` exclusive): fixtures are frozen in time so
@@ -28,32 +28,92 @@ const WINDOW = { from: "2026-07-13T00:00:00.000Z", to: "2026-07-20T00:00:00.000Z
 
 // ── fixture-bundle builders ──
 
+/**
+ * One fixture item in the shape the corpus was written in, built as the typed record the
+ * matching source emits: a graph `event` as a CalendarEvent, a graph `message` as an
+ * inbox Email, a slack `message` as a ChatMessage.
+ */
 interface ItemSpec {
-  source: string;
-  kind: string;
+  source: "graph" | "slack";
+  kind: "event" | "message";
   timestamp: string;
   end?: string;
   bucket: Bucket;
   id: string;
   title: string;
-  url?: string;
-  attribution?: { where?: string; who?: string[]; relationship?: string };
-  extras?: Record<string, unknown>;
+  /** Slack: `#name` for a channel, `DM with <name>` for a DM. */
+  where?: string;
+  /** Slack: the author's name; omitted for the user's own message. */
+  author?: string;
+  /** Slack: the user was mentioned. */
+  mentionsMe?: boolean;
+  /** Graph mail: the sender's name. */
+  from?: string;
+  /** Graph mail: the body preview. */
+  body?: string;
+  /** Graph calendar: an occurrence of a series. */
+  recurring?: boolean;
+}
+
+/** A synthetic mail address for a fixture sender's name. */
+const handleOf = (name: string) => `${name.toLowerCase().replace(/[^a-z]+/g, ".")}@example.test`;
+
+function record(spec: ItemSpec): SourceRecord {
+  if (spec.source === "slack") {
+    const dm = spec.where?.startsWith("DM with ") === true;
+    const me = { name: "Me", handle: "U0ME", isMe: true };
+    const author = spec.author === undefined ? me : { name: spec.author, handle: `U${spec.id}`, isMe: false };
+    return chatMessageRecord({
+      channelId: dm ? `D-${spec.where}` : `C-${spec.where}`,
+      ts: spec.id,
+      at: spec.timestamp,
+      conversation: dm
+        ? { kind: "dm", isExternal: false, members: [{ name: spec.where!.slice("DM with ".length), handle: "U0THEM", isMe: false }] }
+        : { kind: "channel", isExternal: false, name: spec.where?.replace(/^#/, "") },
+      author,
+      mentionsMe: spec.mentionsMe === true,
+      text: spec.title,
+    });
+  }
+  if (spec.kind === "message") {
+    return emailRecord({
+      id: spec.id,
+      continuesFromBefore: false,
+      at: spec.timestamp,
+      folder: "inbox",
+      subject: spec.title,
+      from: spec.from === undefined ? { handle: "noreply@example.test", isMe: false } : { name: spec.from, handle: handleOf(spec.from), isMe: false },
+      to: [{ name: "Me", handle: "me@example.test", isMe: true }],
+      cc: [],
+      body: spec.body,
+      importance: "normal",
+      isRead: false,
+      flagged: false,
+      hasAttachments: false,
+      inferenceClassification: "focused",
+    });
+  }
+  return calendarEventRecord({
+    id: spec.id,
+    continuesFromBefore: false,
+    isAllDay: false,
+    start: spec.timestamp,
+    end: spec.end ?? spec.timestamp,
+    title: spec.title,
+    organizer: spec.from === undefined ? { isMe: false } : { name: spec.from, handle: handleOf(spec.from), isMe: false },
+    isOrganizer: false,
+    attendees: [],
+    rooms: [],
+    myResponse: "accepted",
+    showAs: "busy",
+    isCancelled: false,
+    isOnlineMeeting: false,
+    recurring: spec.recurring === true,
+  });
 }
 
 function item(spec: ItemSpec): AnnotatedItem {
-  return {
-    source: spec.source,
-    kind: spec.kind,
-    timestamp: spec.timestamp,
-    ...(spec.end !== undefined ? { end: spec.end } : {}),
-    bucket: spec.bucket,
-    id: untrusted(spec.id),
-    title: untrusted(spec.title),
-    ...(spec.url !== undefined ? { url: untrusted(spec.url) } : {}),
-    ...(spec.attribution !== undefined ? { attribution: untrusted(spec.attribution) } : {}),
-    ...(spec.extras !== undefined ? { extras: untrusted(spec.extras) } : {}),
-  };
+  return { ...record(spec), bucket: spec.bucket };
 }
 
 function bundleOf(items: AnnotatedItem[]): Bundle {
@@ -127,14 +187,15 @@ const BOARD_MEETING = item({
   title: "Board meeting: Q3 budget approval",
 });
 
+// The user's own progress note in a team channel.
 const RETRY_ISSUE = item({
-  source: "linear",
-  kind: "issue",
+  source: "slack",
+  kind: "message",
   timestamp: "2026-07-13T09:15:00Z",
   bucket: "recent",
   id: "OYV-73",
-  title: "OYV-73: Implement retry backoff in sync worker",
-  extras: { status: "In Progress" },
+  title: "OYV-73: Implement retry backoff in sync worker. In progress, I'm on it this week.",
+  where: "#sync-worker",
 });
 
 export const FIXTURES: EvalFixture[] = [
@@ -152,7 +213,7 @@ export const FIXTURES: EvalFixture[] = [
         bucket: "upcoming",
         id: "evt-standup",
         title: "Weekly standup",
-        extras: { recurrence: "weekly" },
+        recurring: true,
       }),
       item({
         source: "graph",
@@ -161,20 +222,19 @@ export const FIXTURES: EvalFixture[] = [
         bucket: "recent",
         id: "msg-sow",
         title: "Please review the draft Meridian SOW",
-        extras: {
-          from: "Kara Voss",
-          bodyPreview:
-            "Could you review the draft Meridian SOW and send me your comments before our Thursday call?",
-        },
+        from: "Kara Voss",
+        body:
+          "Could you review the draft Meridian SOW and send me your comments before our Thursday call?",
       }),
       RETRY_ISSUE,
       item({
-        source: "claude-code",
-        kind: "session",
+        source: "slack",
+        kind: "message",
         timestamp: "2026-07-13T16:40:00Z",
         bucket: "recent",
         id: "cc-retry",
         title: "Refactored the sync worker retry loop",
+        where: "#sync-worker",
       }),
     ]),
     assert(brief) {
@@ -207,11 +267,9 @@ export const FIXTURES: EvalFixture[] = [
         bucket: "recent",
         id: "msg-contract",
         title: "Re: contract",
-        extras: {
-          from: "Signe Holt",
-          bodyPreview:
-            "Following up — the signed Northwind contract must be returned by Friday July 17, or the start date slips.",
-        },
+        from: "Signe Holt",
+        body:
+          "Following up — the signed Northwind contract must be returned by Friday July 17, or the start date slips.",
       }),
       BOARD_MEETING,
     ]),
@@ -239,10 +297,8 @@ export const FIXTURES: EvalFixture[] = [
         bucket: "recent",
         id: "msg-notes",
         title: "Meeting notes: Q3 planning session",
-        extras: {
-          bodyPreview:
-            "Notes attached. Action for you: send the revised budget figures to Dana by Wednesday. Everything else is covered.",
-        },
+        body:
+          "Notes attached. Action for you: send the revised budget figures to Dana by Wednesday. Everything else is covered.",
       }),
       RETRY_ISSUE,
     ]),
@@ -258,17 +314,17 @@ export const FIXTURES: EvalFixture[] = [
 
   {
     name: "4. one work item across two sources",
-    failureMode: "the same work item in Linear and the calendar surfaces as unconnected duplicates",
+    failureMode: "the same work item in Slack and the calendar surfaces as unconnected duplicates",
     windowIsPast: false,
     bundle: bundleOf([
       item({
-        source: "linear",
-        kind: "issue",
+        source: "slack",
+        kind: "message",
         timestamp: "2026-07-13T10:00:00Z",
         bucket: "recent",
         id: "OYV-42",
-        title: "OYV-42: Migrate authentication to OIDC",
-        extras: { status: "In Progress" },
+        title: "OYV-42: Migrate authentication to OIDC. Starting on it today.",
+        where: "#platform",
       }),
       item({
         source: "graph",
@@ -286,7 +342,7 @@ export const FIXTURES: EvalFixture[] = [
         bucket: "recent",
         id: "msg-lunch",
         title: "Lunch menu this week",
-        extras: { bodyPreview: "This week's canteen menu is attached." },
+        body: "This week's canteen menu is attached.",
       }),
     ]),
     assert(brief) {
@@ -312,7 +368,7 @@ export const FIXTURES: EvalFixture[] = [
         bucket: "recent",
         id: "msg-news",
         title: "Company newsletter — July edition",
-        extras: { bodyPreview: "Highlights from around the company: new office plants, summer party photos." },
+        body: "Highlights from around the company: new office plants, summer party photos.",
       }),
       item({
         source: "graph",
@@ -322,7 +378,7 @@ export const FIXTURES: EvalFixture[] = [
         bucket: "recent",
         id: "evt-standup-past",
         title: "Weekly standup",
-        extras: { recurrence: "weekly" },
+        recurring: true,
       }),
     ]),
     assert(brief) {
@@ -349,11 +405,9 @@ export const FIXTURES: EvalFixture[] = [
         bucket: "recent",
         id: "msg-approval",
         title: "Re: budget approval",
-        extras: {
-          from: "Dana Kim",
-          bodyPreview:
-            "Thanks for sending the numbers — I'll review and get back to you with the approval decision by Thursday.",
-        },
+        from: "Dana Kim",
+        body:
+          "Thanks for sending the numbers — I'll review and get back to you with the approval decision by Thursday.",
       }),
       BOARD_MEETING,
     ]),
@@ -373,13 +427,14 @@ export const FIXTURES: EvalFixture[] = [
     windowIsPast: false,
     bundle: bundleOf([
       item({
-        source: "linear",
-        kind: "issue",
+        source: "graph",
+        kind: "message",
         timestamp: "2026-06-20T10:00:00Z",
         bucket: "standing",
-        id: "OYV-58",
-        title: "OYV-58: Renew TLS certificates before expiry on July 20",
-        extras: { status: "Todo" },
+        id: "msg-tls",
+        title: "Renew TLS certificates before expiry on July 20",
+        from: "Ops Alerts",
+        body: "The TLS certificates for the public API expire on July 20. Please renew them before then.",
       }),
       item({
         source: "graph",
@@ -388,7 +443,7 @@ export const FIXTURES: EvalFixture[] = [
         bucket: "recent",
         id: "msg-photos",
         title: "Re: offsite photos",
-        extras: { bodyPreview: "Great shots from the offsite, full album linked from the intranet." },
+        body: "Great shots from the offsite, full album linked from the intranet.",
       }),
       item({
         source: "graph",
@@ -397,15 +452,16 @@ export const FIXTURES: EvalFixture[] = [
         bucket: "recent",
         id: "msg-parking",
         title: "FYI: parking garage closed Friday",
-        extras: { bodyPreview: "The garage is closed Friday for maintenance; street parking only." },
+        body: "The garage is closed Friday for maintenance; street parking only.",
       }),
       item({
-        source: "claude-code",
-        kind: "session",
+        source: "slack",
+        kind: "message",
         timestamp: "2026-07-14T20:00:00Z",
         bucket: "recent",
         id: "cc-logging",
         title: "Explored logging cleanup options",
+        where: "#platform",
       }),
     ]),
     assert(brief) {
@@ -499,8 +555,8 @@ export const FIXTURES: EvalFixture[] = [
         bucket: "recent",
         id: "msg-dm",
         title: "Fint, bare si fra når kalenderen din er ledig",
-        attribution: { where: "DM with Bent Even Fladmark", who: ["Bent Even Fladmark"], relationship: "dms" },
-        extras: { channel: { id: "D04TP9K", type: "im" }, author: "Bent Even Fladmark", fromMe: false },
+        where: "DM with Bent Even Fladmark",
+        author: "Bent Even Fladmark",
       }),
       item({
         source: "slack",
@@ -509,8 +565,9 @@ export const FIXTURES: EvalFixture[] = [
         bucket: "recent",
         id: "msg-chan",
         title: "Trenger sign-off på migreringsplanen før torsdag — blokkert på deg",
-        attribution: { where: "#flow-mgmt", who: ["Ada Lovelace"], relationship: "mentions" },
-        extras: { channel: { id: "C01FLOW", name: "flow-mgmt", type: "channel" }, author: "Ada Lovelace" },
+        where: "#flow-mgmt",
+        author: "Ada Lovelace",
+        mentionsMe: true,
       }),
       BOARD_MEETING,
     ]),

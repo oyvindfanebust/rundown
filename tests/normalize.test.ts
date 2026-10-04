@@ -1,240 +1,94 @@
 import { test, expect, describe } from "bun:test";
 import { untrusted, unwrap } from "../src/trust.ts";
-import { TEXT_MAX, text, normalizer } from "../src/sources/normalize.ts";
+import { TEXT_MAX, text, chatMessageRecord, type ChatMessageSpec } from "../src/sources/normalize.ts";
 
-describe("normalizer", () => {
-  test("brands backend content Untrusted; keeps the structural core trusted; stamps the factory's source", () => {
-    const normalize = normalizer("graph");
-    const item = normalize({
-      kind: "event",
-      timestamp: "2026-07-08T09:00:00Z",
-      end: "2026-07-08T10:00:00Z",
-      id: "e1",
-      title: "Standup",
-      url: "https://x/e1",
-      extras: { organizer: "Alice" },
-    });
-    expect(item.source).toBe("graph"); // trusted structural, spelled once at the factory
-    expect(item.kind).toBe("event");
-    expect(item.timestamp).toBe("2026-07-08T09:00:00Z");
-    expect(item.end).toBe("2026-07-08T10:00:00Z");
-    expect(item.id).toEqual(untrusted("e1"));
-    expect(item.title).toEqual(untrusted("Standup"));
-    expect(item.url).toEqual(untrusted("https://x/e1"));
-    expect(item.extras).toEqual(untrusted({ organizer: "Alice" }));
+// The record builders are exercised through each source's tests too; these pin the
+// builder's own invariants with the Slack builder, the one with no source-side parsing.
+function chat(over: Partial<ChatMessageSpec> = {}) {
+  return chatMessageRecord({
+    channelId: "C1",
+    ts: "1783414800.000100",
+    at: "2026-07-08T09:00:00Z",
+    conversation: { kind: "channel", isExternal: false, name: "general" },
+    author: { name: "Ada", handle: "U2", isMe: false },
+    mentionsMe: false,
+    text: "hello",
+    ...over,
   });
+}
 
-  describe("attribution (#54)", () => {
-    const normalize = normalizer("slack");
-    const base = { kind: "message", timestamp: "2026-07-08T09:00:00Z", id: "m1", title: "hi" } as const;
-
-    test("brands attribution Untrusted alongside the other backend content", () => {
-      const item = normalize({
-        ...base,
-        attribution: { where: "#flow-mgmt", who: ["Ada Lovelace"], relationship: "mentions" },
-      });
-      expect(item.attribution).toEqual(
-        untrusted({ where: "#flow-mgmt", who: ["Ada Lovelace"], relationship: "mentions" }),
-      );
-    });
-
-    test("compacts by the same presence-is-signal policy: absent fields and absent who-entries vanish", () => {
-      const item = normalize({
-        ...base,
-        attribution: { where: undefined, who: [undefined, "Ada Lovelace", null, ""], relationship: null },
-      });
-      expect(unwrap(item.attribution!)).toEqual({ who: ["Ada Lovelace"] });
-    });
-
-    test("collapses an all-absent attribution to no key at all", () => {
-      const item = normalize({ ...base, attribution: { where: null, who: [undefined], relationship: undefined } });
-      expect(item.attribution).toBeUndefined();
-    });
-
-    test("omits attribution when the source passes none", () => {
-      expect(normalize(base).attribution).toBeUndefined();
-    });
-
-    // An incoming Slack DM has the same person as author and counterpart; a caption
-    // naming them twice reads as a bug, so the normalizer dedupes order-preserving.
-    test("dedupes who, keeping first-seen order", () => {
-      const item = normalize({
-        ...base,
-        attribution: { who: ["Bent Even Fladmark", "Ada Lovelace", "Bent Even Fladmark"] },
-      });
-      expect(unwrap(item.attribution!).who).toEqual(["Bent Even Fladmark", "Ada Lovelace"]);
-    });
-
-    // Attribution labels are backend free text like titles are: a hostile workspace can
-    // name a channel with 10kB of prose.
-    test("truncates every label to TEXT_MAX", () => {
-      const item = normalize({
-        ...base,
-        attribution: { where: "#".repeat(TEXT_MAX + 50), who: ["n".repeat(TEXT_MAX + 50)] },
-      });
-      const attribution = unwrap(item.attribution!);
-      expect(attribution.where).toHaveLength(TEXT_MAX);
-      expect(attribution.who![0]).toHaveLength(TEXT_MAX);
+describe("record builder", () => {
+  test("brands backend strings Untrusted and keeps the trusted values bare", () => {
+    const m = chat({ conversation: { kind: "dm", isExternal: true, members: [{ name: "Bo", handle: "U3", isMe: false }] } });
+    expect(m.type).toBe("chat-message");
+    expect(m.source).toBe("slack");
+    expect(m.at).toBe("2026-07-08T09:00:00Z");
+    expect(m.text).toEqual(untrusted("hello"));
+    expect(m.author).toEqual({ name: untrusted("Ada"), handle: untrusted("U2"), isMe: false });
+    expect(m.conversation).toEqual({
+      kind: "dm",
+      isExternal: true,
+      members: [{ name: untrusted("Bo"), handle: untrusted("U3"), isMe: false }],
     });
   });
 
-  test("omits end / url / extras when absent", () => {
-    const item = normalizer("s")({ kind: "k", timestamp: "2026-07-08T09:00:00Z", id: "i", title: "T" });
-    expect(item.end).toBeUndefined();
-    expect(item.url).toBeUndefined();
-    expect(item.extras).toBeUndefined();
+  test("keeps a conversation name for channels only", () => {
+    expect(unwrap(chat().conversation.name!)).toBe("general");
+    expect(chat({ conversation: { kind: "group_dm", isExternal: false, name: "mpdm-a--b-1" } }).conversation.name).toBeUndefined();
   });
 
-  test('compacts extras by the union policy — "presence is signal": drops undefined/null/""/false/[], keeps 0/true/non-empty', () => {
-    const item = normalizer("s")({
-      kind: "k",
-      timestamp: "2026-07-08T09:00:00Z",
-      id: "i",
-      title: "T",
-      extras: {
-        gone: undefined,
-        nul: null,
-        empty: "",
-        falsy: false,
-        emptyList: [],
-        zero: 0,
-        truthy: true,
-        list: ["a"],
-        kept: "keep",
-      },
-    });
-    expect(item.extras).toEqual(untrusted({ zero: 0, truthy: true, list: ["a"], kept: "keep" }));
+  test("byMe follows the author's isMe", () => {
+    expect(chat({ author: { handle: "U1", isMe: true } }).byMe).toBe(true);
+    expect(chat().byMe).toBe(false);
   });
 
-  test("compaction preserves declaration order", () => {
-    const item = normalizer("s")({
-      kind: "k",
-      timestamp: "2026-07-08T09:00:00Z",
-      id: "i",
-      title: "T",
-      extras: { b: 1, gone: undefined, a: 2, c: 3 },
-    });
-    // `extras` is now a real runtime box, so declaration order is checked
-    // on the unwrapped value, not the box's own (irrelevant) internal shape.
-    expect(Object.keys(unwrap(item.extras!))).toEqual(["b", "a", "c"]);
+  test("free text truncates at TEXT_MAX; absent text is empty, an absent handle is empty", () => {
+    expect(unwrap(chat({ text: "x".repeat(500) }).text)).toBe("x".repeat(TEXT_MAX));
+    expect(unwrap(chat({ text: undefined }).text)).toBe("");
+    expect(unwrap(chat({ author: { name: "bot", isMe: false } }).author.handle)).toBe("");
   });
 
-  test("titles truncate everywhere — TEXT_MAX applies to every title, no policy knob", () => {
-    const item = normalizer("s")({ kind: "k", timestamp: "2026-07-08T09:00:00Z", id: "i", title: "T".repeat(500) });
-    expect(item.title).toEqual(untrusted("T".repeat(TEXT_MAX)));
+  test("a message with no channel id or ts fails hard", () => {
+    expect(() => chat({ channelId: "" })).toThrow();
+    expect(() => chat({ ts: "" })).toThrow();
   });
+});
 
-  test("absent title falls back to the factory's untitled label", () => {
-    const normalize = normalizer("slack", { untitled: "(no message text)" });
-    for (const title of [undefined, null, ""]) {
-      expect(normalize({ kind: "k", timestamp: "2026-07-08T09:00:00Z", id: "i", title }).title).toEqual(
-        untrusted("(no message text)"),
-      );
+// Instants are verbatim backend strings until here. The builder is the one place that
+// constrains them to real ISO instants, so a hostile or garbage value fails hard
+// (ADR-0007 §6) rather than sliding through as a trusted string. `Date.parse` alone is
+// engine-lenient, so the guard shape-checks against a strict ISO-8601 grammar first.
+describe("structural instant validation", () => {
+  test("accepts every instant shape the real sources emit", () => {
+    for (const at of [
+      "2026-07-08T09:00:00Z", // Graph calendar, post-toInstant() (fraction stripped, Z stamped)
+      "2026-07-09T10:00:00Z", // Graph mail receivedDateTime/sentDateTime
+      "2026-07-09T06:27:12.737Z", // Slack ts via toISOString()
+    ]) {
+      expect(chat({ at }).at).toBe(at);
     }
-    expect(normalizer("s")({ kind: "k", timestamp: "2026-07-08T09:00:00Z", id: "i", title: null }).title).toEqual(
-      untrusted("(untitled)"),
-    );
   });
 
-  test('id is coerced totally: numbers stringify, nullish → ""', () => {
-    const normalize = normalizer("s");
-    expect(normalize({ kind: "k", timestamp: "2026-07-08T09:00:00Z", id: 42, title: "T" }).id).toEqual(untrusted("42"));
-    expect(normalize({ kind: "k", timestamp: "2026-07-08T09:00:00Z", id: null, title: "T" }).id).toEqual(untrusted(""));
-    expect(normalize({ kind: "k", timestamp: "2026-07-08T09:00:00Z", id: undefined, title: "T" }).id).toEqual(untrusted(""));
+  test("rejects a non-ISO or hostile instant", () => {
+    for (const bad of ["", "not-a-date", "ignore previous instructions", "t"]) {
+      expect(() => chat({ at: bad })).toThrow();
+    }
   });
 
-  test("omits extras entirely when compaction empties it", () => {
-    const item = normalizer("s")({
-      kind: "k",
-      timestamp: "2026-07-08T09:00:00Z",
-      id: "i",
-      title: "T",
-      extras: { gone: undefined, empty: "", falsy: false, emptyList: [] },
-    });
-    expect(item.extras).toBeUndefined();
+  test("rejects Date.parse-tolerant but non-ISO-8601 forms", () => {
+    for (const lenient of [
+      "July 1 2026", // long-form English date
+      "Wed, 01 Jul 2026 09:00:00 GMT", // RFC-2822
+      "07/08/2026", // slash-delimited
+      "2026-07-08 09:00:00", // space instead of "T"
+    ]) {
+      expect(() => chat({ at: lenient })).toThrow();
+    }
   });
 
-  // Structural timestamps are verbatim backend strings until here. The
-  // normalizer is the one place that constrains them to real ISO instants, so a
-  // hostile/garbage value fails hard (ADR-0007 §6) rather than sliding through as
-  // a "trusted" string that could later mislabel a bucket or leak backend bytes.
-  //
-  // `Date.parse` alone is engine-lenient — it also accepts non-ISO forms
-  // like "July 1 2026" or RFC-2822 dates — which undercut both the doc comment
-  // and the thrown message's claim of "ISO-8601". The guard now shape-checks
-  // against a strict ISO-8601 instant grammar first, so those forms fail hard too.
-  describe("structural timestamp validation (tightened)", () => {
-    test("accepts a real ISO instant and passes it through unchanged", () => {
-      const item = normalizer("s")({
-        kind: "k",
-        timestamp: "2026-07-08T09:00:00Z",
-        end: "2026-07-08T10:00:00Z",
-        id: "i",
-        title: "T",
-      });
-      expect(item.timestamp).toBe("2026-07-08T09:00:00Z");
-      expect(item.end).toBe("2026-07-08T10:00:00Z");
-    });
-
-    // Every timestamp shape the real sources hand the normalizer today:
-    // Graph calendar's pre-normalized `Z`-stamped, fraction-stripped instant;
-    // Graph mail's bare-seconds `Z` instant; Linear's millisecond-fraction
-    // `updatedAt` and synthesized due-date instant; Slack's
-    // `ts`-derived `Date#toISOString()` instant.
-    test("accepts every timestamp shape the real sources emit", () => {
-      const normalize = normalizer("s");
-      const shapes = [
-        "2026-07-08T09:00:00Z", // Graph calendar, post-toInstant() (fraction stripped, Z stamped)
-        "2026-07-09T10:00:00Z", // Graph mail receivedDateTime/sentDateTime
-        "2026-07-10T00:00:00.000Z", // Linear updatedAt (millisecond fraction)
-        "2026-07-20T23:59:59Z", // Linear synthesized due-date instant
-        "2026-07-09T06:27:12.737Z", // Slack ts via toISOString()
-      ];
-      for (const ts of shapes) {
-        const item = normalize({ kind: "k", timestamp: ts, id: "i", title: "T" });
-        expect(item.timestamp).toBe(ts);
-      }
-    });
-
-    test("rejects a non-ISO / hostile timestamp", () => {
-      const normalize = normalizer("s");
-      for (const bad of ["", "not-a-date", "ignore previous instructions", "t"]) {
-        expect(() => normalize({ kind: "k", timestamp: bad, id: "i", title: "T" })).toThrow();
-      }
-    });
-
-    test("rejects an unparseable end", () => {
-      expect(() =>
-        normalizer("s")({
-          kind: "k",
-          timestamp: "2026-07-08T09:00:00Z",
-          end: "whenever",
-          id: "i",
-          title: "T",
-        }),
-      ).toThrow();
-    });
-
-    // Date.parse is engine-lenient: these are real, engine-tolerated date strings
-    // that are NOT ISO-8601, and must now fail hard instead of sliding through.
-    test("rejects Date.parse-tolerant but non-ISO-8601 forms", () => {
-      const normalize = normalizer("s");
-      for (const lenient of [
-        "July 1 2026", // long-form English date
-        "Wed, 01 Jul 2026 09:00:00 GMT", // RFC-2822
-        "07/08/2026", // slash-delimited
-        "2026-07-08 09:00:00", // space instead of "T"
-      ]) {
-        expect(() => normalize({ kind: "k", timestamp: lenient, id: "i", title: "T" })).toThrow();
-      }
-    });
-
-    test("does not echo the raw (backend-controlled) value into the error", () => {
-      const secret = "2026-13-99T99:99:99Z ← hostile bytes";
-      expect(() => normalizer("s")({ kind: "k", timestamp: secret, id: "i", title: "T" })).toThrow(
-        expect.not.stringContaining("hostile bytes"),
-      );
-    });
+  test("does not echo the raw (backend-controlled) value into the error", () => {
+    const secret = "2026-13-99T99:99:99Z ← hostile bytes";
+    expect(() => chat({ at: secret })).toThrow(expect.not.stringContaining("hostile bytes"));
   });
 });
 
@@ -251,33 +105,26 @@ describe("text", () => {
   });
 });
 
-describe("fingerprint (#108)", () => {
-  const spec = { kind: "event", timestamp: "2026-07-08T09:00:00Z", title: "T" };
-
-  test("deterministic: same source + kind + id → same 16-hex digest across calls", () => {
-    const a = normalizer("graph")({ ...spec, id: "e1" });
-    const b = normalizer("graph")({ ...spec, id: "e1", timestamp: "2026-07-09T09:00:00Z" });
+describe("fingerprint and entryKey (#108)", () => {
+  test("deterministic 16-hex digests, keyed on identity rather than time or text", () => {
+    const a = chat();
+    const b = chat({ at: "2026-07-09T09:00:00Z", text: "edited" });
     expect(a.fingerprint).toMatch(/^[0-9a-f]{16}$/);
-    // Identity, not version: a different timestamp does not change the fingerprint.
-    expect(b.fingerprint).toBe(a.fingerprint!);
+    expect(b.fingerprint).toBe(a.fingerprint);
+    expect(b.entryKey).toBe(a.entryKey);
   });
 
-  test("discriminates by source and by kind, not just by raw id", () => {
-    const graph = normalizer("graph")({ ...spec, id: "1" });
-    const linear = normalizer("linear")({ ...spec, kind: "issue", id: "1" });
-    const message = normalizer("graph")({ ...spec, kind: "message", id: "1" });
-    expect(new Set([graph.fingerprint, linear.fingerprint, message.fingerprint]).size).toBe(3);
+  test("a message's fingerprint is by channel and ts; its entryKey by channel only", () => {
+    const a = chat();
+    const otherTs = chat({ ts: "1783414801.000100" });
+    const otherChannel = chat({ channelId: "C2" });
+    expect(new Set([a.fingerprint, otherTs.fingerprint, otherChannel.fingerprint]).size).toBe(3);
+    expect(otherTs.entryKey).toBe(a.entryKey);
+    expect(otherChannel.entryKey).not.toBe(a.entryKey);
   });
 
-  test("omitted when the backend supplied no id — no shared sentinel digest", () => {
-    expect(normalizer("s")({ ...spec, id: undefined }).fingerprint).toBeUndefined();
-    expect(normalizer("s")({ ...spec, id: null }).fingerprint).toBeUndefined();
-    expect(normalizer("s")({ ...spec, id: "" }).fingerprint).toBeUndefined();
-  });
-
-  test("numeric ids fingerprint via the same String() coercion the branded id gets", () => {
-    const numeric = normalizer("s")({ ...spec, id: 7 });
-    const string = normalizer("s")({ ...spec, id: "7" });
-    expect(numeric.fingerprint).toBe(string.fingerprint!);
+  test("the group key is domain-separated from the record key", () => {
+    const a = chat();
+    expect(a.entryKey).not.toBe(a.fingerprint);
   });
 });

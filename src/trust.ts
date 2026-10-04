@@ -1,7 +1,7 @@
 // The `Untrusted<T>` box and the single unwrap primitive (ADR-0004 §3), hardened
 // as a real runtime box so accidental leaks redact instead of leaking.
 //
-// Every untrusted field a Source emits (`id`, `url`, `title`, all of `extras`)
+// Every untrusted field a Source emits (record text, names, handles, labels)
 // carries this brand. It is a REAL runtime box now, not a phantom cast: at
 // runtime the value is wrapped in an `UntrustedBox` instance, and the type
 // system additionally treats `Untrusted<T>` as opaque — not assignable to `T`

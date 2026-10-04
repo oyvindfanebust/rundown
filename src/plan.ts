@@ -7,13 +7,12 @@
 
 import {
   eventBoundInstant,
-  isRecord,
   type AnnotatedItem,
-  type Attribution,
   type Brief,
   type Bucket,
   type Bundle,
   type CalendarEvent,
+  type ChatMessage,
   type Email,
   type Person,
 } from "./domain.ts";
@@ -105,9 +104,22 @@ function truncateField(value: string): string {
 }
 
 /**
- * One bundle item as the Planner reads it: the NormalizedItem fields, unwrapped. A
- * typed record is mapped onto the same fields, so the Brief renders and cites it as it
- * did the NormalizedItem it replaces (#147, #148). This mapping goes with the Planner (#150).
+ * Who and where, as the Brief's evidence carries them (#54): a caption copied into
+ * evidence by code, never written by the model.
+ */
+interface Attribution {
+  /** Human label for the container the item lives in. Omitted when there is no honest one. */
+  where?: string;
+  /** People involved, most salient first. */
+  who?: string[];
+  /** Why the item is the user's: authored | mentions | dms. */
+  relationship?: string;
+}
+
+/**
+ * One bundle record as the Planner reads it, unwrapped: the fields the old
+ * NormalizedItem had, so the Brief renders and cites a record as it did the item it
+ * replaces (#147, #148, #149). This mapping goes with the Planner (#150).
  */
 interface ItemView {
   source: string;
@@ -127,27 +139,14 @@ interface ItemView {
  * record readers below are where plan.ts, the sole unwrap site, unwraps (ADR-0004 §3).
  */
 function viewOf(item: AnnotatedItem): ItemView {
-  if (isRecord(item)) {
-    switch (item.type) {
-      case "email":
-        return emailView(item);
-      case "calendar-event":
-        return eventView(item);
-    }
+  switch (item.type) {
+    case "email":
+      return emailView(item);
+    case "calendar-event":
+      return eventView(item);
+    case "chat-message":
+      return chatView(item);
   }
-  const view: ItemView = {
-    source: item.source,
-    kind: item.kind,
-    timestamp: item.timestamp,
-    title: unwrap(item.title),
-  };
-  if (item.end !== undefined) view.end = item.end;
-  if (item.dateOnly === true) view.dateOnly = true;
-  if (item.fingerprint !== undefined) view.fingerprint = item.fingerprint;
-  if (item.url) view.url = unwrap(item.url);
-  if (item.attribution) view.attribution = unwrap(item.attribution);
-  if (item.extras) view.extras = unwrap(item.extras);
-  return view;
 }
 
 function present(labels: Array<string | undefined>): string[] {
@@ -230,6 +229,52 @@ function eventView(e: CalendarEvent): ItemView {
   };
   if (e.isAllDay) view.dateOnly = true;
   if (who.length > 0) view.attribution = { who };
+  return view;
+}
+
+/**
+ * A {@link ChatMessage} in the shape the Slack source gave a `message` NormalizedItem:
+ * `where` is `#channel`, `DM with <counterpart>` or `Group DM`, and `who` leads with a
+ * DM's counterpart, else the author. The relationship is `authored` for the user's own
+ * message, else `mentions` or `dms`. `extras` keeps the old keys, with the conversation's
+ * `entryKey` digest in place of the channel id; the `url` line and the query family go.
+ */
+function chatView(m: ChatMessage): ItemView {
+  const { kind, name, members, isExternal } = m.conversation;
+  const author = nameOf(m.author);
+  const counterpart =
+    kind === "dm" ? members?.filter((p) => !p.isMe).map(nameOf).find((n) => n !== undefined) : undefined;
+  const channelName = name === undefined ? undefined : unwrap(name);
+  const where =
+    kind === "dm"
+      ? counterpart && `DM with ${counterpart}`
+      : kind === "group_dm"
+        ? "Group DM"
+        : channelName && `#${channelName}`;
+  const who = [...new Set(present(kind === "dm" ? [counterpart, m.byMe ? undefined : author] : [author]))];
+  const relationship = m.byMe ? "authored" : m.mentionsMe ? "mentions" : kind === "channel" ? undefined : "dms";
+  const attribution: Attribution = {};
+  if (where) attribution.where = where;
+  if (who.length > 0) attribution.who = who;
+  if (relationship !== undefined) attribution.relationship = relationship;
+  const channel: Record<string, string> = { id: m.entryKey };
+  if (channelName !== undefined) channel.name = channelName;
+  channel.type = kind;
+  const extras: Record<string, unknown> = { channel };
+  if (counterpart !== undefined) extras.counterpart = counterpart;
+  if (author !== undefined) extras.author = author;
+  if (m.byMe) extras.fromMe = true;
+  if (isExternal) extras.external = true;
+  const text = unwrap(m.text);
+  const view: ItemView = {
+    source: m.source,
+    kind: "message",
+    timestamp: m.at,
+    fingerprint: m.fingerprint,
+    title: text === "" ? "(no message text)" : text,
+    extras,
+  };
+  if (Object.keys(attribution).length > 0) view.attribution = attribution;
   return view;
 }
 
@@ -528,7 +573,7 @@ export interface PlanContext {
  *   smuggle attacker-controlled bytes into the trusted instruction region and
  *   bypass the delimiter quarantine entirely — a strictly worse breach than a leaked
  *   `evidence.quote`, since instructions there are followed, not just described. Do
- *   not add a call site that builds `guidance` from a Bundle/NormalizedItem/Brief.
+ *   not add a call site that builds `guidance` from a Bundle, a record or a Brief.
  */
 export async function plan(bundle: Bundle, ctx: PlanContext, deps: PlanDeps = {}): Promise<Brief> {
   const summarizeFn = deps.summarize ?? summarize;

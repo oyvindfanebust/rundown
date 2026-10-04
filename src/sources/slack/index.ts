@@ -1,24 +1,21 @@
-// The Slack Source (ADR-0014): read-only messages the authenticated user
-// participated in, via `search.messages` under a per-user `xoxp-` token, emitting
-// kind:"message" NormalizedItems — one message = one item (§1). A message is a
-// past event, so the Aggregator buckets it `recent`/`standing`, never `upcoming`.
+// The Slack Source (ADR-0014, ADR-0019): read-only messages the authenticated user
+// wrote, was mentioned in, or received in a DM, via `search.messages` under a per-user
+// `xoxp-` token, emitted as typed ChatMessage records, one per message (§1).
 //
-// A theme (what a thread or DM was about) is a summarization act, forbidden to a
-// tool-less source (§3); the source emits dumb per-message items plus the grouping
-// keys (`channel`, `author`, `relationship`) the Summarizer clusters on. Message
-// bodies are the archetypal injection vector, so the body rides the item title
-// through the normalizer's `text()` marker as ordinary Untrusted content — every
-// backend field is branded at this boundary, and nothing is unwrapped here (the
-// sole unwrap site is plan.ts; CLAUDE.md).
+// A theme (what a conversation was about) is a summarization act, forbidden to a
+// tool-less source (§3). The source emits per-message records with the trusted facts
+// code can know (who wrote it, whether it is the user's, which conversation it belongs
+// to) and hands every backend string to the record builder, which brands it Untrusted.
+// Nothing is unwrapped here (the sole unwrap site is plan.ts; CLAUDE.md).
 //
 // Testability seam: every request flows through one injected `SlackRequest`
 // (method, params) → parsed body, exactly the shape the real token-bearing caller
-// has; auth presence rides `appConfig` + `cachedAuth`. Pagination on
-// `response_metadata.next_cursor`, the search-query construction and the
-// window-precise ts filter all stay inside the module, tested through `read()`.
+// has; auth presence rides `appConfig` + `cachedAuth`. Search paging, the query
+// construction, the window-precise ts filter and the member lookup all stay inside the
+// module, tested through `read()`.
 
-import type { NormalizedItem, Window } from "../../domain.ts";
-import { normalizer } from "../normalize.ts";
+import type { ChatMessage, Conversation, Window } from "../../domain.ts";
+import { chatMessageRecord, type ChatMessageSpec, type PersonSpec } from "../normalize.ts";
 import { statusOnlyError, statusOf } from "../errors.ts";
 import { noDebug, type DebugSink } from "../../debug.ts";
 import type { OptionSchema, Source, SourceStatus } from "../source.ts";
@@ -34,13 +31,10 @@ import {
 const KEY = "slack";
 const PAGE_SIZE = 100; // search.messages max per page
 
-// The source's one normalizer — the only way this module makes a NormalizedItem.
-const normalize = normalizer(KEY, { untitled: "(no message text)" });
-
 /** The three queryable relationships; each is one `search.messages` query family (§1). */
 type Relationship = "authored" | "mentions" | "dms";
 const RELATIONSHIPS: readonly Relationship[] = ["authored", "mentions", "dms"];
-const DEFAULT_RELATIONSHIPS: Relationship[] = ["authored", "mentions"];
+const DEFAULT_RELATIONSHIPS: Relationship[] = ["authored", "mentions", "dms"];
 
 /** Slack's declared option schema — exposed on the static descriptor (registry.ts). */
 export const SLACK_OPTIONS: OptionSchema = {
@@ -48,7 +42,7 @@ export const SLACK_OPTIONS: OptionSchema = {
     type: "string[]",
     enum: RELATIONSHIPS,
     description:
-      'Which relationships to pull. Options: "authored", "mentions", "dms". Omit for "authored" + "mentions" (dms opt-in).',
+      'Which relationships to pull. Options: "authored", "mentions", "dms". Omit for all three.',
   },
 };
 
@@ -78,6 +72,7 @@ interface SlackChannel {
   is_private?: boolean;
   is_im?: boolean;
   is_mpim?: boolean;
+  is_ext_shared?: boolean;
 }
 interface SlackMatch {
   channel?: SlackChannel;
@@ -88,88 +83,31 @@ interface SlackMatch {
   permalink?: string;
 }
 
-/** Channel type ∈ public/private/dm/group_dm, derived from the is_* flags (ADR-0014 §4). */
-function channelType(c: SlackChannel | undefined): string {
+/** The conversation kind, from the is_* flags. Private channels are channels. */
+function kindOf(c: SlackChannel | undefined): Conversation["kind"] {
   if (c?.is_im) return "dm";
   if (c?.is_mpim) return "group_dm";
-  if (c?.is_private) return "private";
-  return "public";
+  return "channel";
 }
 
 /**
- * A Slack user id (`U…`, or `W…` on enterprise grid). Used to recognize a user id
- * sitting in a field that normally holds a name: `search.messages` documents that for
- * IM results `channel.name` carries the target user's id rather than a channel name.
- * That prose is legacy and contradicts the response schema on the same page, so this
- * is written to work either way — a value shaped like a user id is resolved to a name,
- * anything else leaves the counterpart unknown.
+ * A Slack user id (`U…`, or `W…` on enterprise grid). `search.messages` documents that
+ * for IM results `channel.name` carries the counterpart's user id rather than a name.
+ * That prose is legacy and contradicts the response schema on the same page, so a value
+ * not shaped like a user id is treated as unreadable.
  */
 const USER_ID = /^[UW][A-Z0-9]{6,}$/;
 
 /**
- * The other party in a DM, resolved to a display name, or undefined when it cannot be
- * determined. Only 1:1 DMs are resolvable this way: a group DM's `channel.name` is an
- * `mpdm-…` composite whose format the search docs never specify, so its members stay
- * unknown rather than guessed at.
- *
- * This exists because ADR-0014 §4 conflated two different people. It defines `author`
- * as "for `authored` this is the user; for `dms`/`mentions` the counterpart" — but the
- * author of a message is simply whoever wrote it, and this source is anchored on the
- * user's own participation, so most DM messages were written BY the user. Attributing
- * those to their author names the user, not the person they were talking to.
+ * The handles in a group DM's name, `mpdm-<handle>--<handle>--…-<n>`, one per member
+ * with the user among them. Undefined when the name does not have that shape, since the
+ * format is undocumented.
  */
-async function dmCounterpart(
-  channel: SlackChannel | undefined,
-  type: string,
-  authors: AuthorCache,
-): Promise<string | undefined> {
-  if (type !== "dm") return undefined;
-  const name = channel?.name;
-  return name && USER_ID.test(name) ? await authors.name(name) : undefined;
-}
-
-/**
- * Slack's own wording for the uniform attribution slot (#54). A message body is the
- * case that motivated the field: "give me a shout when you're free" says nothing about
- * who or where on its own.
- *
- * `where` is a channel's `#name`, or a DM's counterpart. A DM whose counterpart could
- * not be resolved gets no label rather than a misleading one — the author is NOT a
- * fallback, since on the user's own outgoing DM the author is the user themselves,
- * which is exactly the "DM with <the user>" bug ADR-0014 §4 was amended for.
- *
- * `who` is most-salient-first: on a DM that is the counterpart (the person the
- * conversation is with), not the author, who is usually the user. On a channel it is
- * the author. The normalizer dedupes, so an incoming DM whose author and counterpart
- * are the same person yields one name.
- *
- * `relationship` is derived from the message, not from the query that found it: a
- * message the user wrote is `authored` whatever query surfaced it, and everything else
- * carries the query's relationship. It is what lets a consumer attribute a quote, since
- * a DM's `where` and `who` read the same both ways (#94). `extras.relationship` keeps
- * reporting the query family — the Summarizer's clustering material — so the two
- * values can differ. That divergence is deliberate; neither is the other's bug.
- */
-function slackAttribution(args: {
-  channelName: string | undefined;
-  type: string;
-  counterpart: string | undefined;
-  author: string | undefined;
-  fromMe: boolean;
-  queryRelationship: Relationship;
-}): { where?: string; who: Array<string | undefined>; relationship: string } {
-  const { channelName, type, counterpart, author, fromMe, queryRelationship } = args;
-  const where =
-    type === "dm"
-      ? counterpart && `DM with ${counterpart}`
-      : type === "group_dm"
-        ? "Group DM"
-        : channelName && `#${channelName}`;
-  return {
-    ...(where ? { where } : {}),
-    who: type === "dm" ? [counterpart, fromMe ? undefined : author] : [author],
-    relationship: fromMe ? "authored" : queryRelationship,
-  };
+function mpdmHandles(name: string | undefined): string[] | undefined {
+  const m = /^mpdm-(.+)-\d+$/.exec(name ?? "");
+  if (!m) return undefined;
+  const handles = m[1]!.split("--");
+  return handles.length >= 2 && handles.every((h) => h !== "") ? handles : undefined;
 }
 
 /** Slack's `ts` ("1749047412.123456", epoch seconds) → a strict ISO-8601 instant (ADR-0014 §4). */
@@ -177,9 +115,19 @@ export function tsToInstant(ts: string): string {
   return new Date(Number.parseFloat(ts) * 1000).toISOString();
 }
 
-/** The stable message identity and dedup key: channel id + ts (ADR-0014 §1, §4). */
+/** The dedup key: channel id + ts (ADR-0014 §1). */
 function messageId(channelId: string, ts: string): string {
   return `${channelId}:${ts}`;
+}
+
+/** One deduplicated search match inside the window. */
+interface Hit {
+  match: SlackMatch;
+  channelId: string;
+  ts: string;
+  at: string;
+  /** The `mentions` query found it. */
+  mentioned: boolean;
 }
 
 /**
@@ -202,6 +150,14 @@ function buildQuery(relationship: Relationship, userId: string, window: Window):
       break;
   }
   return parts.join(" ");
+}
+
+/**
+ * The next page cursor from a response's cursor field, or "" at the end. A cursor that
+ * does not move would page forever, so it also counts as the end.
+ */
+function nextCursor(next: unknown, current: string): string {
+  return typeof next === "string" && next !== current ? next : "";
 }
 
 /** UTC calendar day one day before/after an instant, as `YYYY-MM-DD` — the padded search bounds. */
@@ -287,7 +243,7 @@ export class SlackSource implements Source {
     }
   }
 
-  async read(window: Window): Promise<NormalizedItem[]> {
+  async read(window: Window): Promise<ChatMessage[]> {
     if (this.appConfig() === null) {
       throw new Error("Slack is not configured. Set SLACK_CLIENT_ID and SLACK_CLIENT_SECRET in your environment.");
     }
@@ -299,78 +255,144 @@ export class SlackSource implements Source {
       (r): r is Relationship => (RELATIONSHIPS as readonly string[]).includes(r),
     );
 
-    // Union across relationships, dedup by message identity; first-seen relationship wins.
-    const byId = new Map<string, NormalizedItem>();
-    const authors = new AuthorCache(request);
-
+    // Union across relationships, dedup by channel id + ts.
+    const hits = new Map<string, Hit>();
     for (const relationship of relationships) {
-      const matches = await this.searchAll(request, buildQuery(relationship, auth.userId, window));
-      for (const m of matches) {
-        const channelId = m.channel?.id;
-        const ts = m.ts;
+      for (const match of await this.searchAll(request, buildQuery(relationship, auth.userId, window))) {
+        const channelId = match.channel?.id;
+        const ts = match.ts;
         if (!channelId || !ts) continue;
-        const instant = tsToInstant(ts);
-        if (!inWindow(instant, window)) continue; // precise window cut past the coarse day bounds
+        const at = tsToInstant(ts);
+        if (!inWindow(at, window)) continue; // precise window cut past the coarse day bounds
         const id = messageId(channelId, ts);
-        if (byId.has(id)) continue; // first-seen relationship wins
-        byId.set(id, await normalizeMatch(m, channelId, instant, relationship, authors, auth.userId));
+        const hit = hits.get(id) ?? { match, channelId, ts, at, mentioned: false };
+        if (relationship === "mentions") hit.mentioned = true;
+        hits.set(id, hit);
       }
     }
 
-    return [...byId.values()];
+    const people = new People(request, auth.userId);
+    // The authors seen per conversation, first-seen order: the members fallback.
+    const authorsSeen = new Map<string, string[]>();
+    for (const { channelId, match } of hits.values()) {
+      const seen = authorsSeen.get(channelId) ?? [];
+      if (match.user && !seen.includes(match.user)) seen.push(match.user);
+      authorsSeen.set(channelId, seen);
+    }
+
+    const records: ChatMessage[] = [];
+    for (const hit of hits.values()) {
+      records.push(await toRecord(hit, people, authorsSeen.get(hit.channelId) ?? []));
+    }
+    return records;
   }
 
-  /** Paginate `search.messages` on `response_metadata.next_cursor`. */
+  /**
+   * Read every page of one search. `search.messages` pages by cursor only when the
+   * first call passes `cursor=*`, and returns the next cursor in
+   * `messages.paging.next_cursor`, empty on the last page (#132).
+   */
   private async searchAll(request: SlackRequest, query: string): Promise<SlackMatch[]> {
     const out: SlackMatch[] = [];
-    let cursor: string | undefined;
+    let cursor = "*";
     do {
-      const params: Record<string, string> = { query, count: String(PAGE_SIZE) };
-      if (cursor) params.cursor = cursor;
-      const body = await request("search.messages", params);
+      const body = await request("search.messages", { query, count: String(PAGE_SIZE), cursor });
       if (!body?.ok) throw statusOnlyError("Slack", body); // scrubbed: no backend body bytes
       out.push(...(body.messages?.matches ?? []));
-      cursor = body.response_metadata?.next_cursor || undefined;
-    } while (cursor);
+      cursor = nextCursor(body.messages?.paging?.next_cursor, cursor);
+    } while (cursor !== "");
     return out;
   }
 }
 
+/** A Slack user's display name: real name, then display name, then handle. */
+function displayName(u: any): string | undefined {
+  return u?.profile?.real_name || u?.profile?.display_name || u?.real_name || u?.name || undefined;
+}
+
 /**
- * Resolves a user id to a display name via `users.info` (the `users:read` scope),
- * caching each id — including the misses — so a busy channel resolves each author
- * at most once.
+ * The people this read meets, as the `users:read` scope sees them. A user id resolves to
+ * a display name via `users.info`, cached per id, misses included, so a busy channel
+ * resolves each author once. A group-DM handle resolves through the `users.list`
+ * directory, fetched once and only when a group DM is read. `isMe` compares a user id
+ * with the `auth.test` one.
  */
-class AuthorCache {
-  private readonly cache = new Map<string, string | undefined>();
-  constructor(private readonly request: SlackRequest) {}
+class People {
+  private readonly names = new Map<string, string | undefined>();
+  private directory?: Promise<Map<string, { id: string; name?: string }>>;
+  constructor(
+    private readonly request: SlackRequest,
+    readonly selfId: string,
+  ) {}
 
   /** The display name for a user id, or undefined when it cannot be resolved. */
   async name(userId: string): Promise<string | undefined> {
-    if (!this.cache.has(userId)) this.cache.set(userId, await this.fetchName(userId));
-    return this.cache.get(userId);
+    if (!this.names.has(userId)) this.names.set(userId, await this.fetchName(userId));
+    return this.names.get(userId);
+  }
+
+  /** A person by user id, named when the id resolves. */
+  async byId(userId: string): Promise<PersonSpec> {
+    return { handle: userId, name: await this.name(userId), isMe: userId === this.selfId };
   }
 
   /**
-   * The `author` extra: a display name (ADR-0014 §4), falling back to the
-   * search-supplied `username`. When neither yields a name the key is left
-   * undefined so compaction drops it — a raw Slack id is not a display name, and
-   * emitting one put an unresolved id into a Brief summary as if it were a person.
+   * A message's author: the user id resolved to a name, else the search-supplied
+   * `username`. A raw id is never used as a name, so an unresolved author has none.
    */
-  async resolve(userId: string | undefined, fallback: string | undefined): Promise<string | undefined> {
-    if (!userId) return fallback;
-    return (await this.name(userId)) ?? fallback;
+  async author(userId: string | undefined, username: string | undefined): Promise<PersonSpec> {
+    if (!userId) return { handle: "", name: username, isMe: false };
+    return { handle: userId, name: (await this.name(userId)) ?? username, isMe: userId === this.selfId };
+  }
+
+  /** Group-DM members by handle, or undefined when any handle is not in the directory. */
+  async byHandles(handles: string[]): Promise<PersonSpec[] | undefined> {
+    this.directory ??= this.fetchDirectory();
+    const directory = await this.directory;
+    const members: PersonSpec[] = [];
+    for (const handle of handles) {
+      const user = directory.get(handle);
+      if (!user) return undefined;
+      members.push({ handle: user.id, name: user.name, isMe: user.id === this.selfId });
+    }
+    return members;
   }
 
   private async fetchName(userId: string): Promise<string | undefined> {
     try {
       const body = await this.request("users.info", { user: userId });
-      if (!body?.ok) return undefined;
-      const u = body.user ?? {};
-      return u.profile?.real_name || u.profile?.display_name || u.real_name || u.name || undefined;
+      return body?.ok ? displayName(body.user) : undefined;
     } catch {
       return undefined;
     }
+  }
+
+  /**
+   * Every workspace user by handle (`users.list`, all pages). A failed page ends the
+   * directory where it is: an unknown handle sends its group DM to the authors-seen
+   * fallback rather than failing the read.
+   */
+  private async fetchDirectory(): Promise<Map<string, { id: string; name?: string }>> {
+    const directory = new Map<string, { id: string; name?: string }>();
+    let cursor = "";
+    try {
+      do {
+        const params: Record<string, string> = { limit: "200" };
+        if (cursor) params.cursor = cursor;
+        const body = await this.request("users.list", params);
+        if (!body?.ok) break;
+        for (const u of body.members ?? []) {
+          if (typeof u?.id === "string" && typeof u?.name === "string") {
+            directory.set(u.name, { id: u.id, name: displayName(u) });
+            if (!this.names.has(u.id)) this.names.set(u.id, displayName(u));
+          }
+        }
+        cursor = nextCursor(body.response_metadata?.next_cursor, cursor);
+      } while (cursor);
+    } catch {
+      // Keep what was read; see above.
+    }
+    return directory;
   }
 }
 
@@ -402,12 +424,12 @@ function mention(label: string): string {
  */
 async function readableText(
   raw: string | undefined,
-  authors: AuthorCache,
+  people: People,
 ): Promise<string | undefined> {
   if (!raw) return raw;
   const names = new Map<string, string | undefined>();
   for (const m of raw.matchAll(USER_TOKEN)) {
-    if (!m[2] && !names.has(m[1]!)) names.set(m[1]!, await authors.name(m[1]!));
+    if (!m[2] && !names.has(m[1]!)) names.set(m[1]!, await people.name(m[1]!));
   }
   return raw
     .replace(SUBTEAM_TOKEN, (_all, label?: string) => mention(label || "group"))
@@ -417,46 +439,54 @@ async function readableText(
     .replace(LINK_TOKEN, (_all, url: string, label?: string) => label || url);
 }
 
-/** Map one search hit through the normalizer; only domain judgment lives here. */
-async function normalizeMatch(
-  m: SlackMatch,
-  channelId: string,
-  instant: string,
-  relationship: Relationship,
-  authors: AuthorCache,
-  selfId: string,
-): Promise<NormalizedItem> {
-  const type = channelType(m.channel);
-  const counterpart = await dmCounterpart(m.channel, type, authors);
-  const author = await authors.resolve(m.user, m.username);
-  const fromMe = m.user === selfId;
-  return normalize({
-    kind: "message",
-    timestamp: instant,
-    id: messageId(channelId, m.ts!),
-    title: await readableText(m.text, authors),
-    url: m.permalink,
-    attribution: slackAttribution({
-      channelName: m.channel?.name,
-      type,
-      counterpart,
-      author,
-      fromMe,
-      queryRelationship: relationship,
-    }),
-    extras: {
-      // A DM's channel has no human name, so the counterpart is its label. Omitted
-      // when unresolvable — better an absent label than the author standing in for it.
-      channel: { id: channelId, name: m.channel?.name, type },
-      counterpart,
-      author,
-      // Whether the user wrote it. The source is anchored on the user's own
-      // participation, so most messages are theirs; without this the summarizer reads
-      // the author of the user's own DM message as the person they were talking to.
-      fromMe,
-      // The query family that surfaced the item, for the Summarizer to cluster on. The
-      // attribution's relationship is derived per message instead, so it can differ.
-      relationship,
+/** Whether the text carries a mention token for the user's id. */
+function textMentions(raw: string | undefined, selfId: string): boolean {
+  for (const m of (raw ?? "").matchAll(USER_TOKEN)) if (m[1] === selfId) return true;
+  return false;
+}
+
+/**
+ * A conversation's members: a DM's counterpart from the IM name, a group DM's members
+ * from its `mpdm-` name. When the name cannot be read, the authors seen in the window,
+ * without the user for a DM.
+ * Channels have none: their membership is not the conversation's participants.
+ */
+async function membersOf(
+  channel: SlackChannel | undefined,
+  kind: Conversation["kind"],
+  people: People,
+  authorsSeen: string[],
+): Promise<PersonSpec[] | undefined> {
+  if (kind === "channel") return undefined;
+  const name = channel?.name;
+  if (kind === "dm" && name && USER_ID.test(name)) return [await people.byId(name)];
+  if (kind === "group_dm") {
+    const handles = mpdmHandles(name);
+    const members = handles && (await people.byHandles(handles));
+    if (members) return members;
+  }
+  // A DM's members are its counterpart, so the user is never one of them.
+  const seen = kind === "dm" ? authorsSeen.filter((id) => id !== people.selfId) : authorsSeen;
+  return Promise.all(seen.map((id) => people.byId(id)));
+}
+
+/** Map one search hit to a record; the builder brands and validates it. */
+async function toRecord(hit: Hit, people: People, authorsSeen: string[]): Promise<ChatMessage> {
+  const { match: m, channelId, ts, at } = hit;
+  const kind = kindOf(m.channel);
+  const spec: ChatMessageSpec = {
+    channelId,
+    ts,
+    at,
+    conversation: {
+      kind,
+      isExternal: m.channel?.is_ext_shared === true,
+      name: m.channel?.name,
+      members: await membersOf(m.channel, kind, people, authorsSeen),
     },
-  });
+    author: await people.author(m.user, m.username),
+    mentionsMe: hit.mentioned || textMentions(m.text, people.selfId),
+    text: await readableText(m.text, people),
+  };
+  return chatMessageRecord(spec);
 }

@@ -10,9 +10,9 @@ const REAL_SUMMARIZE_EXPORTS = { ...realSummarizeModule };
 import { mkdtempSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { untrusted } from "../src/trust.ts";
 import { resolveSelector, parseWindowSelector } from "../src/temporal.ts";
-import type { NormalizedItem, Window } from "../src/domain.ts";
+import type { SourceRecord, Window } from "../src/domain.ts";
+import { chatMessageRecord } from "../src/sources/normalize.ts";
 import type { Source, SourceDescriptor } from "../src/sources/source.ts";
 
 // buildBrief is the composition root (ADR-0008 §2): resolve config → build the
@@ -26,7 +26,7 @@ import type { Source, SourceDescriptor } from "../src/sources/source.ts";
 // A single fake source driven by module-level state, so each test sets what it
 // returns and can read back what `read()` was handed — the shared clock reaches
 // the source only via the resolved `window`, so capturing it proves the threading.
-let currentItems: NormalizedItem[] = [];
+let currentItems: SourceRecord[] = [];
 let lastReadWindow: Window | undefined;
 const fake: Source = {
   key: "fake",
@@ -80,8 +80,16 @@ const { buildBrief } = await import("../src/brief.ts");
 
 const NOW = new Date("2026-07-08T12:00:00.000Z"); // a Wednesday, mid-day UTC
 
-function item(timestamp: string, title: string): NormalizedItem {
-  return { source: "fake", kind: "event", timestamp, id: untrusted(`fake-${title}`), title: untrusted(title) };
+function item(at: string, text: string): SourceRecord {
+  return chatMessageRecord({
+    channelId: "C1",
+    ts: at,
+    at,
+    conversation: { kind: "channel", isExternal: false, name: "general" },
+    author: { name: "Ada", handle: "U2", isMe: false },
+    mentionsMe: true,
+    text,
+  });
 }
 
 describe("buildBrief", () => {

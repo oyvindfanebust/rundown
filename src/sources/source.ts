@@ -3,7 +3,7 @@
 // surface is `read`, `status` and `login`: every source has a total readiness
 // answer, and every source logs in interactively (ADR-0002, amended).
 
-import type { BundleItem, Window } from "../domain.ts";
+import type { SourceRecord, Window } from "../domain.ts";
 import type { DebugSink } from "../debug.ts";
 
 /** A single declared config option for a source (drives validation + the init template). */
@@ -103,7 +103,7 @@ export function narrateStatus(status: SourceStatus): StatusNarration {
 }
 
 export interface Source {
-  /** Stable registry key / provenance (also the `NormalizedItem.source` value). */
+  /** Stable registry key / provenance (also the records' `source` value). */
   readonly key: string;
   /** Human-facing label. */
   readonly label: string;
@@ -113,7 +113,7 @@ export interface Source {
    * is injected at construction (ADR-0002 §5), so `read` closes over `this.config`
    * rather than taking a per-call `options` argument.
    */
-  read(window: Window): Promise<BundleItem[]>;
+  read(window: Window): Promise<SourceRecord[]>;
 
   /** Interactive auth. Returns identity. */
   login(): Promise<string>;

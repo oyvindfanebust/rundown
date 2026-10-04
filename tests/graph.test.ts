@@ -1,6 +1,6 @@
 import { test, expect, describe, afterEach } from "bun:test";
 import { untrusted, unwrap } from "../src/trust.ts";
-import { isRecord, type BundleItem, type CalendarEvent, type Email } from "../src/domain.ts";
+import type { CalendarEvent, Email, SourceRecord } from "../src/domain.ts";
 import type { Source } from "../src/sources/source.ts";
 import { GraphSource, GRAPH_OPTIONS, type GraphAuth, type FetchJson, type GraphDeps } from "../src/sources/graph/index.ts";
 
@@ -125,17 +125,17 @@ describe("GraphSource.status", () => {
 
 // ── read(): calendar as typed CalendarEvent records (#148) ─────────────────────
 
-function eventsOf(items: BundleItem[]): CalendarEvent[] {
-  return items.filter((i): i is CalendarEvent => isRecord(i) && i.type === "calendar-event");
+function eventsOf(items: SourceRecord[]): CalendarEvent[] {
+  return items.filter((i): i is CalendarEvent => i.type === "calendar-event");
 }
 
-function byEventTitle(items: BundleItem[], title: string): CalendarEvent {
+function byEventTitle(items: SourceRecord[], title: string): CalendarEvent {
   const found = eventsOf(items).find((e) => unwrap(e.title) === title);
   if (!found) throw new Error(`no event with title ${title}`);
   return found;
 }
 
-async function readCalendar(routes: Routes): Promise<BundleItem[]> {
+async function readCalendar(routes: Routes): Promise<SourceRecord[]> {
   const { fetchJson } = fakeFetch(routes);
   return graphSource({ fetchJson }, { kinds: ["event"] }).read(WINDOW);
 }
@@ -509,29 +509,22 @@ describe("GraphSource.read calendar fields", () => {
     }
     for (const field of ["onlineMeeting", "onlineMeetingUrl", "webLink", "body"]) expect(select).not.toContain(field);
   });
-
-  test("Graph produces no NormalizedItem", async () => {
-    const { fetchJson } = fakeFetch({ calendar: { value: [event()] }, inbox: { value: [message()] } });
-    const items = await graphSource({ fetchJson }, {}).read(WINDOW);
-    expect(items.length).toBe(2);
-    expect(items.every(isRecord)).toBe(true);
-  });
 });
 
 // ── read(): mail as typed Email records (#147) ─────────────────────────────────
 
 /** The mail records of one read, by their (unwrapped) subject. Test-only lookup. */
-function mailOf(items: BundleItem[]): Email[] {
-  return items.filter((i): i is Email => isRecord(i) && i.type === "email");
+function mailOf(items: SourceRecord[]): Email[] {
+  return items.filter((i): i is Email => i.type === "email");
 }
 
-function bySubject(items: BundleItem[], subject: string): Email {
+function bySubject(items: SourceRecord[], subject: string): Email {
   const found = mailOf(items).find((m) => unwrap(m.subject) === subject);
   if (!found) throw new Error(`no mail with subject ${subject}`);
   return found;
 }
 
-async function readMail(routes: Routes): Promise<BundleItem[]> {
+async function readMail(routes: Routes): Promise<SourceRecord[]> {
   const { fetchJson } = fakeFetch(routes);
   return graphSource({ fetchJson }, { kinds: ["message"] }).read(WINDOW);
 }

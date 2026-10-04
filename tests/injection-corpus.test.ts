@@ -25,6 +25,7 @@ import { test, expect, describe } from "bun:test";
 import type Anthropic from "@anthropic-ai/sdk";
 import { untrusted } from "../src/trust.ts";
 import type { AnnotatedItem, Bundle, Brief } from "../src/domain.ts";
+import { chatMessageRecord, type ChatMessageSpec } from "../src/sources/normalize.ts";
 import { plan, renderBundle, type PlanDeps } from "../src/plan.ts";
 import { summarize, SummarizerError, type MessageTransport } from "../src/summarize.ts";
 import { SummarizerOutputSchema, type SummarizerOutput } from "../src/brief-contract.ts";
@@ -95,15 +96,29 @@ function bundleOf(items: Bundle["items"]): Bundle {
   return { window: WINDOW, sources: [{ source: "graph", itemCount: items.length }], items };
 }
 
-function itemWithTitle(title: string, idSuffix: string): AnnotatedItem {
+/** A Slack message record, as the Slack source builds it. */
+function chat(over: Partial<ChatMessageSpec> = {}): AnnotatedItem {
   return {
-    source: "graph",
-    kind: "event",
-    timestamp: "2026-07-07T09:00:00Z",
+    ...chatMessageRecord({
+      channelId: "C1",
+      ts: "1783414800.000100",
+      at: "2026-07-07T09:00:00Z",
+      conversation: { kind: "channel", isExternal: false, name: "general" },
+      author: { name: "Ada", handle: "U2", isMe: false },
+      mentionsMe: true,
+      text: "",
+      ...over,
+    }),
     bucket: "recent",
-    id: untrusted(idSuffix),
-    title: untrusted(title),
   };
+}
+
+/**
+ * A record whose text is `title`, set past the record builder's own cap so the
+ * render-time cap is what an oversized case tests. `idSuffix` keeps fingerprints apart.
+ */
+function itemWithTitle(title: string, idSuffix: string): AnnotatedItem {
+  return { ...chat({ ts: idSuffix }), text: untrusted(title) } as AnnotatedItem;
 }
 
 // ── 1. delimiter breakout (transport seam) ──
@@ -263,18 +278,11 @@ describe("injection corpus — 3. exfiltration payloads in hostile summarizer ou
   // rename a channel or a display name to an exfiltration payload, and those bytes
   // reach `where`/`who` verbatim, so they must defang like every other output string.
   test("evidence where/who are defanged even though code copied them", async () => {
-    const hostileAttribution: AnnotatedItem = {
-      source: "slack",
-      kind: "message",
-      timestamp: "2026-07-07T09:00:00Z",
-      bucket: "recent",
-      id: untrusted("hostile-attr"),
-      title: untrusted("Sounds good, shipping today"),
-      attribution: untrusted({
-        where: "#![](https://evil.example/?q=where)",
-        who: ["Ada [click](https://evil.example/?q=who1)", "https://evil.example/?q=who2"],
-      }),
-    };
+    const hostileAttribution = chat({
+      conversation: { kind: "channel", isExternal: false, name: "![](https://evil.example/?q=where)" },
+      author: { name: "Ada [click](https://evil.example/?q=who1)", handle: "U2", isMe: false },
+      text: "Sounds good, shipping today",
+    });
     const output: SummarizerOutput = {
       summary: "ok",
       items: [{ kind: "fyi", summary: "Shipping", evidence: [{ ref: 1, quote: "shipping today" }] }],
@@ -290,7 +298,7 @@ describe("injection corpus — 3. exfiltration payloads in hostile summarizer ou
     }
     // The markdown wrapper is stripped to its visible text, not merely neutralized.
     expect(entry.where).toBe("#");
-    expect(entry.who).toEqual(["Ada click", "hxxps://evil.example/?q=who2"]);
+    expect(entry.who).toEqual(["Ada click"]);
   });
 });
 
