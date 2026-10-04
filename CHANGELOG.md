@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.12.0](https://github.com/oyvindfanebust/rundown/compare/v0.11.0...v0.12.0) (2026-10-04)
+
+
+### ⚠ BREAKING CHANGES
+
+* every Graph fingerprint and seriesFingerprint rotates once. Consumer dedup state self-heals (an already-seen item may surface once more); config `series` suppression rules do not — re-copy the seriesFingerprint from a fresh Brief's evidence.
+
+### Features
+
+* Graph immutable ids and mail thread identity ([#115](https://github.com/oyvindfanebust/rundown/issues/115)) ([ecfd2d8](https://github.com/oyvindfanebust/rundown/commit/ecfd2d88bd22eb447f814bddc8371da158a83e4d))
+
 ## [0.11.0](https://github.com/oyvindfanebust/rundown/compare/v0.10.0...v0.11.0) (2026-08-19)
 
 
