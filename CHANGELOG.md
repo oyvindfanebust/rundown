@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.13.0](https://github.com/oyvindfanebust/rundown/compare/v0.12.0...v0.13.0) (2026-10-04)
+
+
+### ⚠ BREAKING CHANGES
+
+* a config that sets the Slack `threads` option now fails as an unknown option. Remove the key to keep the config valid.
+
+### Features
+
+* replace rundown brief with a typed-record digest ([#154](https://github.com/oyvindfanebust/rundown/issues/154)) ([5c8439e](https://github.com/oyvindfanebust/rundown/commit/5c8439ea3d543998f99c410982937eee55bc6147)), closes [#141](https://github.com/oyvindfanebust/rundown/issues/141)
+
 ## [0.12.0](https://github.com/oyvindfanebust/rundown/compare/v0.11.0...v0.12.0) (2026-10-04)
 
 
