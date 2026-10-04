@@ -2,6 +2,11 @@
 
 **Status:** Accepted
 
+Suppression was removed in [#145](https://github.com/oyvindfanebust/rundown/issues/145)
+([ADR-0017](0017-suppression-rules.md) retired), so every consequence below that concerns `series`
+rules, `seriesFingerprint` or the `suppress` debug event is void. Graph still selects
+`seriesMasterId` and `conversationId`; the full amendment lands with the Graph mail ticket.
+
 This ADR switches the Graph source to immutable backend ids and gives mail items thread
 identity (#111), the follow-up [ADR-0016](0016-evidence-fingerprint.md) recorded. It changes
 what the normalizer digests, not how: the fingerprint scheme, the trust boundary

@@ -165,21 +165,10 @@ what it did. Pass an optional source name — `rundown login graph` — to authe
 
 The config file `~/.config/rundown/config.json` (override the path with `RUNDOWN_CONFIG`) owns
 only `timezone`, `window`, `sources` (selection = presence; the one mandatory field), freeform
-`guidance` for the planner, and `suppress` rules. No secrets, ever.
+`guidance` for the planner. No secrets, ever.
 
-`suppress` drops recurring non-task noise before the model sees it — deterministic, unlike
-`guidance`. Each rule matches by `sender` and/or `title` (case-insensitive substring), or by
-`series` — the `seriesFingerprint` a Brief's evidence shows for any occurrence of a recurring
-calendar event or any message in a mail thread. Criteria within a rule AND together; rules OR; an optional `source` key scopes a
-rule to one source. The Brief's envelope carries a `suppressed` audit (the rule, a count, and the
-suppressed items' fingerprints) for every rule that fired, so nothing disappears silently:
-
-```jsonc
-"suppress": [
-  { "sender": "notifications@github.com", "title": "Release Pipeline" },
-  { "series": "0123456789abcdef" }
-]
-```
+Suppression rules are gone. A config that still has a `suppress` key fails with an error naming
+it; delete the key.
 
 ## Usage
 

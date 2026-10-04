@@ -95,14 +95,6 @@ export const BriefEvidence = z.strictObject({
    * to the source object. Absent when the backend supplied no id.
    */
   fingerprint: z.string().regex(/^[0-9a-f]{16}$/).optional(),
-  /**
-   * Stable identity of the recurring group the cited item belongs to (#107, ADR-0018) —
-   * same digest scheme as `fingerprint`, constant across a calendar series' occurrences
-   * or a mail thread's messages. Group a thread's evidence by it, or copy it into a
-   * config `suppress` rule's `series` field to drop the whole group. Absent for items
-   * that belong to no group.
-   */
-  seriesFingerprint: z.string().regex(/^[0-9a-f]{16}$/).optional(),
   /** Container label ("#flow-mgmt", "DM with Ada Lovelace", "Inbox"), when the source has an honest one. */
   where: z.string().max(LABEL_MAX).optional(),
   /** People involved, most salient first — so a clamp keeps the useful end. */

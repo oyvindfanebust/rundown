@@ -74,19 +74,15 @@ anything missing.
 
 ```jsonc
 {
-  // `timezone` is the IANA zone all `when` phrasing is anchored to. `suppressed` appears
-  // only when config suppress rules dropped items: the rule, a count, and the dropped
-  // items' fingerprints — the audit that keeps filtering honest.
-  "envelope": { "window": {"from","to"}, "sources": [{"source","itemCount"}], "timezone": "Europe/Oslo", "suppressed": [{"rule","count","fingerprints"}] },
+  // `timezone` is the IANA zone all `when` phrasing is anchored to.
+  "envelope": { "window": {"from","to"}, "sources": [{"source","itemCount"}], "timezone": "Europe/Oslo" },
   "summary": "prose synthesis of where things stand",
   "items": [
     {
       "kind": "commitment|task|waiting|fyi", "summary": "...", "when": "Thu 9am",
       // `where`/`who`/`relationship` are optional — absent when the source has no honest
       // container, no people, or no reason the item is the user's. `fingerprint` is the
-      // cited item's stable identity (equal across Briefs → same item; dedup key), and
-      // `seriesFingerprint` the identity of its recurring series — copy the latter into a
-      // config `suppress` rule's `series` field to mute the whole series.
+      // cited item's stable identity (equal across Briefs → same item; dedup key).
       "evidence": [{ "source": "slack/message", "fingerprint": "0123456789abcdef", "where": "#flow-mgmt", "who": ["Ada Lovelace"], "relationship": "mentions", "quote": "..." }]
     }
   ]

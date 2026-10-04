@@ -8,7 +8,7 @@
 
 import { test, expect } from "bun:test";
 import { inspect } from "node:util";
-import { untrusted, unwrap, untrustedOpt, untrustedIncludes, untrustedExtrasInclude } from "../src/trust.ts";
+import { untrusted, unwrap, untrustedOpt } from "../src/trust.ts";
 import type { AnnotatedItem } from "../src/domain.ts";
 
 test("unwrap returns the original value", () => {
@@ -109,26 +109,4 @@ test("JSON.stringify of an AnnotatedItem-shaped graph leaks no title/url/extras 
   expect(s).toContain("graph");
   expect(s).toContain("event");
   expect(s).toContain("recent");
-});
-
-// The boolean comparison primitives (ADR-0017): suppression matching runs INSIDE
-// trust.ts, and only a boolean escapes — these are the audit's other members
-// alongside unwrap(). The tests pin the matching semantics (case-insensitive
-// substring) and that absence never matches.
-
-test("untrustedIncludes: case-insensitive substring, only a boolean out", () => {
-  const title = untrusted("Release Pipeline approval NEEDED");
-  expect(untrustedIncludes(title, "release pipeline")).toBe(true);
-  expect(untrustedIncludes(title, "Needed")).toBe(true);
-  expect(untrustedIncludes(title, "standup")).toBe(false);
-  expect(untrustedIncludes(undefined, "anything")).toBe(false);
-});
-
-test("untrustedExtrasInclude: matches one named string field; non-strings are absence", () => {
-  const extras = untrusted({ from: "GitHub", count: 7, nested: { from: "x" } });
-  expect(untrustedExtrasInclude(extras, "from", "github")).toBe(true);
-  expect(untrustedExtrasInclude(extras, "from", "gitlab")).toBe(false);
-  expect(untrustedExtrasInclude(extras, "count", "7")).toBe(false);
-  expect(untrustedExtrasInclude(extras, "missing", "x")).toBe(false);
-  expect(untrustedExtrasInclude(undefined, "from", "x")).toBe(false);
 });

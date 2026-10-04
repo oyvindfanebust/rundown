@@ -357,7 +357,7 @@ describe("cli", () => {
       const path = written(`{"gibberish": 1, "sources": {"graph": {}}}`);
       const r = run(["status"], path);
       expect(r.stdout).toContain(`Unknown config key "gibberish"`);
-      expect(r.stdout).toContain("Known keys: timezone, window, guidance, autoUpdate, sources, suppress.");
+      expect(r.stdout).toContain("Known keys: timezone, window, guidance, autoUpdate, sources.");
       expect(r.exitCode).toBe(1);
     });
 
@@ -391,6 +391,30 @@ describe("cli", () => {
       const r = run(["status"], written(`{"timezone":"UTC","sources":{"graph":{},"slack":{}}}`));
       expect(r.stdout).not.toMatch(/linear|jira/i);
       expect(r.stderr).not.toMatch(/linear|jira/i);
+    });
+  });
+
+  // Suppression was removed (#145). A config that still sets `suppress` fails with
+  // the dedicated removed-key error, not the generic unknown-key message.
+  describe("removed config key: suppress", () => {
+    test("status rejects a config that still has suppress, naming the key", () => {
+      const r = run(["status"], written(`{"timezone":"UTC","sources":{"graph":{}},"suppress":[{"title":"x"}]}`));
+      expect(r.stdout).toContain("✗ invalid");
+      expect(r.stdout).toContain(`Config key "suppress" was removed`);
+      expect(r.stdout).not.toContain("Unknown config key");
+      expect(r.exitCode).toBe(1);
+    });
+
+    test("brief fails on it before any source runs", () => {
+      const r = run(["brief"], written(`{"timezone":"UTC","sources":{"graph":{}},"suppress":[]}`));
+      expect(r.stderr).toContain(`Config key "suppress" was removed`);
+      expect(r.exitCode).not.toBe(0);
+    });
+
+    test("the init template has no suppression example", () => {
+      const path = missing();
+      expect(run(["init"], path).exitCode).toBe(0);
+      expect(readFileSync(path, "utf-8")).not.toMatch(/suppress/i);
     });
   });
 

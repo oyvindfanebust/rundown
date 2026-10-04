@@ -22,19 +22,18 @@ Two things are composition-root plumbing, not components: **[config resolution](
 **[emission](#emission)** (serialize the Brief to stdout, errors to stderr). They wrap the
 pipeline; they are not pipeline stages.
 
-The composition root is the `brief` command: resolve config → aggregate → suppress (drop items
-matching the config's `suppress` rules; [ADR-0017](docs/adr/0017-suppression-rules.md)) → plan
-(which calls the summarizer) → emit.
+The composition root is the `brief` command: resolve config → aggregate → plan (which calls the
+summarizer) → emit.
 
 ### Repo layout (`src/`)
 
 ```
 src/
   cli.ts            external surface: parse args, dispatch commands; emission lives here
-  brief.ts          composition root for `brief`: resolve config → aggregate → suppress → plan → Brief
+  brief.ts          composition root for `brief`: resolve config → aggregate → plan → Brief
   config.ts         load + validate ~/.config/rundown/config.json; delegate window resolution to temporal.ts → { selection, window, windowIsPast, guidance, timezone }
   temporal.ts       window selector parsing + timezone resolution → absolute Window (span/date/range → instants)
-  trust.ts          Untrusted<T> brand + the single unwrap primitive + the boolean comparison primitives
+  trust.ts          Untrusted<T> brand + the single unwrap primitive
   domain.ts         shared vocabulary types: NormalizedItem, Bundle, bucket, Brief (re-exports the Brief-contract types)
   brief-contract.ts the Brief output contract — Zod source of truth: schema (→ JSON Schema), kinds + descriptions, inferred types
   sources/
@@ -42,7 +41,6 @@ src/
     registry.ts     static map: source name → Source instance
     <name>/         one folder per source (e.g. graph/, claude-code-logs/)
   aggregate.ts      Aggregator
-  suppress.ts       suppression filter: config rules drop noise between Aggregator and Planner
   summarize.ts      Summarizer (owns the security invariants)
   plan.ts           Planner (task prose from the Brief contract, prompt assembly = sole Untrusted<T> unwrap site)
 ```

@@ -1,6 +1,12 @@
 # ADR 0017 — Suppression rules: a deterministic pre-model noise filter
 
-**Status:** Accepted
+**Status:** Retired ([#117](https://github.com/oyvindfanebust/rundown/issues/117))
+
+Removed in [#145](https://github.com/oyvindfanebust/rundown/issues/145): the digest carries a full
+week, which fits the input budget without filtering, and the consumer skips what it does not want.
+The `suppress` key, the suppress step, `seriesFingerprint`, `NormalizedItem.sender` and the boolean
+comparison primitives are gone. A config that still sets `suppress` fails with an error that names
+the key. The rest of this ADR is the record of the removed design.
 
 This ADR adds config-level suppression rules (#107): user-authored rules that drop recurring
 non-task noise from the Bundle before it is rendered for the Summarizer. It extends

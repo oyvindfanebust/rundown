@@ -115,16 +115,6 @@ ${sources}
   // Freeform steering for the planner. Trusted — reaches the model as instructions.
   // Say what to surface first and the tone you want.
   "guidance": "Surface commitments I've made to others first, then anything time-sensitive or that people are waiting on me for. Keep it terse.",
-
-  // Deterministic noise filter: items matching a rule are dropped before the model
-  // sees them. Criteria in one rule AND together; rules OR. "title"/"sender" are
-  // case-insensitive substring matches; "series" names a recurring calendar series
-  // by the seriesFingerprint shown in a Brief's evidence; optional "source" scopes
-  // a rule to one source. The Brief's envelope reports what each rule suppressed.
-  // "suppress": [
-  //   { "sender": "notifications@github.com", "title": "Release Pipeline" },
-  //   { "series": "0123456789abcdef" }
-  // ]
 }
 `;
 }

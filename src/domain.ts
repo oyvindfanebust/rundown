@@ -74,29 +74,11 @@ export interface NormalizedItem {
    * in two Briefs → same fingerprint; that is its whole contract.
    */
   fingerprint?: string;
-  /**
-   * Stable identity of the recurring group an item belongs to (#107, ADR-0018): a
-   * truncated SHA-256 of `source + kind + "-series" + raw group id`, computed by the
-   * normalizer like `fingerprint`. A calendar backend expands recurrences into
-   * occurrences with per-occurrence ids, and a mail thread is several messages each
-   * with its own id, so `fingerprint` differs per item; this digest is constant
-   * across a series' occurrences or a thread's messages and is what a `series`
-   * suppression rule matches. Absent for items that belong to no group.
-   */
-  seriesFingerprint?: string;
 
   // ── untrusted (backend content) — a hostile backend controls these bytes ──
   id: Untrusted<string>;
   title: Untrusted<string>;
   url?: Untrusted<string>;
-  /**
-   * The sender's address on message-like items (#107). Like `id`, it is untrusted
-   * and never rendered into the bundle — it exists so a `sender` suppression rule
-   * can match an address when the display name in `extras.from` is unstable
-   * ("GitHub" vs `notifications@github.com`). Exposing it to the model would be a
-   * separate, eval-gated change (ADR-0012).
-   */
-  sender?: Untrusted<string>;
   /** Who and where, uniform across sources — the Brief's evidence attribution. */
   attribution?: Untrusted<Attribution>;
   /** All source-specific fields: people/roles, body/preview, status, … */
@@ -113,34 +95,6 @@ export type AnnotatedItem = NormalizedItem & { bucket: Bucket };
 export interface SourceManifestEntry {
   source: string;
   itemCount: number;
-}
-
-/**
- * One user-authored suppression rule (#107, ADR-0017). Criteria within a rule AND
- * together; the config's rules OR. `title` and `sender` are case-insensitive
- * substring matches (via the trust.ts comparison primitives); `series` is an exact
- * match against a trusted `seriesFingerprint`; `source` scopes to a registry key.
- * User-authored config, so trusted — a rule may be echoed into the Brief envelope.
- */
-export interface SuppressRule {
-  source?: string;
-  sender?: string;
-  title?: string;
-  series?: string;
-}
-
-/**
- * The audit trail for one rule that suppressed at least one item (#107): the rule
- * echoed verbatim (trusted — the user wrote it), how many items it removed, and
- * their fingerprints (trusted digests, no source bytes). Deliberately counts and
- * digests, never suppressed content: emitting titles here would be a channel of raw
- * untrusted bytes that bypasses the summarize→verify→defang pipeline entirely.
- */
-export interface SuppressedEntry {
-  rule: SuppressRule;
-  count: number;
-  /** Fingerprints of the suppressed items that carried one. */
-  fingerprints: string[];
 }
 
 /**
@@ -175,12 +129,6 @@ export interface Brief {
     window: Window;
     sources: SourceManifestEntry[];
     timezone: string;
-    /**
-     * Per-rule suppression audit (#107) — present only when at least one configured
-     * rule matched (presence is signal). `sources[].itemCount` already reflects the
-     * post-suppression bundle, so this is what accounts for the difference.
-     */
-    suppressed?: SuppressedEntry[];
   };
   summary: string;
   items: BriefItem[];
