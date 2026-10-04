@@ -115,12 +115,17 @@ export type Meeting = OneOffMeeting | RecurringMeeting;
 // ── Mail ──
 
 export interface MailThread {
-  /** Stable across runs: digest of the Graph conversationId. */
+  /**
+   * Stable across runs: digest of the Graph conversationId. When several threads merged
+   * (same sender, same subject without "Re:"/"Fw:"), the earliest thread's.
+   */
   id: Digest;
   type: "mail";
   subject: string;
   /** In-window messages, inbox and sent. */
   messages: number;
+  /** Threads merged into this entry: repeated notices from one sender under one subject. Omitted when 1. */
+  threads?: number;
   /** Of `messages`, how many you wrote. */
   fromYou?: number;
   firstAt: Instant;
@@ -196,7 +201,7 @@ export const FIELD_TRUST: {
   },
   occurrence: { start: "trusted", end: "trusted", cancelled: "trusted", movedFrom: "trusted", yourResponse: "trusted" },
   mail: {
-    id: "trusted", type: "trusted", subject: "label", messages: "trusted", fromYou: "trusted",
+    id: "trusted", type: "trusted", subject: "label", messages: "trusted", threads: "trusted", fromYou: "trusted",
     firstAt: "trusted", lastAt: "trusted", lastFromYou: "trusted", lastFrom: "label", people: "label",
     morePeople: "trusted", unread: "trusted", importance: "trusted", flagged: "trusted",
     attachments: "trusted", continuesFromBefore: "trusted", summary: "model", attention: "model",

@@ -136,6 +136,27 @@ for (const r of mailRecs) {
   threads.set(key, list);
 }
 
+// Merge threads that a sender started under the same subject (the user's call on #122):
+// repeated notices arrive as separate conversations, one entry each otherwise. A thread's
+// sender and subject are its earliest message's; "Re:"/"Fw:" prefixes are stripped. The
+// merged entry keeps the earliest thread's id.
+const baseSubject = (s?: string) =>
+  (s ?? "").replace(/^((re|fw|fwd|sv|vs|vb|aw|wg)\s*:\s*)+/i, "").trim().toLowerCase();
+interface Group { convId: string; recs: MailRec[]; threads: number }
+const groups = new Map<string, Group>();
+for (const [convId, recs] of [...threads.entries()]
+  .map(([k, rs]) => [k, [...rs].sort((a, b) => a.at.localeCompare(b.at))] as const)
+  .sort((a, b) => a[1][0]!.at.localeCompare(b[1][0]!.at))) {
+  const first = recs[0]!;
+  const sender = first.raw.from?.emailAddress?.address?.toLowerCase() ?? "";
+  const key = sender ? `${sender}\n${baseSubject(first.raw.subject)}` : `thread\n${convId}`;
+  const g = groups.get(key);
+  if (g) {
+    g.recs.push(...recs);
+    g.threads++;
+  } else groups.set(key, { convId, recs: [...recs], threads: 1 });
+}
+
 /** Collects people other than the user, deduped by address, in insertion order. */
 function peopleList() {
   const seen = new Set<string>();
@@ -159,7 +180,7 @@ function clampPeople(names: string[], key: "people" | "attendees", moreKey: "mor
   };
 }
 
-const mailEntries: Pair<MailThread>[] = [...threads.entries()].map(([convId, recs]) => {
+const mailEntries: Pair<MailThread>[] = [...groups.values()].map(({ convId, recs, threads: threadCount }) => {
   recs.sort((a, b) => a.at.localeCompare(b.at));
   const last = recs[recs.length - 1]!;
   const people = peopleList();
@@ -179,6 +200,7 @@ const mailEntries: Pair<MailThread>[] = [...threads.entries()].map(([convId, rec
     type: "mail",
     subject: label(last.raw.subject, TITLE_MAX) ?? "(no subject)",
     messages: recs.length,
+    ...(threadCount > 1 ? { threads: threadCount } : {}),
     ...(fromYou ? { fromYou } : {}),
     firstAt: zoned(recs[0]!.at),
     lastAt: zoned(last.at),
