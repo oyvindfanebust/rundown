@@ -18,7 +18,11 @@ Bun, not Node. `bun install` for deps. This is a production setup, not a "no bui
   `scripts/check-unwrap-sites.sh` fails the build on an `unwrap()` anywhere else.
 - Unit tests (`bun test`) cover every component.
 - E2E acceptance (`scripts/e2e.sh`) drives the real CLI against live Graph and validates the
-  emitted digest against its schema; run it to dogfood.
+  emitted digest against its schema. A change to a source, the Digester, the Summarizer or the
+  digest contract is done only when `scripts/e2e.sh <date>` passes for a recent busy weekday
+  (`YYYY-MM-DD`): unit tests mock the model, so only a live run catches a reply that breaks the
+  contract. Run it from the main session; the auto-mode classifier has denied subagents the
+  credential read.
 - Live self-update (`scripts/update-e2e.sh`) compiles a binary stamped with an artificially old
   version and asserts it replaces itself with the current real release — the only layer that
   exercises the real redirect, asset URL, checksum format, and a real compiled binary (ADR-0001 §5).
