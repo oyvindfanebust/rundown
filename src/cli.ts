@@ -71,16 +71,8 @@ function renderSourceEntry(key: string): string {
     optionLines.push(`      // ${spec.description}`);
     optionLines.push(`      ${JSON.stringify(name)}: ${def}${comma}`);
   });
-  // Interactive sources need `rundown login`; credential-only sources (none
-  // registered today) name the env secrets to set; genuinely no-auth local
-  // sources say so — rather than print a misleading hint. `interactive` and `credentials` are static declarations (#27),
-  // read here where no instance exists yet.
-  const auth = descriptor.interactive
-    ? "Auth: rundown login"
-    : descriptor.credentials?.length
-      ? `Auth: set ${descriptor.credentials.join(", ")} in your environment.`
-      : "No auth required.";
-  return [`    // ${descriptor.label}. ${auth}`, `    ${JSON.stringify(key)}: {`, ...optionLines, `    }`].join("\n");
+  // Every source logs in interactively.
+  return [`    // ${descriptor.label}. Auth: rundown login`, `    ${JSON.stringify(key)}: {`, ...optionLines, `    }`].join("\n");
 }
 
 function initTemplate(): string {
@@ -182,9 +174,8 @@ async function cmdStatus(debug: DebugSink): Promise<void> {
     const source = sources[sourceKey]!;
     const st = await source.status();
     // The narration owns the glyph/phrase/identity wording; this line
-    // just lays out the parts. Identity shows whenever a source reports one; a
-    // no-auth local source reads "(no auth required)".
-    const n = narrateStatus(st, { interactive: Boolean(source.login) });
+    // just lays out the parts. Identity shows whenever a source reports one.
+    const n = narrateStatus(st);
     out.write(`  ${sourceKey}    ${n.glyph} ${n.label}${n.note ? `   ${n.note}` : ""}\n`);
     if (st.state === "ready") ready++;
     else if (st.state === "not-authenticated") unauthed.push(sourceKey);
@@ -198,51 +189,25 @@ async function cmdStatus(debug: DebugSink): Promise<void> {
   else out.write(`Next: rundown brief\n`);
 }
 
-// ── login: walk every configured-but-unauthenticated interactive source, or ──
+// ── login: walk every configured-but-unauthenticated source, or ─────────────
 // (with a positional) target one source by its registry key ─────────────────
 
 /**
- * A `not-configured` detail conventionally reads "set VAR[ and VAR2]" (Graph
- * phrases it this way) — strip that prefix so the credential can be named on
- * its own (e.g. in "authenticates via SOME_API_KEY"). Details that don't follow
- * the convention pass through unchanged rather than being mangled.
- */
-function credentialHint(detail: string): string {
-  const m = /^set (.+)$/.exec(detail);
-  return m ? m[1]! : detail;
-}
-
-/**
- * Log in one interactive source, printing the same per-source lines the bare walk
+ * Log in one source, printing the same per-source lines the bare walk
  * has always printed. Returns whether it newly authenticated (false when it was
  * already ready) — shared by the bare walk and the targeted `login <source>` path.
  */
 async function loginOne(out: NodeJS.WritableStream, key: string, source: Source): Promise<boolean> {
   const st = await source.status();
   if (st.state === "ready") {
-    const n = narrateStatus(st, { interactive: true });
+    const n = narrateStatus(st);
     out.write(`  ${key}   ${n.glyph} already authenticated${n.note ? `   ${n.note}` : ""}\n`);
     return false;
   }
   out.write(`  ${key}   authenticating…\n`);
-  const identity = await source.login!();
+  const identity = await source.login();
   out.write(`  ${key}   ✓ authenticated   ${identity}\n`);
   return true;
-}
-
-/**
- * The message for `login <source>` when the named source has no `login()` — auth
- * is structural (ADR-0002 §2): `login()` presence is the interactive declaration,
- * so its absence always means "nothing to log in" here, whether the source needs
- * a declared env-credential (its `status()` can report `not-configured`, with the
- * credential named in `detail`) or no auth at all.
- */
-async function nonInteractiveLoginError(key: string, source: Source): Promise<string> {
-  const st = await source.status();
-  if (st.state === "not-configured" && st.detail) {
-    return `${key} authenticates via ${credentialHint(st.detail)} — nothing to log in`;
-  }
-  return `${key} requires no authentication — nothing to log in`;
 }
 
 async function cmdLogin(debug: DebugSink, sourceKey?: string): Promise<void> {
@@ -257,36 +222,17 @@ async function cmdLogin(debug: DebugSink, sourceKey?: string): Promise<void> {
     // Config-independent: build with empty config (#27). A source that needs config
     // reports `not-configured` from status(), which the login paths already narrate.
     const source = descriptor.build({}, debug);
-    if (!source.login) fail(await nonInteractiveLoginError(sourceKey, source));
     const authenticated = await loginOne(out, sourceKey, source);
     out.write(authenticated ? `\nDone. Next: rundown status\n` : `\nAlready authenticated. Next: rundown status\n`);
     return;
   }
 
-  // Bare mode: walk every configured-but-unauthenticated interactive source —
-  // and never claim success while a configured env-credential source (no
-  // `login()`, but declared via a `not-configured` status) is unreadable.
+  // Bare mode: walk every configured-but-unauthenticated source.
   const config = await resolveConfig(descriptors);
   const sources = buildRegistry(config.selection, debug);
   let walked = 0;
-  const unready: { key: string; hint: string }[] = [];
   for (const { sourceKey: key } of config.selection) {
-    const source = sources[key]!;
-    if (!source.login) {
-      const st = await source.status();
-      if (st.state !== "ready") {
-        unready.push({ key, hint: st.state === "not-configured" && st.detail ? credentialHint(st.detail) : "its credentials" });
-      }
-      continue;
-    }
-    if (await loginOne(out, key, source)) walked++;
-  }
-
-  if (unready.length > 0) {
-    out.write(`\n`);
-    for (const { key, hint } of unready) out.write(`  ${key}   needs ${hint} in your environment\n`);
-    out.write(`\nNext: export ${unready.map((u) => u.hint).join(", ")}, then re-run rundown login\n`);
-    return;
+    if (await loginOne(out, key, sources[key]!)) walked++;
   }
 
   out.write(walked === 0 ? `\nAll configured sources already authenticated.\n` : `\nDone. Next: rundown status\n`);

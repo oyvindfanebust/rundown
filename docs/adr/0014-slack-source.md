@@ -17,6 +17,9 @@ are struck ([#142](https://github.com/oyvindfanebust/rundown/issues/142)).
 References to §5 and to `threads` elsewhere in this ADR, including the third amendment's reply
 path, describe the removed option.
 
+In §8, the descriptor no longer carries `interactive: true`: `login()` is required of every source
+([#144](https://github.com/oyvindfanebust/rundown/issues/144), ADR-0002 amended).
+
 This ADR fixes the design of the Slack source: a read-only adapter under `src/sources/slack/` that
 follows the Source pattern in [ADR-0002](0002-source-abstraction.md), brands all backend content
 `Untrusted<T>` at the normalizer per [ADR-0004](0004-trust-boundary-enforcement.md), and receives

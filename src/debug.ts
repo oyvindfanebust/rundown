@@ -22,7 +22,7 @@
 //     a numeric `httpStatus` read through the shared `statusOf` scrub.
 //  2. Host and path SHAPE only — never a populated URL or query string, which can
 //     carry user or query content. A `path` field is a control-plane filesystem
-//     path (the config file, a log directory), not a backend-authored value.
+//     path (the config file), not a backend-authored value.
 //
 // The union is CLOSED and source-agnostic: every remote source emits the same
 // `http` event, parameterized by a `source` key, so it does not grow per source.
@@ -42,8 +42,6 @@ export type DebugEvent =
   | { kind: "auth-verify"; source: string; outcome: "ready" | "rejected"; httpStatus?: number }
   /** One source's read: wall time and how many items it returned. */
   | { kind: "source-run"; source: string; ms: number; itemCount: number }
-  /** A local source's filesystem scan: which directory, how many files. */
-  | { kind: "scan"; source: string; path: string; fileCount: number }
   /**
    * The self-update gate's decision and why (ADR-0001 §5). `reason` is a short
    * structural marker from a closed set the gate owns — never a message, never a
@@ -99,8 +97,6 @@ export function formatDebugEvent(e: DebugEvent): string {
       return `[debug] ${e.source}  auth-verify ${e.outcome}${e.httpStatus !== undefined ? ` (HTTP ${e.httpStatus})` : ""}`;
     case "source-run":
       return `[debug] ${e.source}  source-run ${e.ms}ms ${e.itemCount} item(s)`;
-    case "scan":
-      return `[debug] ${e.source}  scan path=${e.path} files=${e.fileCount}`;
     case "update-gate":
       return `[debug] update  gate ${e.spawned ? "spawn" : `skip (${e.reason})`}`;
   }

@@ -125,10 +125,10 @@ describe("normalizer", () => {
   });
 
   test("absent title falls back to the factory's untitled label", () => {
-    const normalize = normalizer("claude-code-logs", { untitled: "(untitled session)" });
+    const normalize = normalizer("slack", { untitled: "(no message text)" });
     for (const title of [undefined, null, ""]) {
       expect(normalize({ kind: "k", timestamp: "2026-07-08T09:00:00Z", id: "i", title }).title).toEqual(
-        untrusted("(untitled session)"),
+        untrusted("(no message text)"),
       );
     }
     expect(normalizer("s")({ kind: "k", timestamp: "2026-07-08T09:00:00Z", id: "i", title: null }).title).toEqual(
@@ -179,8 +179,8 @@ describe("normalizer", () => {
     // Every timestamp shape the real sources hand the normalizer today:
     // Graph calendar's pre-normalized `Z`-stamped, fraction-stripped instant;
     // Graph mail's bare-seconds `Z` instant; Linear's millisecond-fraction
-    // `updatedAt` and synthesized due-date instant; Claude Code logs'
-    // `Date#toISOString()`-shaped transcript/index timestamps.
+    // `updatedAt` and synthesized due-date instant; Slack's
+    // `ts`-derived `Date#toISOString()` instant.
     test("accepts every timestamp shape the real sources emit", () => {
       const normalize = normalizer("s");
       const shapes = [
@@ -188,7 +188,7 @@ describe("normalizer", () => {
         "2026-07-09T10:00:00Z", // Graph mail receivedDateTime/sentDateTime
         "2026-07-10T00:00:00.000Z", // Linear updatedAt (millisecond fraction)
         "2026-07-20T23:59:59Z", // Linear synthesized due-date instant
-        "2026-07-09T06:27:12.737Z", // Claude Code logs transcript `timestamp` / toISOString()
+        "2026-07-09T06:27:12.737Z", // Slack ts via toISOString()
       ];
       for (const ts of shapes) {
         const item = normalize({ kind: "k", timestamp: ts, id: "i", title: "T" });

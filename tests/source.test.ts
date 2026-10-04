@@ -105,32 +105,24 @@ describe("optionTemplateDefault", () => {
 });
 
 describe("narrateStatus", () => {
-  test("ready with identity: identity is the note, regardless of interactivity", () => {
-    expect(narrateStatus({ state: "ready", identity: "me@example.com" }, { interactive: true })).toEqual({
+  test("ready with identity: identity is the note", () => {
+    expect(narrateStatus({ state: "ready", identity: "me@example.com" })).toEqual({
       glyph: "✓",
       label: "ready",
       note: "me@example.com",
     });
   });
 
-  test("ready without identity, interactive source: no note (a plain 'ready')", () => {
-    expect(narrateStatus({ state: "ready" }, { interactive: true })).toEqual({
+  test("ready without identity: no note (a plain 'ready')", () => {
+    expect(narrateStatus({ state: "ready" })).toEqual({
       glyph: "✓",
       label: "ready",
       note: undefined,
     });
   });
 
-  test("ready without identity, no-auth source: '(no auth required)'", () => {
-    expect(narrateStatus({ state: "ready" }, { interactive: false })).toEqual({
-      glyph: "✓",
-      label: "ready",
-      note: "(no auth required)",
-    });
-  });
-
   test("not-authenticated: ✗ + the login remedy", () => {
-    expect(narrateStatus({ state: "not-authenticated" }, { interactive: true })).toEqual({
+    expect(narrateStatus({ state: "not-authenticated" })).toEqual({
       glyph: "✗",
       label: "not authenticated",
       remedy: "rundown login",
@@ -138,16 +130,16 @@ describe("narrateStatus", () => {
   });
 
   test("not-configured with a detail: ○ + detail note + the status remedy", () => {
-    expect(narrateStatus({ state: "not-configured", detail: "set SOME_API_KEY" }, { interactive: false })).toEqual({
+    expect(narrateStatus({ state: "not-configured", detail: "set SLACK_CLIENT_ID" })).toEqual({
       glyph: "○",
       label: "not configured",
-      note: "set SOME_API_KEY",
+      note: "set SLACK_CLIENT_ID",
       remedy: "rundown status",
     });
   });
 
   test("not-configured without a detail: no note", () => {
-    expect(narrateStatus({ state: "not-configured" }, { interactive: false })).toEqual({
+    expect(narrateStatus({ state: "not-configured" })).toEqual({
       glyph: "○",
       label: "not configured",
       note: undefined,

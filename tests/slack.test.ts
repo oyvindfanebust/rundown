@@ -71,11 +71,11 @@ function byId(items: NormalizedItem[], id: string): NormalizedItem | undefined {
 // ── declared surface ─────────────────────────────────────────────────────────
 
 describe("SlackSource surface", () => {
-  test("key, label, has interactive login, one option", () => {
+  test("key, label, login, one option", () => {
     const s: Source = source({});
     expect(s.key).toBe("slack");
     expect(s.label).toBe("Slack");
-    expect(typeof s.login).toBe("function"); // presence = interactive-auth declaration
+    expect(typeof s.login).toBe("function");
     expect(Object.keys(SLACK_OPTIONS).sort()).toEqual(["relationships"]);
   });
 });

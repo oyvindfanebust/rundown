@@ -3,7 +3,7 @@
 A CLI that gives a rundown of where you stand across every work source — your commitments and
 what you've been working on — synthesized by Claude to help you plan. `rundown` is one bounded
 context; its only external surface is the CLI. It reads work sources (Microsoft Graph
-calendar/mail, Slack messages, and Claude Code logs), aggregates them, has a sandboxed model
+calendar/mail and Slack messages), aggregates them, has a sandboxed model
 summarize them, and emits a structured Brief as JSON on stdout. Landing and
 rendering are the consuming agent's job. Architecture is canonical in `CONTEXT.md` and
 `docs/adr/`.
@@ -51,7 +51,7 @@ binaries. Never hand-create a `vX.Y.Z` tag — that is release-please's job.
 ## The rule that matters
 
 Untrusted source content — meeting titles, email/message bodies, any text from any source
-(Graph, Slack, Claude Code logs), anywhere an external party can hide instructions — meets a
+(Graph, Slack), anywhere an external party can hide instructions — meets a
 model only in the sandboxed, tool-less Summarizer (`src/summarize.ts`), a direct Anthropic call
 with zero tools. Enforced three ways:
 

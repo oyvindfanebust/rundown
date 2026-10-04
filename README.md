@@ -7,8 +7,8 @@ up, and what you've been working on. `rundown` reads your work systems, has a sa
 call summarize them, and prints a structured Brief as JSON on stdout. A coding agent installs the
 `rundown` skill and drives it on demand; landing and rendering the Brief are the agent's job.
 
-Today `rundown` reads three sources: Microsoft Graph (calendar and mail), Slack (messages you were
-part of), and Claude Code logs (local session transcripts).
+Today `rundown` reads two sources: Microsoft Graph (calendar and mail) and Slack (messages you were
+part of).
 
 ## The trust boundary
 
@@ -35,7 +35,7 @@ The full enforcement model — structural, in-code (`Untrusted<T>`), and behavio
 `rundown` is one bounded context with a single external surface, the CLI. Inside are four
 components (see [`CONTEXT.md`](CONTEXT.md)):
 
-- **Sources** — read-only adapters, one per backend/auth boundary (Graph, Slack, Claude Code logs).
+- **Sources** — read-only adapters, one per backend/auth boundary (Graph, Slack).
 - **Aggregator** — pulls the selected sources concurrently into one normalized, bucketed Bundle.
 - **Summarizer** — the tool-less Anthropic call; the only place untrusted content meets a model.
 - **Planner** — turns the Bundle into a plan-my-week Brief.
@@ -126,11 +126,6 @@ Slack uses `rundown login`, like Graph. Register one app once for the whole work
 Phase 2 is `rundown login`: it opens a browser to authorize the app once and caches your user
 token. `rundown` reads only what your own account can see, via `search.messages`.
 
-### Phase 1: Claude Code logs
-
-A local source that reads your Claude Code session transcripts. No auth, nothing to configure —
-it's always ready.
-
 ## Commands
 
 Five commands make up the whole surface:
@@ -160,7 +155,7 @@ reports whether the Summarizer's `ANTHROPIC_API_KEY` is present:
 export ANTHROPIC_API_KEY=...   # the Summarizer credential, read from the env like every secret
 ```
 
-`rundown login` authenticates every configured interactive source and prints an exit summary of
+`rundown login` authenticates every configured source and prints an exit summary of
 what it did. Pass an optional source name — `rundown login graph` — to authenticate just one.
 
 The config file `~/.config/rundown/config.json` (override the path with `RUNDOWN_CONFIG`) owns

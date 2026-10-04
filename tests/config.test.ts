@@ -19,11 +19,13 @@ const readySource = (key: string, label: string): Source => ({
   async status() {
     return { state: "ready" };
   },
+  async login() {
+    return "me@example.test";
+  },
 });
 const fakeGraph: SourceDescriptor = {
   key: "graph",
   label: "Fake Graph",
-  interactive: true,
   options: {
     kinds: {
       type: "string[]",
@@ -36,7 +38,6 @@ const fakeGraph: SourceDescriptor = {
 const fakeLinear: SourceDescriptor = {
   key: "linear",
   label: "Fake Linear",
-  interactive: false,
   options: {},
   build: () => readySource("linear", "Fake Linear"),
 };

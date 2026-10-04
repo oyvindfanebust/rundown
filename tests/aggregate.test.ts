@@ -17,6 +17,11 @@ async function ready() {
   return { state: "ready" as const };
 }
 
+/** Every source logs in; the aggregator never calls it. */
+async function login() {
+  return "me@example.test";
+}
+
 /** Build an in-memory source lookup from fake sources, keyed by each source's `key`. */
 function sourcesOf(...list: Source[]): Sources {
   return Object.fromEntries(list.map((s) => [s.key, s]));
@@ -43,6 +48,7 @@ describe("aggregate", () => {
     const fake: Source = {
       key: "fake",
       label: "Fake",
+      login,
       status: ready,
       async read() {
         return [
@@ -59,8 +65,8 @@ describe("aggregate", () => {
 
   test("tie-breaks equal timestamps by source", async () => {
     const ts = "2026-07-07T00:00:00Z";
-    const a: Source = { key: "aaa", label: "", status: ready, async read() { return [item("aaa", "e", ts, "x")]; } };
-    const b: Source = { key: "zzz", label: "", status: ready, async read() { return [item("zzz", "e", ts, "y")]; } };
+    const a: Source = { key: "aaa", label: "", login, status: ready, async read() { return [item("aaa", "e", ts, "x")]; } };
+    const b: Source = { key: "zzz", label: "", login, status: ready, async read() { return [item("zzz", "e", ts, "y")]; } };
     const bundle = await aggregate(
       window,
       [{ sourceKey: "zzz", options: {} }, { sourceKey: "aaa", options: {} }],
@@ -74,6 +80,7 @@ describe("aggregate", () => {
     const fake: Source = {
       key: "fake",
       label: "Fake",
+      login,
       async read() { return []; },
       async status() { return { state: "not-authenticated" }; },
     };
@@ -86,6 +93,7 @@ describe("aggregate", () => {
     const fake: Source = {
       key: "fake",
       label: "Fake",
+      login,
       async read() { return []; },
       async status() { return { state: "not-configured", detail: "set FOO" }; },
     };
@@ -98,6 +106,7 @@ describe("aggregate", () => {
     const fake: Source = {
       key: "fake",
       label: "Fake",
+      login,
       status: ready,
       async read() { return [item("fake", "e", "2026-07-07T00:00:00Z", "ok")]; },
     };
@@ -106,8 +115,8 @@ describe("aggregate", () => {
   });
 
   test("fails hard when a read errors — no partial bundle", async () => {
-    const good: Source = { key: "good", label: "", status: ready, async read() { return [item("good", "e", "2026-07-07T00:00:00Z", "ok")]; } };
-    const bad: Source = { key: "bad", label: "", status: ready, async read() { throw new Error("boom"); } };
+    const good: Source = { key: "good", label: "", login, status: ready, async read() { return [item("good", "e", "2026-07-07T00:00:00Z", "ok")]; } };
+    const bad: Source = { key: "bad", label: "", login, status: ready, async read() { throw new Error("boom"); } };
     expect(
       aggregate(
         window,
@@ -125,10 +134,11 @@ describe("aggregate debug events (ADR-0015)", () => {
     const a: Source = {
       key: "a",
       label: "A",
+      login,
       status: ready,
       read: async () => [item("a", "event", "2026-07-07T00:00:00Z", "x")],
     };
-    const b: Source = { key: "b", label: "B", status: ready, read: async () => [] };
+    const b: Source = { key: "b", label: "B", login, status: ready, read: async () => [] };
     await aggregate(
       window,
       [
@@ -147,7 +157,7 @@ describe("aggregate debug events (ADR-0015)", () => {
   });
 
   test("defaults to the no-op sink when none is passed", async () => {
-    const a: Source = { key: "a", label: "A", status: ready, read: async () => [] };
+    const a: Source = { key: "a", label: "A", login, status: ready, read: async () => [] };
     await expect(aggregate(window, [{ sourceKey: "a", options: {} }], sourcesOf(a), now)).resolves.toBeDefined();
   });
 });

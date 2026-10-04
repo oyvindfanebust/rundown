@@ -2,6 +2,11 @@
 
 **Status:** Accepted
 
+**Amendment (digest, [#117](https://github.com/oyvindfanebust/rundown/issues/117)).** The Claude
+Code logs source is removed ([#144](https://github.com/oyvindfanebust/rundown/issues/144)), so no
+no-auth source remains and every selected source runs the pre-flight `status()` check. References
+below to Claude Code logs and no-auth sources describe removed code.
+
 Builds directly on the Source abstraction ([ADR-0002](0002-source-abstraction.md)) and
 coordinates with, but does not decide, the trust-boundary enforcement mechanism
 ([ADR-0004](0004-trust-boundary-enforcement.md)).

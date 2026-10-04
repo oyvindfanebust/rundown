@@ -39,7 +39,7 @@ src/
   sources/
     source.ts       the Source interface + option-schema declaration + the option validate/default helpers
     registry.ts     static map: source name → Source instance
-    <name>/         one folder per source (e.g. graph/, claude-code-logs/)
+    <name>/         one folder per source (graph/, slack/)
   aggregate.ts      Aggregator
   summarize.ts      Summarizer (owns the security invariants)
   plan.ts           Planner (task prose from the Brief contract, prompt assembly = sole Untrusted<T> unwrap site)
@@ -131,7 +131,7 @@ provenance attestations it now ships alongside; that is a separate decision (ADR
 ### Source
 
 A **Source** is the [Sources](#architecture) component's unit: a read-only adapter for one backend
-system / one auth boundary — Microsoft Graph, Slack, Claude Code logs. Graph is one
+system / one auth boundary — Microsoft Graph, Slack. Graph is one
 source (calendar and mail are `kind`s within it, not separate sources), because auth is
 per-backend. A Source's job is to `read` a time window and emit a list of
 [normalized items](#normalizeditem). It never writes back.
@@ -142,10 +142,9 @@ Interface (see [ADR-0002](docs/adr/0002-source-abstraction.md)):
   instants); the source maps it to its native time field.
 - `status()` — required; reports readiness as a discriminated union
   `{ state: "ready" | "not-authenticated" | "not-configured" }` (identity on `ready`, a fix-it
-  `detail` on `not-configured`). Every source has a total answer — a local source is always
-  `ready`.
-- `login()` — optional; only sources with interactive auth (Graph, Slack) implement it. Its presence is
-  the source's interactive-auth declaration; there is no separate flag.
+  `detail` on `not-configured`). Every source has a total answer.
+- `login()` — required; every source authenticates interactively through `rundown login`, and
+  returns the signed-in identity.
 
 A Source owns a stable name/key (its registry key) and declares its config/credential needs. It
 does not decide selection (which sources run is the config resolver's decision, handed to the
@@ -401,7 +400,7 @@ The opt-in diagnostic stream (see [ADR-0015](docs/adr/0015-debug-logging.md)): `
 command, or `RUNDOWN_DEBUG` in the environment, writes structural signal about what rundown did to
 stderr. It answers the questions the normal output cannot — which config file was read, which host
 and path a request went to and what status came back, whether a credential verified, how long each
-source took and how many items it returned, and which directory a local source scanned.
+source took and how many items it returned.
 
 It is a [trust boundary](#trust-boundary) surface, so what it may carry is fixed rather than
 freeform: a closed set of events whose every field is a trusted structural scalar. Untrusted content

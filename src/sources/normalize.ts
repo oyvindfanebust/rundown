@@ -9,8 +9,7 @@
 // as a "trusted" string. Otherwise total, no I/O — and the sole trust.ts importer
 // among sources: the only way a Source constructs
 // a NormalizedItem. What stays at call sites is domain judgment only (e.g. graph's
-// "normal" importance elision, claude-code-logs' summary-over-firstPrompt title
-// preference). ADR-0002 names the NormalizedItem
+// "normal" importance elision). ADR-0002 names the NormalizedItem
 // *shape*; this deepens under it. Never unwrapped here (sole unwrap site is
 // plan.ts; CLAUDE.md).
 //
@@ -41,9 +40,7 @@ export function text(v: string | null | undefined): string | undefined {
  * hand the normalizer: Graph calendar's `dateTime` is pre-normalized to
  * `Z` (fraction stripped, offset-less values stamped `Z`) before it ever
  * reaches here; Graph mail's `receivedDateTime`/`sentDateTime` are
- * `Z`-suffixed, with 0 or 3-digit fractions; Claude Code logs' transcript
- * `timestamp` and index `created`/`modified` are `Date#toISOString()` output (3-digit fraction +
- * `Z`). None of today's shapes carry a bare numeric offset or omit the
+ * `Z`-suffixed, with 0 or 3-digit fractions. None of today's shapes carry a bare numeric offset or omit the
  * trailing `Z`/offset, but the grammar still accepts one, since that is still
  * strictly ISO-8601 and a plain engine-parseable string like `"July 1 2026"`
  * or an RFC-2822 date is not.
@@ -52,8 +49,8 @@ const ISO_INSTANT = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(:\d{2}(\.\d+)?)?(Z|[+-]\d{2}
 
 /**
  * The structural-instant guard. `timestamp`/`end`
- * reach the normalizer as *verbatim backend strings* (transcript
- * `o.timestamp`, index `created`/`modified`, Graph `receivedDateTime`, …), yet they
+ * reach the normalizer as *verbatim backend strings* (Graph
+ * `receivedDateTime`, a Slack `ts`-derived instant, …), yet they
  * are typed **trusted** and so bypass the `Untrusted<T>` unwrap tripwire. Left
  * unchecked they could carry NaN — silently mislabelling a bucket downstream
  * (ADR-0003 §4) — or arbitrary backend bytes with no type-level warning. A

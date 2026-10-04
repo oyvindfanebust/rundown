@@ -1,7 +1,7 @@
 // The static source registry (ADR-0008 §5, #27): a map of source key → static
 // SourceDescriptor. A descriptor holds everything true of a source before any
-// config exists — its key/label, its option schema, whether it has interactive
-// login, and a `build` step that constructs a config-injected instance.
+// config exists — its key/label, its option schema, and a `build` step that
+// constructs a config-injected instance.
 // `buildRegistry(selection)` is the composition step at the composition root: it
 // turns the validated config selection into live, config-injected Sources.
 // Adding a source is one import + one descriptor entry — explicit, typed,
@@ -11,7 +11,6 @@ import type { Descriptors, Sources } from "./source.ts";
 import { noDebug, type DebugSink } from "../debug.ts";
 import type { Selection } from "../config.ts";
 import { GraphSource, GRAPH_OPTIONS } from "./graph/index.ts";
-import { ClaudeCodeLogsSource, CLAUDE_CODE_LOGS_OPTIONS } from "./claude-code-logs/index.ts";
 import { SlackSource, SLACK_OPTIONS } from "./slack/index.ts";
 
 export const descriptors: Descriptors = {
@@ -19,21 +18,12 @@ export const descriptors: Descriptors = {
     key: "graph",
     label: "Microsoft Graph (calendar + mail)",
     options: GRAPH_OPTIONS,
-    interactive: true,
     build: (options, debug) => new GraphSource(options, { debug }),
-  },
-  "claude-code-logs": {
-    key: "claude-code-logs",
-    label: "Claude Code session logs",
-    options: CLAUDE_CODE_LOGS_OPTIONS,
-    interactive: false,
-    build: (_options, debug) => new ClaudeCodeLogsSource(undefined, { debug }),
   },
   slack: {
     key: "slack",
     label: "Slack",
     options: SLACK_OPTIONS,
-    interactive: true,
     build: (options, debug) => new SlackSource(options, { debug }),
   },
 };

@@ -98,7 +98,7 @@ describe("GraphSource surface", () => {
     const s: Source = graphSource({});
     expect(s.key).toBe("graph");
     expect(s.label).toBe("Microsoft Graph (calendar + mail)");
-    expect(typeof s.login).toBe("function"); // interactive-auth declaration
+    expect(typeof s.login).toBe("function");
     expect(Object.keys(GRAPH_OPTIONS)).toEqual(["kinds"]);
   });
 });

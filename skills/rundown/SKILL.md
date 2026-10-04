@@ -67,8 +67,7 @@ if that happens, tell the user what the error said; do not fabricate a rundown.
 Not configured yet? If `rundown brief` or `rundown status` reports missing config, credentials,
 or authentication, follow [references/onboarding.md](references/onboarding.md) to set it up —
 don't guess at config. Microsoft Graph and Slack are interactive and authenticate through
-`rundown login`; Claude Code logs need no auth. `rundown status` verifies each source and names
-anything missing.
+`rundown login`. `rundown status` verifies each source and names anything missing.
 
 ## The Brief shape
 

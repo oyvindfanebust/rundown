@@ -20,7 +20,13 @@ interface Run {
 
 // Every run pins RUNDOWN_CONFIG at a caller-chosen path, so a dispatch test never
 // reads the developer's real ~/.config/rundown/config.json.
-function run(args: string[], configPath: string, entrypoint = "src/cli.ts", extraEnv: Record<string, string> = {}): Run {
+function run(
+  args: string[],
+  configPath: string,
+  entrypoint = "src/cli.ts",
+  extraEnv: Record<string, string> = {},
+  preload: string[] = [],
+): Run {
   const env: Record<string, string> = {};
   for (const [k, v] of Object.entries(process.env)) if (v !== undefined) env[k] = v;
   env.RUNDOWN_CONFIG = configPath;
@@ -39,8 +45,17 @@ function run(args: string[], configPath: string, entrypoint = "src/cli.ts", extr
   delete env.CI;
   delete env.RUNDOWN_INTERNAL_UPDATE_WORKER;
   Object.assign(env, extraEnv);
-  const proc = Bun.spawnSync([process.execPath, entrypoint, ...args], { cwd: ROOT, env });
+  const proc = Bun.spawnSync([process.execPath, ...preload, entrypoint, ...args], { cwd: ROOT, env });
   return { stdout: proc.stdout.toString(), stderr: proc.stderr.toString(), exitCode: proc.exitCode ?? 0 };
+}
+
+// The same run, against the fake registry in tests/fixtures/offline-registry.ts:
+// its one source, `offline`, is always ready and touches no network or disk. It
+// gives the tests a config that reaches the source loop without a production
+// source.
+const OFFLINE_PRELOAD = ["--preload", join(import.meta.dir, "fixtures", "offline-preload.ts")];
+function runOffline(args: string[], configPath: string, extraEnv: Record<string, string> = {}): Run {
+  return run(args, configPath, "src/cli.ts", extraEnv, OFFLINE_PRELOAD);
 }
 
 describe("cli", () => {
@@ -172,7 +187,7 @@ describe("cli", () => {
       expect(template).toContain(`"sources"`);
       expect(template).toContain(`"guidance"`);
       expect(template).toContain(`"graph"`);
-      expect(template).toContain(`"claude-code-logs"`);
+      expect(template).toContain(`"slack"`);
       // Linear and Jira are no longer sources (#143).
       expect(template).not.toMatch(/linear|jira/i);
       // The autoUpdate off-switch ships commented, documenting the default and the
@@ -306,12 +321,12 @@ describe("cli", () => {
 
   describe("persistent update failure", () => {
     test("a piped brief stays silent, whatever the failure count", () => {
-      const path = written(`{"sources": {"claude-code-logs": {}}}`);
+      const path = written(`{"sources": {"offline": {}}}`);
       writeFileSync(
         join(dirname(path), "update-state.json"),
         JSON.stringify({ checkedAt: "2026-08-01T00:00:00.000Z", outcome: "failed", reason: "unreachable", consecutiveFailures: 9 }),
       );
-      const r = run(["brief", "--window", "today"], path, "src/cli.ts", { ANTHROPIC_API_KEY: "" });
+      const r = runOffline(["brief", "--window", "today"], path, { ANTHROPIC_API_KEY: "" });
       // Nothing about self-update on either stream: no warning, and nothing in the
       // Brief contract either (ADR-0011 pins that with a schema test).
       expect(r.stderr).not.toContain("self-update");
@@ -394,6 +409,29 @@ describe("cli", () => {
     });
   });
 
+  // Claude Code logs was removed as a source (#144). A config that still names it
+  // fails as an unknown source, and neither init nor login offers it.
+  describe("removed source: claude-code-logs", () => {
+    test("status rejects a config that still names it as an unknown source", () => {
+      const r = run(["status"], written(`{"timezone":"UTC","sources":{"claude-code-logs":{}}}`));
+      expect(r.stdout).toContain("✗ invalid");
+      expect(r.stdout).toContain(`Unknown source "claude-code-logs"`);
+      expect(r.exitCode).toBe(1);
+    });
+
+    test("login claude-code-logs is an unknown source", () => {
+      const r = run(["login", "claude-code-logs"], missing());
+      expect(r.stderr).toContain(`Unknown source "claude-code-logs"`);
+      expect(r.exitCode).toBe(1);
+    });
+
+    test("the init template does not list it", () => {
+      const path = missing();
+      expect(run(["init"], path).exitCode).toBe(0);
+      expect(readFileSync(path, "utf-8")).not.toMatch(/claude-code|claude code/i);
+    });
+  });
+
   // Suppression was removed (#145). A config that still sets `suppress` fails with
   // the dedicated removed-key error, not the generic unknown-key message.
   describe("removed config key: suppress", () => {
@@ -436,10 +474,10 @@ describe("cli", () => {
       expect(r.exitCode).toBe(1);
     });
 
-    test("login reaches cmdLogin: a no-interactive-source config walks to completion", () => {
-      // claude-code-logs declares no `login`, so cmdLogin skips it and reports the
-      // nothing-to-do message — output unique to the login handler, and offline.
-      const r = run(["login"], written(`{"timezone":"UTC","sources":{"claude-code-logs":{}}}`));
+    test("login reaches cmdLogin: an already-ready config walks to completion", () => {
+      // The offline source is always ready, so cmdLogin logs nothing in and reports
+      // the nothing-to-do message, which only the login handler prints.
+      const r = runOffline(["login"], written(`{"timezone":"UTC","sources":{"offline":{}}}`));
       expect(r.stdout).toContain("All configured sources already authenticated.");
       expect(r.exitCode).toBe(0);
     });
@@ -460,18 +498,10 @@ describe("cli", () => {
       expect(r.exitCode).toBe(1);
     });
 
-    test("naming a no-auth source (no login(), never not-configured) still errors, differently worded", () => {
-      // claude-code-logs is local + always ready, so there is nothing to log in.
-      const r = run(["login", "claude-code-logs"], missing());
-      expect(r.stderr).toContain("claude-code-logs requires no authentication — nothing to log in");
-      expect(r.exitCode).toBe(1);
-    });
-
     test("an unknown source key is a hard error listing the registered keys", () => {
       const r = run(["login", "bogus"], missing());
       expect(r.stderr).toContain('Unknown source "bogus"');
       expect(r.stderr).toContain("graph");
-      expect(r.stderr).toContain("claude-code-logs");
       expect(r.stderr).toContain("slack");
       expect(r.exitCode).toBe(1);
     });
@@ -485,7 +515,7 @@ describe("cli", () => {
   // from any of these — the line reads the file and nothing else.
 
   describe("status version line", () => {
-    const CONFIG = JSON.stringify({ timezone: "UTC", window: "this-week", sources: { "claude-code-logs": {} } });
+    const CONFIG = JSON.stringify({ timezone: "UTC", window: "this-week", sources: { offline: {} } });
 
     /** Write the state document beside the config file this run will use. */
     function withState(document: string): string {
@@ -499,12 +529,13 @@ describe("cli", () => {
     }
 
     test("no state document: reports the running version and that nothing has been checked", () => {
-      const r = run(["status"], written(CONFIG));
+      const r = runOffline(["status"], written(CONFIG));
       expect(r.stdout).toContain("version   0.0.0-dev   no update check recorded yet");
+      expect(r.stdout).toContain("offline    ✓ ready   offline@example.test");
     });
 
     test("a current state reads as up to date", () => {
-      const r = run(["status"], withState(state({ latest: "0.0.0-dev" })));
+      const r = runOffline(["status"], withState(state({ latest: "0.0.0-dev" })));
       expect(r.stdout).toContain("version   0.0.0-dev   up to date (checked 2026-08-05T09:00:00.000Z)");
     });
 
@@ -528,7 +559,12 @@ describe("cli", () => {
           { cwd: ROOT },
         );
         expect(build.exitCode).toBe(0);
-        const r = run(["status"], withState(state({ latest: "0.4.0" })), join(outDir, "cli.js"), { CI: "1" });
+        // The bundle inlines the real registry, so the offline preload cannot reach
+        // it; graph is the config here, unconfigured and offline because the
+        // harness clears AZURE_TENANT_ID and AZURE_CLIENT_ID.
+        const path = written(JSON.stringify({ timezone: "UTC", sources: { graph: {} } }));
+        writeFileSync(join(dir!, "update-state.json"), state({ latest: "0.4.0" }));
+        const r = run(["status"], path, join(outDir, "cli.js"), { CI: "1" });
         expect(r.stdout).toContain("version   0.3.0   0.4.0 available (checked 2026-08-05T09:00:00.000Z)");
       } finally {
         rmSync(outDir, { recursive: true, force: true });
@@ -536,29 +572,29 @@ describe("cli", () => {
     });
 
     test("a refused state names the recorded reason", () => {
-      const r = run(["status"], withState(state({ outcome: "refused", reason: "install directory not writable" })));
+      const r = runOffline(["status"], withState(state({ outcome: "refused", reason: "install directory not writable" })));
       expect(r.stdout).toContain("version   0.0.0-dev   update refused: install directory not writable (checked 2026-08-05T09:00:00.000Z)");
     });
 
     test("a failed state reports the failure and its count", () => {
-      const r = run(["status"], withState(state({ outcome: "failed", reason: "checksum mismatch", consecutiveFailures: 3 })));
+      const r = runOffline(["status"], withState(state({ outcome: "failed", reason: "checksum mismatch", consecutiveFailures: 3 })));
       expect(r.stdout).toContain("last update check failed: checksum mismatch (3 in a row, checked 2026-08-05T09:00:00.000Z)");
     });
 
     test("RUNDOWN_DISABLE_AUTOUPDATE is reported as disabled", () => {
-      const r = run(["status"], written(CONFIG), "src/cli.ts", { RUNDOWN_DISABLE_AUTOUPDATE: "1" });
+      const r = runOffline(["status"], written(CONFIG), { RUNDOWN_DISABLE_AUTOUPDATE: "1" });
       expect(r.stdout).toContain("version   0.0.0-dev   auto-update disabled");
     });
 
     test("a corrupt state document degrades to the no-check line rather than an error", () => {
-      const r = run(["status"], withState("{not json at all"));
+      const r = runOffline(["status"], withState("{not json at all"));
       expect(r.stdout).toContain("version   0.0.0-dev   no update check recorded yet");
       expect(r.stdout).toContain("source");
       expect(r.stderr).toBe("");
     });
 
     test("an empty state document degrades the same way", () => {
-      const r = run(["status"], withState(""));
+      const r = runOffline(["status"], withState(""));
       expect(r.stdout).toContain("version   0.0.0-dev   no update check recorded yet");
       expect(r.stderr).toBe("");
     });
@@ -576,28 +612,28 @@ describe("cli", () => {
   // ── debug channel (ADR-0015) ───────────────────────────────────────────────
 
   describe("--debug", () => {
-    const CONFIG = JSON.stringify({ timezone: "UTC", window: "this-week", sources: { "claude-code-logs": {} } });
+    const CONFIG = JSON.stringify({ timezone: "UTC", window: "this-week", sources: { offline: {} } });
 
     test("is off by default — no debug lines on stderr", () => {
-      const r = run(["status"], written(CONFIG));
+      const r = runOffline(["status"], written(CONFIG));
       expect(r.stderr).not.toContain("[debug]");
       expect(r.stdout).not.toContain("[debug]");
     });
 
     test("--debug emits the config-path event on stderr, naming the env provenance", () => {
-      const r = run(["status", "--debug"], written(CONFIG));
+      const r = runOffline(["status", "--debug"], written(CONFIG));
       expect(r.stderr).toContain("[debug] config  path=");
       // The harness sets RUNDOWN_CONFIG, so provenance must read `env`.
       expect(r.stderr).toContain("provenance=env");
     });
 
     test("RUNDOWN_DEBUG=1 turns it on without the flag", () => {
-      const r = run(["status"], written(CONFIG), "src/cli.ts", { RUNDOWN_DEBUG: "1" });
+      const r = runOffline(["status"], written(CONFIG), { RUNDOWN_DEBUG: "1" });
       expect(r.stderr).toContain("[debug]");
     });
 
     test("RUNDOWN_DEBUG=0 leaves it off", () => {
-      const r = run(["status"], written(CONFIG), "src/cli.ts", { RUNDOWN_DEBUG: "0" });
+      const r = runOffline(["status"], written(CONFIG), { RUNDOWN_DEBUG: "0" });
       expect(r.stderr).not.toContain("[debug]");
     });
 
@@ -630,7 +666,7 @@ describe("cli", () => {
     test("debug is not TTY-gated: a piped run still captures it", () => {
       // Bun.spawnSync pipes both streams, so stderr is not a TTY here. Progress is
       // suppressed in that case by design; debug must not be (ADR-0015 §4).
-      const r = run(["status", "--debug"], written(CONFIG));
+      const r = runOffline(["status", "--debug"], written(CONFIG));
       expect(r.stderr).toContain("[debug]");
     });
   });

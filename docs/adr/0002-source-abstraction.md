@@ -2,6 +2,15 @@
 
 **Status:** Accepted
 
+**Amendment (digest, [#117](https://github.com/oyvindfanebust/rundown/issues/117)).** The Claude
+Code logs source is removed ([#144](https://github.com/oyvindfanebust/rundown/issues/144)), after
+Linear and Jira ([#143](https://github.com/oyvindfanebust/rundown/issues/143)). Graph and Slack
+remain, and both log in interactively, so interactive login no longer varies between sources. §2
+changes with that: `login()` is required, like `read` and `status`, and the no-auth and
+credential-only paths it allowed for are gone, including the descriptor's `interactive` flag and
+the "(no auth required)" status note. References below to Linear, Jira, Claude Code logs, token-paste
+sources and local sources describe removed code.
+
 This ADR fixes the Source abstraction that the multi-source aggregation model
 ([ADR-0003](0003-aggregation-model.md)) and the trust-boundary enforcement
 ([ADR-0004](0004-trust-boundary-enforcement.md)) build on.

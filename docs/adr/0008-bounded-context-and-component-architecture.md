@@ -2,6 +2,11 @@
 
 **Status:** Accepted
 
+**Amendment (digest, [#117](https://github.com/oyvindfanebust/rundown/issues/117)).** Every source
+now logs in interactively ([#144](https://github.com/oyvindfanebust/rundown/issues/144), ADR-0002
+amended), so §5's descriptor no longer carries an interactive flag. Its static fields are the
+key, label and option schema.
+
 This ADR assembles the decisions made across [ADR-0001](0001-package-rundown-cli-as-compiled-binaries-in-skills.md)–[ADR-0007](0007-config-personalization-layer.md)
 into one coherent architecture: it fixes the vocabulary, how the components sit in `src/`, and the
 agent-facing CLI surface (which ADR-0001/0002/0006/0007 assume but do not nail down).

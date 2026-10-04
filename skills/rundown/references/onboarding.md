@@ -37,7 +37,6 @@ and self-update are ADR-0001. To work in the repo instead, run from source with 
    - Slack: create an app at api.slack.com/apps, add `http://localhost:53912` as a redirect URL,
      add the user token scopes `search:read` and `users:read`, and export the app's credentials as
      `SLACK_CLIENT_ID` and `SLACK_CLIENT_SECRET`. Slack then authenticates through `rundown login`.
-   - Claude Code session logs need nothing: no credentials, no login.
    - Run `rundown login` — the one interactive command. It opens a browser for each interactive
      source (Microsoft, Slack) and is safe to re-run; it skips sources that are already
      authenticated. `rundown login <source>` targets a single one.

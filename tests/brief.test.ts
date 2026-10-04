@@ -34,6 +34,9 @@ const fake: Source = {
   async status() {
     return { state: "ready" };
   },
+  async login() {
+    return "me@example.test";
+  },
   async read(window) {
     lastReadWindow = window;
     return currentItems;
@@ -43,7 +46,6 @@ const fake: Source = {
 const fakeDescriptor: SourceDescriptor = {
   key: "fake",
   label: "Fake",
-  interactive: false,
   options: {},
   build: () => fake,
 };

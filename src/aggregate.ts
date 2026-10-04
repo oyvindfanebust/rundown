@@ -57,7 +57,7 @@ export async function aggregate(
         case "not-configured": {
           // One narration owns the wording + fix-it CTA; the pre-flight
           // just frames it as an abort.
-          const n = narrateStatus(st, { interactive: Boolean(source.login) });
+          const n = narrateStatus(st);
           throw new AggregateError(
             `Source "${sourceKey}" is ${n.label}${n.note ? ` — ${n.note}` : ""}. Run \`${n.remedy}\`.`,
           );

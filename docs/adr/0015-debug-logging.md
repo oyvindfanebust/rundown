@@ -5,9 +5,10 @@
 **Amendment (digest, [#117](https://github.com/oyvindfanebust/rundown/issues/117)).** The Linear
 and Jira sources are removed ([#143](https://github.com/oyvindfanebust/rundown/issues/143)), and
 with them the `pagination` and `route` events, which only Jira emitted, and `httpStatusNote`, the
-HTTP status note on a rejected `status()` detail, which only Linear and Jira used. Graph and Slack
-events and the Claude Code logs `scan` event stay. References below to Linear, Jira and their
-events describe removed code.
+HTTP status note on a rejected `status()` detail, which only Linear and Jira used. The Claude Code
+logs source is removed too ([#144](https://github.com/oyvindfanebust/rundown/issues/144)), and with
+it the `scan` event, which only that source emitted. Graph and Slack events stay. References below
+to Linear, Jira, Claude Code logs and their events describe removed code.
 
 This ADR fixes the design of a debug logging channel for the CLI: an opt-in `--debug` /
 `RUNDOWN_DEBUG` switch that emits structural diagnostic signal to stderr, carried by a closed,
