@@ -1,4 +1,4 @@
-// PROTOTYPE (map #117, ticket #122). Throwaway. Pulls one real week from Graph, maps it
+// PROTOTYPE (map #117, tickets #122 and #130). Throwaway. Pulls one real week from Graph and Slack, maps it
 // to the prototype digest (code-filled parts only: no model summaries, no plan items),
 // and writes an HTML page comparing each digest entry with the raw Graph objects it was
 // built from. Output contains real mail and calendar data: it goes to OUT_DIR, outside
@@ -6,20 +6,17 @@
 //
 //   OUT_DIR=/some/dir bun prototypes/typed-records-digest/real-week.ts [from] [to]
 
-import { createHash } from "node:crypto";
 import { mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { getToken } from "../../src/sources/graph/auth.ts";
 import type { Meeting, MailThread, Occurrence, Output, YourResponse, ShowAs } from "./output.ts";
+import { LABEL_MAX, TITLE_MAX, TZ, WHO_MAX, clampPeople, digest, label, zoned, type Pair, type Raw } from "./shape.ts";
+import { slackWeek } from "./slack-week.ts";
 
-const TZ = "Europe/Oslo";
 const FROM = process.argv[2] ?? "2026-09-27T22:00:00Z"; // Mon 28 Sep 00:00 Oslo
 const TO = process.argv[3] ?? "2026-10-04T22:00:00Z"; // Mon 5 Oct 00:00 Oslo
 const OUT_DIR = process.env.OUT_DIR ?? "./real-week-out";
 const BASE = "https://graph.microsoft.com/v1.0";
-const LABEL_MAX = 120;
-const TITLE_MAX = 255;
-const WHO_MAX = 8;
 
 // ── Graph ──
 
@@ -79,45 +76,9 @@ const myAddresses = new Set<string>(
 );
 const isMe = (addr?: string) => !!addr && myAddresses.has(addr.toLowerCase());
 
-const digest = (s: string) => createHash("sha256").update(s).digest("hex").slice(0, 16);
-
-function defang(t: string): string {
-  return t
-    .replace(/!\[([^\]]*)\]\([^)]*\)/g, "$1")
-    .replace(/\[([^\]]*)\]\([^)]*\)/g, "$1")
-    .replace(/https:\/\//gi, "hxxps://")
-    .replace(/http:\/\//gi, "hxxp://");
-}
-/** Defang, then clamp to `max`, marking a cut with "…" so a shortened label never passes for the whole one. */
-function label(t?: string, max = LABEL_MAX): string | undefined {
-  if (!t) return undefined;
-  const d = defang(t);
-  return d.length > max ? `${d.slice(0, max - 1)}…` : d;
-}
-
-/** An instant rendered in TZ with its offset, e.g. 2026-10-01T13:00:00+02:00. */
-function zoned(iso: string): string {
-  const d = new Date(/[zZ]|[+-]\d\d:?\d\d$/.test(iso) ? iso : `${iso}Z`);
-  const parts = Object.fromEntries(
-    new Intl.DateTimeFormat("en-CA", {
-      timeZone: TZ, year: "numeric", month: "2-digit", day: "2-digit",
-      hour: "2-digit", minute: "2-digit", second: "2-digit", hourCycle: "h23",
-    }).formatToParts(d).map((p) => [p.type, p.value]),
-  );
-  const local = Date.UTC(+parts.year!, +parts.month! - 1, +parts.day!, +parts.hour!, +parts.minute!, +parts.second!);
-  const off = Math.round((local - d.getTime()) / 60000);
-  const sign = off >= 0 ? "+" : "-";
-  const hh = String(Math.floor(Math.abs(off) / 60)).padStart(2, "0");
-  const mm = String(Math.abs(off) % 60).padStart(2, "0");
-  return `${parts.year}-${parts.month}-${parts.day}T${parts.hour}:${parts.minute}:${parts.second}${sign}${hh}:${mm}`;
-}
-
-
 // ── Mail → threads ──
 
-type Raw = Record<string, any>;
 interface MailRec { raw: Raw; folder: "inbox" | "sent"; at: string; byMe: boolean }
-interface Pair<E> { entry: E; raw: Raw[] }
 
 const mailRecs: MailRec[] = [
   ...inbox.map((raw): MailRec => ({ raw, folder: "inbox", at: raw.receivedDateTime, byMe: false })),
@@ -169,14 +130,6 @@ function peopleList() {
       seen.add(addr);
       names.push(ea?.name || addr.split("@")[0]!);
     },
-  };
-}
-
-/** `people` clamped to WHO_MAX plus the overflow count, both omitted when empty. */
-function clampPeople(names: string[], key: "people" | "attendees", moreKey: "morePeople" | "moreAttendees") {
-  return {
-    ...(names.length ? { [key]: names.slice(0, WHO_MAX).map((n) => label(n)!) } : {}),
-    ...(names.length > WHO_MAX ? { [moreKey]: names.length - WHO_MAX } : {}),
   };
 }
 
@@ -319,6 +272,11 @@ const meetingEntries: Pair<Meeting>[] = [...series.entries()].map(([key, occ]) =
 const startOf = (m: Meeting) => ("occurrences" in m ? m.occurrences[0]!.start : m.start);
 meetingEntries.sort((a, b) => startOf(a.entry).localeCompare(startOf(b.entry)));
 
+// ── Slack → chat (#130) ──
+
+const slack = await slackWeek(FROM, TO);
+const chatEntries = slack?.pairs ?? [];
+
 // ── Output ──
 
 const output: Output = {
@@ -327,16 +285,16 @@ const output: Output = {
   counts: {
     meetings: { records: events.length, entries: meetingEntries.length },
     mail: { records: mailRecs.length, entries: mailEntries.length },
-    chat: { records: 0, entries: 0 },
+    chat: { records: slack?.raw.matches.length ?? 0, entries: chatEntries.length },
   },
   summary: "(not generated: needs the Summarizer)",
   meetings: meetingEntries.map((p) => p.entry),
   mail: mailEntries.map((p) => p.entry),
-  chat: [],
+  chat: chatEntries.map((p) => p.entry),
 };
 
-const raw = { me, calendarView: events, inbox, sent };
-const pairs = { meetings: meetingEntries, mail: mailEntries };
+const raw = { me, calendarView: events, inbox, sent, slack: slack?.raw };
+const pairs = { meetings: meetingEntries, mail: mailEntries, chat: chatEntries };
 
 await mkdir(OUT_DIR, { recursive: true });
 await writeFile(join(OUT_DIR, "output.json"), JSON.stringify(output, null, 2));
@@ -344,7 +302,7 @@ await writeFile(join(OUT_DIR, "graph-raw.json"), JSON.stringify(raw, null, 2));
 
 const page = (await Bun.file(new URL("./real-week.html", import.meta.url)).text()).replace(
   "/*DATA*/null",
-  JSON.stringify({ output, raw, pairs, proxyAddressesReturned: Array.isArray(me.proxyAddresses) && me.proxyAddresses.length > 0 })
+  JSON.stringify({ output, raw, pairs, slackStats: slack?.stats ?? null, proxyAddressesReturned: Array.isArray(me.proxyAddresses) && me.proxyAddresses.length > 0 })
     .replace(/</g, "\\u003c"),
 );
 await writeFile(join(OUT_DIR, "real-week.html"), page);
@@ -352,7 +310,7 @@ await writeFile(join(OUT_DIR, "real-week.html"), page);
 const bytes = (v: unknown) => JSON.stringify(v).length;
 console.log(JSON.stringify({
   events: events.length, inbox: inbox.length, sent: sent.length,
-  meetings: meetingEntries.length, mailThreads: mailEntries.length,
+  meetings: meetingEntries.length, mailThreads: mailEntries.length, chat: chatEntries.length,
   meetingsWithRooms: meetingEntries.filter((p) => p.entry.rooms).length,
   outputBytes: bytes(output), rawBytes: bytes(raw),
 }));

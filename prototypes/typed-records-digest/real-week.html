@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Digest vs Graph</title>
+<title>Digest vs sources</title>
 <style>
 :root {
   --bg: #fafaf9; --panel: #ffffff; --ink: #1c1917; --muted: #78716c; --line: #e7e5e4;
@@ -44,15 +44,17 @@ pre { margin: 0; background: var(--code-bg); border: 1px solid var(--line); bord
 </head>
 <body>
 <header>
-  <h1>Prototype digest vs raw Graph, one real week</h1>
+  <h1>Prototype digest vs raw Graph and Slack, one real week</h1>
   <div class="sub" id="sub"></div>
   <div class="stats" id="stats"></div>
 </header>
 <nav><div class="in">
   <button data-tab="meetings" aria-pressed="true">Meetings</button>
   <button data-tab="mail" aria-pressed="false">Mail</button>
+  <button data-tab="chat" aria-pressed="false">Chat</button>
+  <button data-tab="slack" aria-pressed="false">Slack stats</button>
   <button data-tab="output" aria-pressed="false">output.json</button>
-  <button data-tab="raw" aria-pressed="false">graph-raw.json</button>
+  <button data-tab="raw" aria-pressed="false">raw.json</button>
   <input id="q" type="search" placeholder="Filter entries…">
 </div></nav>
 <main id="main"></main>
@@ -65,11 +67,12 @@ const kb = (v) => (JSON.stringify(v).length / 1024).toFixed(1) + " KB";
 
 const w = D.output.window;
 $("#sub").textContent = `${w.from} → ${w.to} · ${D.output.timezone} · local only, contains real mail and calendar data`;
-const cal = D.pairs.meetings, mail = D.pairs.mail;
+const cal = D.pairs.meetings, mail = D.pairs.mail, chat = D.pairs.chat ?? [];
 $("#stats").innerHTML = [
   ["calendar records", D.raw.calendarView.length], ["meetings", cal.length],
   ["mail records", D.raw.inbox.length + D.raw.sent.length], ["mail threads", mail.length],
   ["meetings with rooms", cal.filter((p) => p.entry.rooms).length],
+  ["slack records", D.output.counts.chat.records], ["chat conversations", chat.length],
   ["output.json", kb(D.output)], ["raw Graph", kb(D.raw)],
   ["/me proxyAddresses returned", D.proxyAddressesReturned ? "yes" : "no"],
 ].map(([k, v]) => `<div class="stat">${esc(k)}: <b>${esc(v)}</b></div>`).join("");
@@ -83,6 +86,13 @@ function head(p) {
       ${e.rooms ? `<span class="tag">room: ${esc(e.rooms.join(", "))}</span>` : ""}
       <span class="m">${esc(start)} · ${(e.attendees?.length ?? 0) + (e.moreAttendees ?? 0)} attendees</span>`;
   }
+  if (e.type === "chat") {
+    const name = e.channel ? "#" + e.channel : (e.people ?? []).join(", ") || "(nobody else named)";
+    return `<span class="t">${esc(name)}</span>
+      <span class="tag">${esc(e.kind)}${e.external ? " · external" : ""}</span>
+      <span class="tag">${e.messages} msg${e.fromYou ? ` · ${e.fromYou} you` : ""}${e.mentionsYou ? ` · ${e.mentionsYou} @you` : ""}</span>
+      <span class="m">${esc(e.lastAt)} · ${e.lastFromYou ? "you last" : esc(e.lastFrom ?? "")}</span>`;
+  }
   return `<span class="t">${esc(e.subject)}</span>
     <span class="tag">${e.messages} msg${e.lastFromYou ? " · you last" : ""}</span>
     <span class="m">${esc(e.lastAt)} · ${esc(e.lastFrom ?? "")}</span>`;
@@ -91,20 +101,22 @@ function head(p) {
 function entries(list) {
   const q = $("#q").value.toLowerCase();
   const shown = list.filter((p) => !q || JSON.stringify(p).toLowerCase().includes(q));
-  return `<p class="note">${shown.length} of ${list.length}. Left: what rundown would emit (code-filled; no summaries yet). Right: the Graph objects it was built from.</p>` +
+  return `<p class="note">${shown.length} of ${list.length}. Left: what rundown would emit (code-filled; no summaries yet). Right: the source objects it was built from.</p>` +
     shown.map((p) => `<details class="entry"><summary>${head(p)}</summary><div class="cols">
       <div><h3>Digest entry · ${kb(p.entry)}</h3><pre>${json(p.entry)}</pre></div>
-      <div><h3>Raw Graph · ${p.raw.length} record${p.raw.length > 1 ? "s" : ""} · ${kb(p.raw)}</h3><pre>${json(p.raw)}</pre></div>
+      <div><h3>Raw source · ${p.raw.length} record${p.raw.length > 1 ? "s" : ""} · ${kb(p.raw)}</h3><pre>${json(p.raw)}</pre></div>
     </div></details>`).join("");
 }
 
 let tab = "meetings";
 function render() {
   document.querySelectorAll("nav button").forEach((b) => b.setAttribute("aria-pressed", String(b.dataset.tab === tab)));
-  $("#q").style.visibility = tab === "meetings" || tab === "mail" ? "visible" : "hidden";
+  $("#q").style.visibility = ["meetings", "mail", "chat"].includes(tab) ? "visible" : "hidden";
   $("#main").innerHTML =
     tab === "meetings" ? entries(cal) :
     tab === "mail" ? entries(mail) :
+    tab === "chat" ? entries(chat) :
+    tab === "slack" ? `<div class="full"><pre>${json(D.slackStats)}</pre></div>` :
     `<div class="full"><pre>${json(tab === "output" ? D.output : D.raw)}</pre></div>`;
 }
 document.querySelectorAll("nav button").forEach((b) => b.addEventListener("click", () => { tab = b.dataset.tab; render(); }));
