@@ -295,12 +295,45 @@ if (process.env[WORKER_ENV] !== undefined) {
   process.exit(0);
 }
 
+const [command, ...rest] = process.argv.slice(2);
+
+// The flags each command accepts. parseCommandArgs parses a command's arguments
+// against its entry; the update gate reads --debug against the same entry.
+const COMMAND_OPTIONS = {
+  // Repeatable --source (`--source graph --source slack`) narrows this run to a
+  // subset of the configured sources; absent = the full selection.
+  digest: {
+    window: { type: "string" },
+    source: { type: "string", multiple: true },
+    debug: { type: "boolean" },
+  },
+  login: { debug: { type: "boolean" } },
+  status: { debug: { type: "boolean" } },
+  init: { debug: { type: "boolean" } },
+} as const satisfies Record<string, ParseArgsConfig["options"]>;
+
+/**
+ * Whether the command will parse `--debug` as set, read before dispatch so the
+ * update gate can use it (issue #105). It runs the command's own parse, so it
+ * agrees with parseCommandArgs on option values and `--`. A command that does
+ * not declare the flag, or arguments the command will reject, read as off.
+ */
+function debugFlagOnArgv(name: string | undefined, args: string[]): boolean {
+  if (name === undefined || !Object.hasOwn(COMMAND_OPTIONS, name)) return false;
+  try {
+    const options = COMMAND_OPTIONS[name as keyof typeof COMMAND_OPTIONS];
+    return parseArgs({ args, options, allowPositionals: true }).values.debug === true;
+  } catch {
+    return false;
+  }
+}
+
 // Fire before the command runs, not after: several paths below exit the process
 // directly, and a trailing hook would be skipped on exactly the error paths where
 // a stale version is most likely. The gate never throws and never waits on the
 // worker, so an armed check costs the command nothing.
 {
-  const debug = makeDebugSink(debugEnabled(undefined), (s) => process.stderr.write(s));
+  const debug = makeDebugSink(debugEnabled(debugFlagOnArgv(command, rest)), (s) => process.stderr.write(s));
   await armUpdateCheck({
     version: VERSION,
     env: process.env,
@@ -339,8 +372,6 @@ if (process.env[WORKER_ENV] !== undefined) {
 }
 
 // ── dispatch ──────────────────────────────────────────────────────────────
-
-const [command, ...rest] = process.argv.slice(2);
 
 if (command === "--version" || command === "-v") {
   process.stdout.write(`${VERSION}\n`);
@@ -404,28 +435,22 @@ Source:
 try {
   switch (command) {
     case "digest": {
-      // Repeatable --source (`--source graph --source slack`) narrows this run
-      // to a subset of the configured sources; absent = the full selection.
-      const { values } = parseCommandArgs("digest", {
-        window: { type: "string" },
-        source: { type: "string", multiple: true },
-        debug: { type: "boolean" },
-      });
+      const { values } = parseCommandArgs("digest", COMMAND_OPTIONS.digest);
       await cmdDigest(startDebug(values.debug), parseWindow(values.window), values.source);
       break;
     }
     case "login": {
-      const { values, positionals } = parseCommandArgs("login", { debug: { type: "boolean" } });
+      const { values, positionals } = parseCommandArgs("login", COMMAND_OPTIONS.login);
       await cmdLogin(startDebug(values.debug), positionals[0]);
       break;
     }
     case "status": {
-      const { values } = parseCommandArgs("status", { debug: { type: "boolean" } });
+      const { values } = parseCommandArgs("status", COMMAND_OPTIONS.status);
       await cmdStatus(startDebug(values.debug));
       break;
     }
     case "init": {
-      const { values } = parseCommandArgs("init", { debug: { type: "boolean" } });
+      const { values } = parseCommandArgs("init", COMMAND_OPTIONS.init);
       // init writes a template and does no I/O worth tracing; the shared
       // config-path event startDebug emits is its entire debug surface.
       startDebug(values.debug);

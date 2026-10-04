@@ -44,6 +44,9 @@ function run(
   // back explicitly via extraEnv.
   delete env.CI;
   delete env.RUNDOWN_INTERNAL_UPDATE_WORKER;
+  // And the debug switch, so a test that expects debug off, or that turns it on
+  // with the --debug flag alone, does not depend on the developer's shell.
+  delete env.RUNDOWN_DEBUG;
   Object.assign(env, extraEnv);
   const proc = Bun.spawnSync([process.execPath, ...preload, entrypoint, ...args], { cwd: ROOT, env });
   return { stdout: proc.stdout.toString(), stderr: proc.stderr.toString(), exitCode: proc.exitCode ?? 0 };
@@ -235,6 +238,30 @@ describe("cli", () => {
       // The load-bearing negative: nothing was written, so a working tree can
       // never be overwritten by a release binary.
       expect(existsSync(join(dirname(path), "update-state.json"))).toBe(false);
+    });
+
+    test("--debug alone reaches the gate's events", () => {
+      // The gate runs before the command parses its arguments, so the flag has to
+      // reach it separately (issue #105). The config-path tests in the --debug
+      // block would pass without that, so this one asserts a gate event.
+      for (const cmd of ["status", "init", "login", "digest"]) {
+        const r = run([cmd, "--debug"], missing());
+        expect(r.stderr).toContain("[debug] update  gate skip (dev-build)");
+      }
+    });
+
+    test("a --debug the command would not parse as the flag does not turn the gate's debug on", () => {
+      // parseArgs reads `--window=--debug` as the window's value, rejects
+      // `--window --debug` as ambiguous, and reads everything after `--` as
+      // positionals. The gate reads the command line the same way.
+      for (const args of [
+        ["digest", "--window=--debug"],
+        ["digest", "--window", "--debug"],
+        ["status", "--", "--debug"],
+      ]) {
+        const r = run(args, missing());
+        expect(r.stderr).not.toContain("[debug]");
+      }
     });
 
     test("every command arms the check, including --version and the usage fallback", () => {
