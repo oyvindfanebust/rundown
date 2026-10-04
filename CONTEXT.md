@@ -339,18 +339,9 @@ that belong to it within the window. A mail thread (merged with any others the s
 under the same subject), a Slack conversation (DM, group DM or channel) over the whole window, a
 recurring calendar series with its occurrences, or a one-off event. Only records inside the window
 belong to an entry; one that began earlier is flagged as continuing, not extended backwards. The
-unit is the same whatever the window's length. An entry that needs the user carries
-[attention](#attention).
+unit is the same whatever the window's length. An entry is summarized, never planned: `rundown`
+extracts no commitments, tasks or waiting items from it; planning is the consumer's job.
 _Avoid_: digest item (collides with [ExtractedItem](#extracteditem)), message, event (those are records).
-
-### attention
-
-Planned, not yet built (map [#117](https://github.com/oyvindfanebust/rundown/issues/117)). What a
-digest entry carries when it needs the user: a kind (commitment, task, waiting or fyi), a
-model-written summary and optional human-phrased timing. It sits on the one entry it concerns, never
-in a separate list that points at entries; the consumer builds the plan view by collecting the
-entries that carry it. Successor of [ExtractedItem](#extracteditem).
-_Avoid_: plan item (implies a separate list), evidence (the pointer-and-quote mechanism it replaces).
 
 ### Emission
 
