@@ -605,11 +605,11 @@ describe("GraphSource.read mail", () => {
     expect(mailOf(items)[0]!.body).toEqual(untrusted("The full reply."));
   });
 
-  test("a long uniqueBody is capped at 2,000 chars", async () => {
+  test("a long uniqueBody is capped at 2,000 chars ending in …[truncated]", async () => {
     const items = await readMail({
       inbox: { value: [message({ uniqueBody: { contentType: "text", content: "b".repeat(5_000) } })] },
     });
-    expect(mailOf(items)[0]!.body).toEqual(untrusted("b".repeat(2_000)));
+    expect(mailOf(items)[0]!.body).toEqual(untrusted(`${"b".repeat(1_988)}…[truncated]`));
   });
 
   test("a missing or empty uniqueBody falls back to the preview", async () => {
