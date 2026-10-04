@@ -9,7 +9,9 @@
 // FIELD_TRUST below; the real contract would carry it in each Zod field's description
 // (ADR-0011) so the generated JSON Schema hands it to the skill.
 //   trusted  number, instant, boolean, closed enum or digest. Safe to compute with.
-//   label    code-copied source text, defanged, clamped to LABEL_MAX (120). Quoted data.
+//   label    code-copied source text, defanged and clamped: TITLE_MAX (255) for subjects and
+//            titles, LABEL_MAX (120) for names, channels, rooms and locations. A cut ends
+//            in "…". Quoted data.
 //   model    written by the Summarizer, defanged. Quoted data.
 //
 // Nothing points elsewhere: what needs the user's attention sits on the entry it is

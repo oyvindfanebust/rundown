@@ -18,6 +18,7 @@ const TO = process.argv[3] ?? "2026-10-04T22:00:00Z"; // Mon 5 Oct 00:00 Oslo
 const OUT_DIR = process.env.OUT_DIR ?? "./real-week-out";
 const BASE = "https://graph.microsoft.com/v1.0";
 const LABEL_MAX = 120;
+const TITLE_MAX = 255;
 const WHO_MAX = 8;
 
 // ── Graph ──
@@ -87,7 +88,12 @@ function defang(t: string): string {
     .replace(/https:\/\//gi, "hxxps://")
     .replace(/http:\/\//gi, "hxxp://");
 }
-const label = (t?: string) => (t ? defang(t).slice(0, LABEL_MAX) : undefined);
+/** Defang, then clamp to `max`, marking a cut with "…" so a shortened label never passes for the whole one. */
+function label(t?: string, max = LABEL_MAX): string | undefined {
+  if (!t) return undefined;
+  const d = defang(t);
+  return d.length > max ? `${d.slice(0, max - 1)}…` : d;
+}
 
 /** An instant rendered in TZ with its offset, e.g. 2026-10-01T13:00:00+02:00. */
 function zoned(iso: string): string {
@@ -171,7 +177,7 @@ const mailEntries: Pair<MailThread>[] = [...threads.entries()].map(([convId, rec
   const entry = {
     id: digest(`graph\nmessage-series\n${convId}`),
     type: "mail",
-    subject: label(last.raw.subject) ?? "(no subject)",
+    subject: label(last.raw.subject, TITLE_MAX) ?? "(no subject)",
     messages: recs.length,
     ...(fromYou ? { fromYou } : {}),
     firstAt: zoned(recs[0]!.at),
@@ -254,7 +260,7 @@ const meetingEntries: Pair<Meeting>[] = [...series.entries()].map(([key, occ]) =
   const base = {
     id: digest(`graph\n${recurring ? "event-series" : "event"}\n${key}`),
     type: "meeting",
-    title: label(first.subject) ?? "(no subject)",
+    title: label(first.subject, TITLE_MAX) ?? "(no subject)",
     ...(allDay ? { allDay: true } : {}),
     ...(rooms.length ? { rooms: rooms.map((r) => label(r)!) } : {}),
     ...(location ? { location } : {}),

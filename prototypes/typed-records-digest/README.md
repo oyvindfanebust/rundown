@@ -16,14 +16,15 @@ Decided in review on the ticket:
 2. **Trust lives in the schema.** `FIELD_TRUST` classes every field as `trusted`, `label` or `model`; it is typed `Record<keyof Entry, Trust>`, so a field without a class fails to compile. The real contract carries the class in each Zod field's description (ADR-0011).
 3. **No cross-references.** What needs your attention is `attention` (kind, summary, when) on the entry it is about. The separate plan list and its `entries: [fingerprint]` pointers are gone; the skill builds the plan view by filtering.
 4. **Rooms are not attendees.** `rooms` comes from Graph `resource` attendees plus attendees whose address is one of the event's `locations[]`. `location` stays only when it says more than the room names.
+5. **Subjects and titles cap at 255, everything else at 120.** `subject` and `title` clamp to `TITLE_MAX` (255, about Outlook's own subject limit), so honest subjects are not cut: 6 of 145 real subjects in a week ran over 120, none over 142. Names, channels, rooms and locations keep `LABEL_MAX` (120). A cut ends in "…". The normalizer's `TEXT_MAX` (200) cut has to rise to match. Refines the single 120 limit from [Decide which digest fields leave the binary verbatim and which only through the model](https://github.com/oyvindfanebust/rundown/issues/121).
 
 Follows from those:
 
-5. **Presence is signal.** False, zero, default and empty fields are left out: no `cancelled: false`, `importance: "normal"`, `showAs: "busy"`, `fromYou: 0`.
-6. **"You" fields.** `youOrganize`, `yourResponse`, `fromYou`, `lastFromYou`, `mentionsYou`. Your own name never appears; `lastFrom` is absent when `lastFromYou`.
-7. **Clamped lists say how much is left.** `attendees`/`people` hold at most 8 names; `moreAttendees`/`morePeople` count the rest.
-8. **One-offs are flat, series list occurrences.** A one-off has `start`/`end`; a series has `recurring: true` and `occurrences`. A series carries its most common `yourResponse`; an occurrence repeats it only when it differs, and a moved one carries `movedFrom`.
-9. **Top level is flat too.** `window`, `timezone`, `counts`, `summary`, then `meetings`, `mail`, `chat`. The envelope wrapper is gone.
+6. **Presence is signal.** False, zero, default and empty fields are left out: no `cancelled: false`, `importance: "normal"`, `showAs: "busy"`, `fromYou: 0`.
+7. **"You" fields.** `youOrganize`, `yourResponse`, `fromYou`, `lastFromYou`, `mentionsYou`. Your own name never appears; `lastFrom` is absent when `lastFromYou`.
+8. **Clamped lists say how much is left.** `attendees`/`people` hold at most 8 names; `moreAttendees`/`morePeople` count the rest.
+9. **One-offs are flat, series list occurrences.** A one-off has `start`/`end`; a series has `recurring: true` and `occurrences`. A series carries its most common `yourResponse`; an occurrence repeats it only when it differs, and a moved one carries `movedFrom`.
+10. **Top level is flat too.** `window`, `timezone`, `counts`, `summary`, then `meetings`, `mail`, `chat`. The envelope wrapper is gone.
 
 Still open:
 
