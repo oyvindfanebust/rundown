@@ -1,6 +1,6 @@
 import { test, expect, describe, afterEach } from "bun:test";
 import { untrusted, unwrap } from "../src/trust.ts";
-import { isRecord, type BundleItem, type Email, type NormalizedItem } from "../src/domain.ts";
+import { isRecord, type BundleItem, type CalendarEvent, type Email } from "../src/domain.ts";
 import type { Source } from "../src/sources/source.ts";
 import { GraphSource, GRAPH_OPTIONS, type GraphAuth, type FetchJson, type GraphDeps } from "../src/sources/graph/index.ts";
 
@@ -46,31 +46,27 @@ function graphSource(deps: GraphDeps, options: Record<string, unknown> = {}): Gr
   return new GraphSource(options, { auth: fakeAuth(), ...deps });
 }
 
-// `id` is now a real runtime box, never `===`-comparable across two
-// separately-constructed boxes of the same string — so this test-only lookup
-// compares by unwrapped value. (This is a test assertion helper, not a
-// production leak path — never a pattern to mirror in src/.)
-function byId(items: BundleItem[], id: string): NormalizedItem | undefined {
-  return items.filter((i): i is NormalizedItem => !isRecord(i)).find((i) => unwrap(i.id) === id);
-}
-
 // ── fixtures ───────────────────────────────────────────────────────────────
 
 function event(over: Record<string, unknown> = {}): Record<string, unknown> {
   return {
     id: "e1",
+    type: "singleInstance",
     subject: "Standup",
     start: { dateTime: "2026-07-08T09:00:00.0000000" },
     end: { dateTime: "2026-07-08T09:30:00.0000000" },
     isAllDay: false,
     showAs: "busy",
     isCancelled: false,
-    organizer: { emailAddress: { name: "Alice" } },
+    isOrganizer: false,
+    isOnlineMeeting: true,
+    onlineMeeting: { joinUrl: "https://teams.example/join/abc" },
+    organizer: { emailAddress: { name: "Alice", address: "alice@x.com" } },
     attendees: [
-      { type: "required", emailAddress: { name: "Bob" } },
-      { type: "resource", emailAddress: { name: "Room 1" } }, // resource → filtered out
+      { type: "required", status: { response: "accepted" }, emailAddress: { name: "Bob", address: "bob@x.com" } },
+      { type: "resource", status: { response: "accepted" }, emailAddress: { name: "Room 1", address: "room1@x.com" } },
     ],
-    location: { displayName: "HQ" },
+    locations: [{ displayName: "Room 1", locationEmailAddress: "room1@x.com" }],
     categories: ["Work"],
     responseStatus: { response: "accepted" },
     webLink: "https://outlook.office.com/e1",
@@ -127,80 +123,398 @@ describe("GraphSource.status", () => {
   });
 });
 
-// ── read(): calendar mapping + toInstant ──────────────────────────────────────
+// ── read(): calendar as typed CalendarEvent records (#148) ─────────────────────
+
+function eventsOf(items: BundleItem[]): CalendarEvent[] {
+  return items.filter((i): i is CalendarEvent => isRecord(i) && i.type === "calendar-event");
+}
+
+function byEventTitle(items: BundleItem[], title: string): CalendarEvent {
+  const found = eventsOf(items).find((e) => unwrap(e.title) === title);
+  if (!found) throw new Error(`no event with title ${title}`);
+  return found;
+}
+
+async function readCalendar(routes: Routes): Promise<BundleItem[]> {
+  const { fetchJson } = fakeFetch(routes);
+  return graphSource({ fetchJson }, { kinds: ["event"] }).read(WINDOW);
+}
 
 describe("GraphSource.read calendar", () => {
-  test("maps an event, normalizes UTC instants, filters resource attendees, brands untrusted", async () => {
-    const { fetchJson } = fakeFetch({ calendar: { value: [event()] } });
-    const items = await graphSource({ fetchJson }, { kinds: ["event"] }).read(WINDOW);
-    const item = byId(items, "e1")!;
-    expect(item.source).toBe("graph");
-    expect(item.kind).toBe("event");
-    expect(item.timestamp).toBe("2026-07-08T09:00:00Z"); // fractional stripped, Z appended
-    expect(item.end).toBe("2026-07-08T09:30:00Z");
-    expect(item.title).toEqual(untrusted("Standup"));
-    expect(item.url).toEqual(untrusted("https://outlook.office.com/e1"));
-    expect(item.extras).toEqual(
-      untrusted({
-        organizer: "Alice",
-        attendees: ["Bob"], // resource filtered
-        location: "HQ",
-        showAs: "busy",
-        myResponse: "accepted",
-        categories: ["Work"],
-        // allDay:false and cancelled:false collapse to undefined (dropped)
-      }),
-    );
-    // Attribution (#54): an event has NO honest container, so it carries no `where` —
-    // `location` is a physical place, not the thing the item lives in, and a calendar
-    // title describes itself. Organizer leads `who`; attendees are context.
-    expect(item.attribution).toEqual(untrusted({ who: ["Alice", "Bob"] }));
-    expect(item.dateOnly).toBeUndefined(); // timed event — instants are clock times
+  test("maps a timed event to a CalendarEvent with UTC instants and boxed text", async () => {
+    const items = await readCalendar({ me: { mail: "me@example.com" }, calendar: { value: [event()] } });
+    expect(items).toHaveLength(1);
+    const e = byEventTitle(items, "Standup");
+    expect(e.type).toBe("calendar-event");
+    expect(e.source).toBe("graph");
+    expect(e.isAllDay).toBe(false);
+    expect(e.start).toBe("2026-07-08T09:00:00Z"); // fractional stripped, Z appended
+    expect(e.end).toBe("2026-07-08T09:30:00Z");
+    expect(e.organizer).toEqual({ name: untrusted("Alice"), handle: untrusted("alice@x.com"), isMe: false });
+    expect(e.attendees).toEqual([
+      { name: untrusted("Bob"), handle: untrusted("bob@x.com"), isMe: false, response: "accepted", optional: false },
+    ]);
+    expect(e.rooms).toEqual([untrusted("Room 1")]);
+    expect(e.isOrganizer).toBe(false);
+    expect(e.myResponse).toBe("accepted");
+    expect(e.showAs).toBe("busy");
+    expect(e.isCancelled).toBe(false);
+    expect(e.isOnlineMeeting).toBe(true);
+    expect(e.recurring).toBe(false);
+    expect(e.originalStart).toBeUndefined();
+    expect(e.continuesFromBefore).toBe(false);
+    expect(e.fingerprint).toMatch(/^[0-9a-f]{16}$/);
+    // No join URL and no web link survive into the record.
+    expect(JSON.stringify(e)).not.toContain("teams.example");
+    expect(JSON.stringify(e)).not.toContain("outlook.office.com");
+  });
+});
+
+describe("GraphSource.read calendar rooms", () => {
+  function attendee(name: string, address: string, type = "required", response = "none") {
+    return { type, status: { response }, emailAddress: { name, address } };
+  }
+
+  test("a resource attendee is a room, never an attendee", async () => {
+    const items = await readCalendar({
+      calendar: {
+        value: [event({ locations: [], attendees: [attendee("Bob", "bob@x.com"), attendee("Projector", "proj@x.com", "resource")] })],
+      },
+    });
+    const e = eventsOf(items)[0]!;
+    expect(e.rooms).toEqual([untrusted("Projector")]);
+    expect(e.attendees.map((a) => a.handle)).toEqual([untrusted("bob@x.com")]);
   });
 
-  test("an all-day event is marked dateOnly — its UTC midnights encode dates (#106)", async () => {
-    const { fetchJson } = fakeFetch({
+  test("a required attendee whose address is one of the event's locations is a room", async () => {
+    const items = await readCalendar({
+      calendar: {
+        value: [
+          event({
+            locations: [
+              { displayName: "Fjord", locationEmailAddress: "Fjord@X.com" },
+              { displayName: "Somewhere free text" },
+            ],
+            attendees: [attendee("Bob", "bob@x.com"), attendee("Fjord (8)", "fjord@x.com")],
+          }),
+        ],
+      },
+    });
+    const e = eventsOf(items)[0]!;
+    expect(e.rooms).toEqual([untrusted("Fjord (8)")]);
+    expect(e.attendees.map((a) => a.handle)).toEqual([untrusted("bob@x.com")]);
+  });
+
+  test("a room on both paths is listed once; an unnamed room is not listed", async () => {
+    const items = await readCalendar({
+      calendar: {
+        value: [
+          event({
+            locations: [{ locationEmailAddress: "room1@x.com" }],
+            attendees: [
+              attendee("Room 1", "room1@x.com", "resource"),
+              { type: "resource", emailAddress: { address: "kiosk@x.com" } },
+            ],
+          }),
+        ],
+      },
+    });
+    const e = eventsOf(items)[0]!;
+    expect(e.rooms).toEqual([untrusted("Room 1")]);
+    expect(JSON.stringify(e)).not.toContain("kiosk@x.com");
+    expect(e.attendees).toEqual([]);
+  });
+
+  test("attendees carry their response, optional flag and isMe", async () => {
+    const items = await readCalendar({
+      me: { mail: "me@example.com" },
+      calendar: {
+        value: [
+          event({
+            organizer: { emailAddress: { name: "Me", address: "ME@example.com" } },
+            isOrganizer: true,
+            attendees: [
+              attendee("Bob", "bob@x.com", "optional", "declined"),
+              attendee("Me", "me@example.com", "required", "organizer"),
+              attendee("Eve", "eve@x.com", "required", "Maybe?"),
+            ],
+          }),
+        ],
+      },
+    });
+    const e = eventsOf(items)[0]!;
+    expect(e.organizer.isMe).toBe(true);
+    expect(e.isOrganizer).toBe(true);
+    expect(e.attendees.map((a) => [a.response, a.optional, a.isMe])).toEqual([
+      ["declined", true, false],
+      ["organizer", false, true],
+      ["none", false, false], // an unknown response reads as none
+    ]);
+  });
+});
+
+describe("GraphSource.read calendar location", () => {
+  test("a free-text location is kept", async () => {
+    const items = await readCalendar({
+      calendar: { value: [event({ attendees: [], locations: [], location: { displayName: "Café Fjord" } })] },
+    });
+    expect(eventsOf(items)[0]!.location).toEqual(untrusted("Café Fjord"));
+  });
+
+  test("a location that names the event's one room is dropped", async () => {
+    const items = await readCalendar({ calendar: { value: [event({ location: { displayName: "Room 1" } })] } });
+    const e = eventsOf(items)[0]!;
+    expect(e.rooms).toEqual([untrusted("Room 1")]);
+    expect(e.location).toBeUndefined();
+  });
+
+  test("a location that joins the room names, as Outlook writes it, is dropped", async () => {
+    const items = await readCalendar({
+      calendar: {
+        value: [
+          event({
+            location: { displayName: "Fjord; Room 1" },
+            attendees: [
+              { type: "resource", emailAddress: { name: "Room 1", address: "room1@x.com" } },
+              { type: "resource", emailAddress: { name: "Fjord", address: "fjord@x.com" } },
+            ],
+          }),
+        ],
+      },
+    });
+    const e = eventsOf(items)[0]!;
+    expect(e.rooms).toEqual([untrusted("Room 1"), untrusted("Fjord")]);
+    expect(e.location).toBeUndefined();
+  });
+
+  test("room names match the location regardless of case and spacing", async () => {
+    const items = await readCalendar({
+      calendar: { value: [event({ id: "1", subject: "case", location: { displayName: " ROOM 1 ;" } })] },
+    });
+    expect(byEventTitle(items, "case").location).toBeUndefined();
+  });
+
+  test("a location that names a room and places besides keeps only the places", async () => {
+    const items = await readCalendar({
+      calendar: { value: [event({ location: { displayName: "Room 1; Café Fjord; Pier 4" } })] },
+    });
+    expect(eventsOf(items)[0]!.location).toEqual(untrusted("Café Fjord; Pier 4"));
+  });
+});
+
+describe("GraphSource.read calendar fields", () => {
+  test("an all-day event has YYYY-MM-DD start and end", async () => {
+    const items = await readCalendar({
       calendar: {
         value: [
           event({
             isAllDay: true,
             start: { dateTime: "2026-07-08T00:00:00.0000000" },
-            end: { dateTime: "2026-07-09T00:00:00.0000000" },
+            end: { dateTime: "2026-07-10T00:00:00.0000000" },
           }),
         ],
       },
     });
-    const items = await graphSource({ fetchJson }, { kinds: ["event"] }).read(WINDOW);
-    expect(byId(items, "e1")!.dateOnly).toBe(true);
+    const e = eventsOf(items)[0]!;
+    expect(e.isAllDay).toBe(true);
+    expect(e.start).toBe("2026-07-08");
+    expect(e.end).toBe("2026-07-10");
   });
 
-  test("empty attendee list vanishes — presence is signal (accepted delta)", async () => {
-    const { fetchJson } = fakeFetch({
-      calendar: {
-        value: [event({ id: "solo", attendees: [{ type: "resource", emailAddress: { name: "Room 1" } }] })],
-      },
-    });
-    const items = await graphSource({ fetchJson }, { kinds: ["event"] }).read(WINDOW);
-    // Unwrap before inspecting keys — `extras` is now a real box, so an
-    // un-unwrapped `"attendees" in extras` would vacuously pass (the box never has
-    // that key regardless of what the source produced).
-    const extras = unwrap(byId(items, "solo")!.extras!);
-    expect("attendees" in extras).toBe(false);
-  });
-
-  test("already-Z dateTime is left untouched; missing start falls back to window.from", async () => {
-    const { fetchJson } = fakeFetch({
+  test("a moved exception carries originalStart; an occurrence and an exception edited in place do not", async () => {
+    const items = await readCalendar({
       calendar: {
         value: [
-          event({ id: "zed", start: { dateTime: "2026-07-08T09:00:00Z" }, end: undefined }),
-          event({ id: "nostart", start: {} }),
+          event({
+            id: "x1",
+            subject: "moved",
+            type: "exception",
+            seriesMasterId: "s1",
+            originalStart: "2026-07-07T09:00:00.0000000Z",
+          }),
+          event({
+            id: "x2",
+            subject: "edited",
+            type: "exception",
+            seriesMasterId: "s1",
+            originalStart: "2026-07-08T09:00:00.0000000Z",
+          }),
+          event({ id: "o1", subject: "occurrence", type: "occurrence", seriesMasterId: "s1", originalStart: "2026-07-06T09:00:00Z" }),
         ],
       },
     });
-    const items = await graphSource({ fetchJson }, { kinds: ["event"] }).read(WINDOW);
-    expect(byId(items, "zed")!.timestamp).toBe("2026-07-08T09:00:00Z");
-    expect(byId(items, "zed")!.end).toBeUndefined();
-    expect(byId(items, "nostart")!.timestamp).toBe(WINDOW.from);
+    expect(byEventTitle(items, "moved").originalStart).toBe("2026-07-07T09:00:00Z");
+    expect(byEventTitle(items, "edited").originalStart).toBeUndefined();
+    expect(byEventTitle(items, "occurrence").originalStart).toBeUndefined();
+    for (const s of ["moved", "edited", "occurrence"]) expect(byEventTitle(items, s).recurring).toBe(true);
+  });
+
+  test("entryKey groups a series by seriesMasterId; a one-off is its own group", async () => {
+    const items = await readCalendar({
+      calendar: {
+        value: [
+          event({ id: "o1", subject: "mon", type: "occurrence", seriesMasterId: "series-1" }),
+          event({ id: "o2", subject: "tue", type: "occurrence", seriesMasterId: "series-1" }),
+          event({ id: "a", subject: "one-off a" }),
+          event({ id: "b", subject: "one-off b" }),
+        ],
+      },
+    });
+    const [mon, tue, a, b] = ["mon", "tue", "one-off a", "one-off b"].map((s) => byEventTitle(items, s));
+    expect(mon!.entryKey).toBe(tue!.entryKey);
+    expect(mon!.fingerprint).not.toBe(tue!.fingerprint);
+    expect(a!.entryKey).not.toBe(b!.entryKey);
+    expect(a!.entryKey).toMatch(/^[0-9a-f]{16}$/);
+    expect(a!.entryKey).not.toBe(a!.fingerprint);
+    // Stable across runs.
+    const again = await readCalendar({ calendar: { value: [event({ id: "a", subject: "one-off a" })] } });
+    expect(eventsOf(again)[0]!.entryKey).toBe(a!.entryKey);
+    expect(eventsOf(again)[0]!.fingerprint).toBe(a!.fingerprint);
+  });
+
+  test("continuesFromBefore is set when the event starts before the window", async () => {
+    const items = await readCalendar({
+      calendar: {
+        value: [
+          event({ id: "1", subject: "spans in", start: { dateTime: "2026-07-05T22:00:00.0000000" } }),
+          event({ id: "2", subject: "inside" }),
+          event({
+            id: "3",
+            subject: "all-day before",
+            isAllDay: true,
+            start: { dateTime: "2026-07-04T00:00:00.0000000" },
+            end: { dateTime: "2026-07-07T00:00:00.0000000" },
+          }),
+        ],
+      },
+    });
+    expect(byEventTitle(items, "spans in").continuesFromBefore).toBe(true);
+    expect(byEventTitle(items, "inside").continuesFromBefore).toBe(false);
+    expect(byEventTitle(items, "all-day before").continuesFromBefore).toBe(true);
+  });
+
+  test("an all-day event starting on a west-of-UTC window's first day does not continue from before", async () => {
+    // New York's week: local midnight 2026-07-06 is 04:00Z.
+    const window = { from: "2026-07-06T04:00:00.000Z", to: "2026-07-13T04:00:00.000Z" };
+    const allDay = (id: string, subject: string, start: string, end: string) =>
+      event({ id, subject, isAllDay: true, start: { dateTime: `${start}T00:00:00.0000000` }, end: { dateTime: `${end}T00:00:00.0000000` } });
+    const { fetchJson } = fakeFetch({
+      calendar: { value: [allDay("1", "first day", "2026-07-06", "2026-07-07"), allDay("2", "before", "2026-07-05", "2026-07-07")] },
+    });
+    const items = await graphSource({ fetchJson }, { kinds: ["event"] }).read(window);
+    expect(byEventTitle(items, "first day").continuesFromBefore).toBe(false);
+    expect(byEventTitle(items, "before").continuesFromBefore).toBe(true);
+  });
+
+  test("an all-day event starting before an east-of-UTC window continues from before", async () => {
+    // Oslo's week: local midnight 2026-07-06 is 2026-07-05T22:00Z.
+    const window = { from: "2026-07-05T22:00:00.000Z", to: "2026-07-12T22:00:00.000Z" };
+    const { fetchJson } = fakeFetch({
+      calendar: {
+        value: [
+          event({ id: "1", subject: "before", isAllDay: true, start: { dateTime: "2026-07-05T00:00:00.0000000" }, end: { dateTime: "2026-07-07T00:00:00.0000000" } }),
+          event({ id: "2", subject: "first day", isAllDay: true, start: { dateTime: "2026-07-06T00:00:00.0000000" }, end: { dateTime: "2026-07-07T00:00:00.0000000" } }),
+        ],
+      },
+    });
+    const items = await graphSource({ fetchJson }, { kinds: ["event"] }).read(window);
+    expect(byEventTitle(items, "before").continuesFromBefore).toBe(true);
+    expect(byEventTitle(items, "first day").continuesFromBefore).toBe(false);
+  });
+
+  test("an all-day exception compares its original slot by date, in the series' zone", async () => {
+    // An Oslo series: the slot of 2026-07-08 is local midnight, 2026-07-07T22:00Z.
+    const allDayException = (id: string, subject: string, originalStart: string) =>
+      event({
+        id,
+        subject,
+        type: "exception",
+        seriesMasterId: "s1",
+        isAllDay: true,
+        start: { dateTime: "2026-07-08T00:00:00.0000000" },
+        end: { dateTime: "2026-07-09T00:00:00.0000000" },
+        originalStart,
+      });
+    const items = await readCalendar({
+      calendar: {
+        value: [
+          allDayException("1", "edited in place", "2026-07-07T22:00:00Z"),
+          allDayException("2", "moved a day", "2026-07-06T22:00:00Z"),
+        ],
+      },
+    });
+    expect(byEventTitle(items, "edited in place").originalStart).toBeUndefined();
+    expect(byEventTitle(items, "moved a day").originalStart).toBe("2026-07-06T22:00:00Z");
+  });
+
+  test("trusted fields fall back to their no-signal value", async () => {
+    const items = await readCalendar({
+      calendar: {
+        value: [
+          event({
+            showAs: "very busy",
+            responseStatus: { response: 42 },
+            isCancelled: "yes",
+            isOrganizer: "true",
+            isOnlineMeeting: 1,
+          }),
+        ],
+      },
+    });
+    const e = eventsOf(items)[0]!;
+    expect(e.showAs).toBe("unknown");
+    expect(e.myResponse).toBe("none");
+    expect(e.isCancelled).toBe(false);
+    expect(e.isOrganizer).toBe(false);
+    expect(e.isOnlineMeeting).toBe(false);
+  });
+
+  test("an event Graph sends without an organizer has an empty organizer, as mail without a sender does", async () => {
+    const items = await readCalendar({
+      calendar: { value: [event({ id: "1", subject: "absent", organizer: undefined }), event({ id: "2", subject: "no address", organizer: {} })] },
+    });
+    for (const subject of ["absent", "no address"]) {
+      expect(byEventTitle(items, subject).organizer).toEqual({ name: undefined, handle: untrusted(""), isMe: false });
+    }
+  });
+
+  test("a non-ISO start fails the read without echoing the value", async () => {
+    const { fetchJson } = fakeFetch({ calendar: { value: [event({ start: { dateTime: "next tuesday" } })] } });
+    const err = await graphSource({ fetchJson }, { kinds: ["event"] })
+      .read(WINDOW)
+      .then(() => null, (e: Error) => e);
+    expect(err?.message).toContain("not a strict ISO-8601 instant");
+    expect(err?.message).not.toContain("next tuesday");
+  });
+
+  test("an all-day bound that is not a real date fails the read without echoing it", async () => {
+    const { fetchJson } = fakeFetch({
+      calendar: {
+        value: [event({ isAllDay: true, start: { dateTime: "2026-02-30T00:00:00.0000000" }, end: { dateTime: "2026-03-01T00:00:00.0000000" } })],
+      },
+    });
+    const err = await graphSource({ fetchJson }, { kinds: ["event"] })
+      .read(WINDOW)
+      .then(() => null, (e: Error) => e);
+    expect(err?.message).toContain("not a YYYY-MM-DD date");
+    expect(err?.message).not.toContain("2026-02-30");
+  });
+
+  test("selects every field the record needs and never the join URL or web link", async () => {
+    const { fetchJson, urls } = fakeFetch({ calendar: { value: [event()] } });
+    await graphSource({ fetchJson }, { kinds: ["event"] }).read(WINDOW);
+    const select = new URL(urls.find((u) => u.includes("/calendarView"))!).searchParams.get("$select")!.split(",");
+    for (const field of ["type", "originalStart", "isOrganizer", "isOnlineMeeting", "location", "locations", "attendees", "seriesMasterId"]) {
+      expect(select).toContain(field);
+    }
+    for (const field of ["onlineMeeting", "onlineMeetingUrl", "webLink", "body"]) expect(select).not.toContain(field);
+  });
+
+  test("Graph produces no NormalizedItem", async () => {
+    const { fetchJson } = fakeFetch({ calendar: { value: [event()] }, inbox: { value: [message()] } });
+    const items = await graphSource({ fetchJson }, {}).read(WINDOW);
+    expect(items.length).toBe(2);
+    expect(items.every(isRecord)).toBe(true);
   });
 });
 
@@ -427,10 +741,10 @@ describe("GraphSource.read mail identity", () => {
     expect(new URL(meUrls[0]!).searchParams.get("$select")).toBe("id,mail,userPrincipalName,proxyAddresses");
   });
 
-  test("a calendar-only read makes no /me call", async () => {
-    const { fetchJson, urls } = fakeFetch({ me: ME, calendar: { value: [event()] } });
-    await graphSource({ fetchJson }, { kinds: ["event"] }).read(WINDOW);
-    expect(urls.some((u) => new URL(u).pathname.endsWith("/me"))).toBe(false);
+  test("calendar and mail share one /me call per run", async () => {
+    const { fetchJson, urls } = fakeFetch({ me: ME, calendar: { value: [event()] }, inbox: { value: [message()] } });
+    await graphSource({ fetchJson }, {}).read(WINDOW);
+    expect(urls.filter((u) => new URL(u).pathname.endsWith("/me"))).toHaveLength(1);
   });
 
   test("send on behalf of a shared mailbox is by me: sentBy is me", async () => {
@@ -546,7 +860,7 @@ describe("GraphSource.read kinds", () => {
   test('kinds:["event"] pulls the calendar only — no mail request', async () => {
     const { fetchJson, urls } = fakeFetch({ calendar: { value: [event()] } });
     await graphSource({ fetchJson }, { kinds: ["event"] }).read(WINDOW);
-    expect(urls.every((u) => u.includes("/calendarView"))).toBe(true);
+    expect(urls.some((u) => u.includes("/calendarView"))).toBe(true);
     expect(urls.some((u) => u.includes("/mailFolders/"))).toBe(false);
   });
 
@@ -564,7 +878,7 @@ describe("GraphSource.read kinds", () => {
       inbox: { value: [message()] },
     });
     const items = await graphSource({ fetchJson }, {}).read(WINDOW);
-    expect(items.map((i) => (isRecord(i) ? i.type : i.kind)).sort()).toEqual(["email", "event"]);
+    expect(items.map((i) => i.type).sort()).toEqual(["calendar-event", "email"]);
   });
 });
 
@@ -647,14 +961,17 @@ describe("GraphSource.read pagination", () => {
   test("follows @odata.nextLink and concatenates pages", async () => {
     const nextLink = "https://graph.microsoft.com/v1.0/me/calendarView?$skiptoken=abc";
     const fetchJson: FetchJson = async (_token, url) =>
-      url.includes("$skiptoken")
-        ? { value: [event({ id: "p2" })] }
-        : { value: [event({ id: "p1" })], "@odata.nextLink": nextLink };
+      new URL(url).pathname.endsWith("/me")
+        ? { mail: "me@example.com" }
+        : url.includes("$skiptoken")
+          ? { value: [event({ id: "p2" })] }
+          : { value: [event({ id: "p1" })], "@odata.nextLink": nextLink };
     const items = await graphSource({ fetchJson }, { kinds: ["event"] }).read(WINDOW);
     // `id` boxes aren't string-coercible for a value-sort anymore (default
     // Array#sort would coerce via the redacted toString(), making it a no-op) — sort
     // by unwrapped value so this stays an order-independent comparison.
-    expect(items.map((i) => unwrap((i as NormalizedItem).id)).sort()).toEqual(["p1", "p2"]);
+    expect(eventsOf(items).map((e) => e.fingerprint)).toHaveLength(2);
+    expect(new Set(eventsOf(items).map((e) => e.fingerprint)).size).toBe(2);
   });
 });
 
@@ -666,7 +983,7 @@ describe("GraphSource.read grouping ids", () => {
   test("calendar selects seriesMasterId", async () => {
     const { fetchJson, urls } = fakeFetch({ calendar: { value: [event()] } });
     await graphSource({ fetchJson }, { kinds: ["event"] }).read(WINDOW);
-    expect(urls[0]).toContain("seriesMasterId");
+    expect(urls.find((u) => u.includes("/calendarView"))).toContain("seriesMasterId");
   });
 
   test("mail selects conversationId in every folder", async () => {

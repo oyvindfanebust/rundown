@@ -6,12 +6,14 @@
 // itself lives in brief-contract.ts, the Zod source of truth.
 
 import {
+  eventBoundInstant,
   isRecord,
   type AnnotatedItem,
   type Attribution,
   type Brief,
   type Bucket,
   type Bundle,
+  type CalendarEvent,
   type Email,
   type Person,
 } from "./domain.ts";
@@ -105,7 +107,7 @@ function truncateField(value: string): string {
 /**
  * One bundle item as the Planner reads it: the NormalizedItem fields, unwrapped. A
  * typed record is mapped onto the same fields, so the Brief renders and cites it as it
- * did the NormalizedItem it replaces (#147). This mapping goes with the Planner (#150).
+ * did the NormalizedItem it replaces (#147, #148). This mapping goes with the Planner (#150).
  */
 interface ItemView {
   source: string;
@@ -122,13 +124,15 @@ interface ItemView {
 
 /**
  * Unwrap one bundle item for rendering and evidence resolution. This function and the
- * two Email readers below are where plan.ts, the sole unwrap site, unwraps (ADR-0004 §3).
+ * record readers below are where plan.ts, the sole unwrap site, unwraps (ADR-0004 §3).
  */
 function viewOf(item: AnnotatedItem): ItemView {
   if (isRecord(item)) {
     switch (item.type) {
       case "email":
         return emailView(item);
+      case "calendar-event":
+        return eventView(item);
     }
   }
   const view: ItemView = {
@@ -185,6 +189,48 @@ function emailView(m: Email): ItemView {
     attribution,
     extras,
   };
+}
+
+/** A person's display name, as the Graph source captioned event people before records. */
+function nameOf(p: Person): string | undefined {
+  if (p.name === undefined) return undefined;
+  const name = unwrap(p.name);
+  return name === "" ? undefined : name;
+}
+
+/**
+ * A {@link CalendarEvent} in the shape the Graph source gave an `event` NormalizedItem:
+ * no `where`, `who` leads with the organizer, then attendees, by display name only.
+ * `extras` keeps the old keys under the presence-is-signal policy, plus `rooms`, with
+ * `location` after them. An all-day event's dates become UTC-midnight bounds marked
+ * `dateOnly`, so it renders as before.
+ */
+function eventView(e: CalendarEvent): ItemView {
+  const organizer = nameOf(e.organizer);
+  const attendees = present(e.attendees.map(nameOf));
+  const rooms = e.rooms.map((r) => unwrap(r));
+  const who = [...new Set(present([organizer, ...attendees]))];
+  const extras: Record<string, unknown> = {};
+  if (organizer !== undefined) extras.organizer = organizer;
+  if (attendees.length > 0) extras.attendees = attendees;
+  if (rooms.length > 0) extras.rooms = rooms;
+  if (e.location !== undefined) extras.location = unwrap(e.location);
+  extras.showAs = e.showAs;
+  if (e.isAllDay) extras.allDay = true;
+  if (e.isCancelled) extras.cancelled = true;
+  extras.myResponse = e.myResponse;
+  const view: ItemView = {
+    source: e.source,
+    kind: "event",
+    timestamp: eventBoundInstant(e, e.start),
+    end: eventBoundInstant(e, e.end),
+    fingerprint: e.fingerprint,
+    title: unwrap(e.title),
+    extras,
+  };
+  if (e.isAllDay) view.dateOnly = true;
+  if (who.length > 0) view.attribution = { who };
+  return view;
 }
 
 /**

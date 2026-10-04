@@ -1,7 +1,12 @@
 import { test, expect, describe } from "bun:test";
 import { untrusted, unwrap } from "../src/trust.ts";
-import type { Bundle, Email } from "../src/domain.ts";
-import { emailRecord, type EmailSpec } from "../src/sources/normalize.ts";
+import type { Bundle, CalendarEvent, Email } from "../src/domain.ts";
+import {
+  calendarEventRecord,
+  emailRecord,
+  type CalendarEventSpec,
+  type EmailSpec,
+} from "../src/sources/normalize.ts";
 import { plan, renderBundle, type PlanDeps } from "../src/plan.ts";
 import type { SummarizerOutput } from "../src/brief-contract.ts";
 
@@ -821,6 +826,98 @@ describe("plan — Graph mail as Email records (#147)", () => {
         who: ["Carol", "Me"],
         quote: "confirm the launch date",
       },
+    ]);
+  });
+});
+
+// ── Graph calendar as typed CalendarEvent records (#148) ──
+//
+// Until the Digester replaces the Planner, the Brief renders and cites a CalendarEvent
+// as it did the old `event` item: same kind, span, who and extras keys. The url and
+// categories lines go; a rooms line joins, and location keeps only what it says beyond
+// the rooms.
+
+describe("plan — Graph calendar as CalendarEvent records (#148)", () => {
+  function meeting(over: Partial<CalendarEventSpec> = {}): CalendarEvent & { bucket: "recent" } {
+    const record = calendarEventRecord({
+      id: "e1",
+      groupId: "series-1",
+      continuesFromBefore: false,
+      isAllDay: false,
+      start: "2026-07-08T09:00:00Z",
+      end: "2026-07-08T09:30:00Z",
+      title: "Launch review",
+      organizer: { name: "Alice", handle: "alice@x.test", isMe: false },
+      isOrganizer: false,
+      attendees: [
+        { name: "Bob", handle: "bob@x.test", isMe: false, response: "accepted", optional: false },
+        { handle: "nameless@x.test", isMe: false, response: "none", optional: true },
+      ],
+      rooms: ["Fjord"],
+      myResponse: "tentativelyAccepted",
+      showAs: "busy",
+      isCancelled: false,
+      isOnlineMeeting: true,
+      recurring: true,
+      ...over,
+    });
+    return { ...record, bucket: "recent" };
+  }
+
+  test("renders a timed event as a graph/event item with its old lines", () => {
+    const rendered = renderText(bundle([meeting()]));
+    expect(rendered).toContain("- [1] [graph/event] Wed 2026-07-08T09:00:00Z – 2026-07-08T09:30:00Z");
+    for (const line of [
+      "  title: Launch review",
+      "  who: Alice, Bob",
+      "  organizer: Alice",
+      "  attendees: Bob",
+      "  rooms: Fjord",
+      "  showAs: busy",
+      "  myResponse: tentativelyAccepted",
+    ]) {
+      expect(rendered).toContain(line);
+    }
+    expect(rendered).not.toContain("url:");
+    expect(rendered).not.toContain("location:");
+    expect(rendered).not.toContain("where:");
+    expect(rendered).not.toContain("allDay:");
+    expect(rendered).not.toContain("cancelled:");
+    // Addresses never leave as captions on events.
+    expect(rendered).not.toContain("nameless@x.test");
+  });
+
+  test("renders an all-day event as its calendar dates and a cancelled one as cancelled", () => {
+    const rendered = renderBundle(
+      bundle([meeting({ isAllDay: true, start: "2026-07-07", end: "2026-07-10", isCancelled: true })]),
+      "America/New_York",
+    ).data;
+    expect(rendered).toContain("[graph/event] Tue 2026-07-07 – Thu 2026-07-09");
+    expect(rendered).toContain("  allDay: true");
+    expect(rendered).toContain("  cancelled: true");
+    expect(rendered).not.toContain("2026-07-06");
+  });
+
+  test("renders a free-text location after the rooms", () => {
+    const rendered = renderText(bundle([meeting({ location: "Café Fjord" })]));
+    expect(rendered).toContain("  rooms: Fjord\n  location: Café Fjord\n");
+  });
+
+  test("renders an event with an empty organizer without an organizer line", () => {
+    const rendered = renderText(bundle([meeting({ organizer: { isMe: false } })]));
+    expect(rendered).toContain("  who: Bob");
+    expect(rendered).not.toContain("organizer:");
+  });
+
+  test("cites an event with the old evidence shape and the record's fingerprint", async () => {
+    const record = meeting();
+    const output: SummarizerOutput = {
+      summary: "s",
+      items: [{ kind: "commitment", summary: "Launch review", evidence: [{ ref: 1, quote: "Launch review" }] }],
+    };
+    const brief = await plan(bundle([record]), CTX, fakeSummarizer(output));
+    expect(brief.items[0]!.evidence).toEqual([
+      { source: "graph/event", fingerprint: record.fingerprint, who: ["Alice", "Bob"], quote: "Launch review" },
     ]);
   });
 });

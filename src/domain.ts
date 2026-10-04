@@ -159,8 +159,57 @@ export interface Email extends RecordBase {
   inferenceClassification: "focused" | "other";
 }
 
-/** What a Source emits, discriminated on `type`. Calendar and chat records join it. */
-export type SourceRecord = Email;
+/** An attendee's answer to an invitation, as Graph's `responseStatus.response` spells it. */
+export type EventResponse =
+  | "none"
+  | "organizer"
+  | "tentativelyAccepted"
+  | "accepted"
+  | "declined"
+  | "notResponded";
+
+/** One person invited to an event, with their answer. Rooms and other resources are never attendees. */
+export interface Attendee extends Person {
+  response: EventResponse;
+  /** Graph attendee type `optional`; `required` reads as false. */
+  optional: boolean;
+}
+
+/** A calendar date, `YYYY-MM-DD`, validated by the source. */
+export type CalendarDate = string;
+
+/** One calendar event or one occurrence of a series in the window (Graph `calendarView`). */
+export interface CalendarEvent extends RecordBase {
+  type: "calendar-event";
+  source: "graph";
+  /** An all-day event's `start`/`end` are calendar dates; `end` is exclusive. */
+  isAllDay: boolean;
+  start: Instant | CalendarDate;
+  end: Instant | CalendarDate;
+  /** The series slot a moved exception was moved from. Absent on everything else. */
+  originalStart?: Instant;
+  title: Untrusted<string>;
+  /** Free-text place: what Graph's location says beyond the room names. Absent when nothing is left. */
+  location?: Untrusted<string>;
+  /** Graph's organizer. An absent one is a Person with no name and an empty handle. */
+  organizer: Person;
+  /** The user organizes this event: Graph's `isOrganizer`. */
+  isOrganizer: boolean;
+  /** People only: resource attendees and attendees that are one of the event's locations go to `rooms`. */
+  attendees: Attendee[];
+  /** Display names of the rooms booked for the event. A room without one is not listed. */
+  rooms: Untrusted<string>[];
+  myResponse: EventResponse;
+  showAs: "free" | "tentative" | "busy" | "oof" | "workingElsewhere" | "unknown";
+  isCancelled: boolean;
+  /** The event has an online meeting. The join URL is never read. */
+  isOnlineMeeting: boolean;
+  /** An occurrence or exception of a series. */
+  recurring: boolean;
+}
+
+/** What a Source emits, discriminated on `type`. Chat records join it. */
+export type SourceRecord = Email | CalendarEvent;
 
 /**
  * What the Aggregator carries while sources move to typed records: a NormalizedItem or
@@ -174,9 +223,20 @@ export function isRecord(item: BundleItem): item is SourceRecord {
   return "type" in item;
 }
 
+/** An event bound as an instant: itself, or UTC midnight of an all-day event's date. */
+export function eventBoundInstant(e: CalendarEvent, bound: Instant | CalendarDate): Instant {
+  return e.isAllDay ? `${bound}T00:00:00Z` : bound;
+}
+
 /** A bundle item's ordering instant: a record's own time, a NormalizedItem's `timestamp`. */
 export function instantOf(item: BundleItem): string {
-  return isRecord(item) ? item.at : item.timestamp;
+  if (!isRecord(item)) return item.timestamp;
+  switch (item.type) {
+    case "email":
+      return item.at;
+    case "calendar-event":
+      return eventBoundInstant(item, item.start);
+  }
 }
 
 /** The derived, structural-trusted temporal label on each bundled item (ADR-0003 §4). */

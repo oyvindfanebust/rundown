@@ -17,7 +17,7 @@
 // and the "who and where" invariant is spelled once rather than five times.
 
 import { createHash } from "node:crypto";
-import type { Attribution, Email, NormalizedItem, Person } from "../domain.ts";
+import type { Attendee, Attribution, CalendarEvent, Email, NormalizedItem, Person } from "../domain.ts";
 import { untrusted, untrustedOpt } from "../trust.ts";
 
 /**
@@ -279,5 +279,94 @@ export function emailRecord(spec: EmailSpec): Email {
     inferenceClassification: spec.inferenceClassification,
   };
   if (sentBy !== undefined) record.sentBy = sentBy;
+  return record;
+}
+
+/** One attendee as the source read them: a person spec plus the parsed answer and role. */
+export interface AttendeeSpec extends PersonSpec {
+  response: Attendee["response"];
+  optional: boolean;
+}
+
+/** The fields one calendar event hands the builder: parsed trusted values plus bare text. */
+export interface CalendarEventSpec {
+  /** Backend event id; digested into `fingerprint`, never kept. */
+  id: string | null | undefined;
+  /** Backend series id (`seriesMasterId`); digested into `entryKey`. Absent → the event is its own group. */
+  groupId?: string | null;
+  continuesFromBefore: boolean;
+  isAllDay: boolean;
+  /** An ISO instant, or a `YYYY-MM-DD` date when `isAllDay`. */
+  start: string;
+  end: string;
+  originalStart?: string;
+  title: string | null | undefined;
+  /** Free-text place, with the room names already taken out by the source. */
+  location?: string | null;
+  organizer: PersonSpec;
+  isOrganizer: boolean;
+  attendees: AttendeeSpec[];
+  /** Room display names. */
+  rooms: Array<string | null | undefined>;
+  myResponse: CalendarEvent["myResponse"];
+  showAs: CalendarEvent["showAs"];
+  isCancelled: boolean;
+  isOnlineMeeting: boolean;
+  recurring: boolean;
+}
+
+const CALENDAR_DATE = /^\d{4}-\d{2}-\d{2}$/;
+
+/** The calendar-date guard: `YYYY-MM-DD` that names a real day. Garbage fails hard, unechoed. */
+function calendarDate(v: string, field: string, source: string): string {
+  if (!CALENDAR_DATE.test(v) || Number.isNaN(Date.parse(v)) || new Date(v).toISOString().slice(0, 10) !== v) {
+    throw new Error(`Source "${source}" emitted a structural ${field} that is not a YYYY-MM-DD date.`);
+  }
+  return v;
+}
+
+/**
+ * Build one {@link CalendarEvent}. `start`/`end` must be strict ISO-8601 instants, or
+ * `YYYY-MM-DD` dates for an all-day event, and `id` must be present; anything else is
+ * backend garbage and fails hard (ADR-0007 §6), without echoing the value. Rooms with
+ * no label are dropped.
+ */
+export function calendarEventRecord(spec: CalendarEventSpec): CalendarEvent {
+  const source = "graph";
+  const rawId = String(spec.id ?? "");
+  if (rawId === "") throw new Error(`Source "${source}" emitted an event with no id.`);
+  const parseBound = (v: string, field: string) =>
+    spec.isAllDay ? calendarDate(v, field, source) : instant(v, field, source);
+  const rooms: string[] = [];
+  for (const raw of spec.rooms) {
+    const label = text(raw);
+    if (label !== undefined && !rooms.includes(label)) rooms.push(label);
+  }
+  const record: CalendarEvent = {
+    type: "calendar-event",
+    source,
+    // Digests the old NormalizedItem kind `event`, not the record type, so an event keeps
+    // the fingerprint it had before records.
+    fingerprint: fingerprintOf(source, "event", rawId),
+    // Domain-separated from the record digest, so a series key never equals an event key.
+    entryKey: fingerprintOf(source, "event-series", spec.groupId || rawId),
+    continuesFromBefore: spec.continuesFromBefore,
+    isAllDay: spec.isAllDay,
+    start: parseBound(spec.start, "event start"),
+    end: parseBound(spec.end, "event end"),
+    title: untrusted(text(spec.title) ?? "(no subject)"),
+    organizer: person(spec.organizer),
+    isOrganizer: spec.isOrganizer,
+    attendees: spec.attendees.map((a) => ({ ...person(a), response: a.response, optional: a.optional })),
+    rooms: rooms.map((r) => untrusted(r)),
+    myResponse: spec.myResponse,
+    showAs: spec.showAs,
+    isCancelled: spec.isCancelled,
+    isOnlineMeeting: spec.isOnlineMeeting,
+    recurring: spec.recurring,
+  };
+  const location = text(spec.location);
+  if (location !== undefined) record.location = untrusted(location);
+  if (spec.originalStart !== undefined) record.originalStart = instant(spec.originalStart, "event original start", source);
   return record;
 }

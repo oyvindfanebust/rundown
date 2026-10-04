@@ -2,7 +2,7 @@ import { test, expect, describe } from "bun:test";
 import { aggregate, bucketOf, AggregateError } from "../src/aggregate.ts";
 import { untrusted } from "../src/trust.ts";
 import { isRecord, type NormalizedItem, type Window } from "../src/domain.ts";
-import { emailRecord } from "../src/sources/normalize.ts";
+import { calendarEventRecord, emailRecord } from "../src/sources/normalize.ts";
 import type { Source, Sources } from "../src/sources/source.ts";
 import type { DebugEvent } from "../src/debug.ts";
 
@@ -38,6 +38,30 @@ describe("bucketOf", () => {
   // Once the normalizer rejects garbage, an unparseable timestamp reaching
   // bucketOf is a bug. Fail hard (ADR-0007 §6) instead of the old silent `recent`
   // fallback, which mislabelled rather than surfaced the error.
+  test("buckets a calendar event by its start, an all-day one by its start date", () => {
+    const event = (isAllDay: boolean, start: string, end: string) =>
+      calendarEventRecord({
+        id: start,
+        continuesFromBefore: false,
+        isAllDay,
+        start,
+        end,
+        title: "e",
+        organizer: { isMe: false },
+        isOrganizer: false,
+        attendees: [],
+        rooms: [],
+        myResponse: "none",
+        showAs: "busy",
+        isCancelled: false,
+        isOnlineMeeting: false,
+        recurring: false,
+      });
+    expect(bucketOf(event(true, "2026-07-03", "2026-07-07"), window, now)).toBe("standing");
+    expect(bucketOf(event(true, "2026-07-08", "2026-07-09"), window, now)).toBe("recent");
+    expect(bucketOf(event(false, "2026-07-09T09:00:00Z", "2026-07-09T10:00:00Z"), window, now)).toBe("upcoming");
+  });
+
   test("throws on a NaN timestamp instead of silently returning recent", () => {
     const bad = item("s", "e", "not-a-date", "x");
     expect(() => bucketOf(bad, window, now)).toThrow();

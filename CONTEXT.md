@@ -140,8 +140,8 @@ yet. It never writes back.
 Interface (see [ADR-0002](docs/adr/0002-source-abstraction.md)):
 
 - `read(window) → (NormalizedItem | SourceRecord)[]` — required. `window` is an absolute time
-  window (two ISO-8601 instants); the source maps it to its native time field. Graph mail returns
-  `Email` records; Graph calendar and Slack still return NormalizedItems
+  window (two ISO-8601 instants); the source maps it to its native time field. Graph returns
+  `Email` and `CalendarEvent` records; Slack still returns NormalizedItems
   ([ADR-0019](docs/adr/0019-typed-records.md)).
 - `status()` — required; reports readiness as a discriminated union
   `{ state: "ready" | "not-authenticated" | "not-configured" }` (identity on `ready`, a fix-it
@@ -158,8 +158,8 @@ environment. Sources register in a static map, `sources/registry.ts`
 ### typed record
 
 What a [Source](#source) emits in place of a [NormalizedItem](#normalizeditem): one record type per
-thing a backend holds, discriminated on `type`. `Email` (Graph mail) is built; `CalendarEvent`
-(Graph calendar) and `ChatMessage` (Slack) follow. Each carries `fingerprint` (a digest of the
+thing a backend holds, discriminated on `type`. `Email` (Graph mail) and `CalendarEvent` (Graph
+calendar) are built; `ChatMessage` (Slack) follows. Each carries `fingerprint` (a digest of the
 record's own backend id), `entryKey` (a digest of the group it belongs to: a mail
 `conversationId`, a Slack channel, a calendar series) and `continuesFromBefore`. Free text and ids
 stay boxed as [`Untrusted<T>`](#untrustedt); every unboxed field is a
