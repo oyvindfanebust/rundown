@@ -589,8 +589,13 @@ describe("GraphSource.read mail", () => {
 
   test("a 255-char subject survives whole to the label clamp", async () => {
     const subject = "S".repeat(255);
-    const items = await readMail({ inbox: { value: [message({ subject: `${subject}overflow` })] } });
+    const items = await readMail({ inbox: { value: [message({ subject })] } });
     expect(mailOf(items)[0]!.subject).toEqual(untrusted(subject));
+  });
+
+  test("a subject over 255 chars is cut to 255 ending in …", async () => {
+    const items = await readMail({ inbox: { value: [message({ subject: `${"S".repeat(255)}overflow` })] } });
+    expect(mailOf(items)[0]!.subject).toEqual(untrusted(`${"S".repeat(254)}…`));
   });
 
   test("selects every field the record needs", async () => {

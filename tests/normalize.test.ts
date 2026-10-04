@@ -42,8 +42,10 @@ describe("record builder", () => {
     expect(chat().byMe).toBe(false);
   });
 
-  test("message text truncates at BODY_MAX; absent text is empty, an absent handle is empty", () => {
-    expect(unwrap(chat({ text: "x".repeat(3_000) }).text)).toBe("x".repeat(BODY_MAX));
+  test("message text truncates at BODY_MAX with …[truncated]; absent text is empty, an absent handle is empty", () => {
+    const cut = unwrap(chat({ text: "x".repeat(3_000) }).text);
+    expect(cut).toBe(`${"x".repeat(1_988)}…[truncated]`);
+    expect(cut.length).toBe(BODY_MAX);
     expect(unwrap(chat({ text: undefined }).text)).toBe("");
     expect(unwrap(chat({ author: { name: "bot", isMe: false } }).author.handle)).toBe("");
   });
@@ -93,9 +95,16 @@ describe("structural instant validation", () => {
 });
 
 describe("text", () => {
-  test("caps free text at TEXT_MAX and passes short text through", () => {
-    expect(text("x".repeat(500))).toBe("x".repeat(TEXT_MAX));
+  test("caps free text at TEXT_MAX ending in … and passes short text through", () => {
+    expect(text("x".repeat(500))).toBe(`${"x".repeat(254)}…`);
+    expect(text("x".repeat(500))!.length).toBe(TEXT_MAX);
+    expect(text("x".repeat(TEXT_MAX))).toBe("x".repeat(255));
     expect(text("short")).toBe("short");
+  });
+
+  test("a long handle is cut without a mark, since it is a dedup key", () => {
+    const handle = unwrap(chat({ author: { name: "a", handle: "h".repeat(300), isMe: false } }).author.handle);
+    expect(handle).toBe("h".repeat(255));
   });
 
   test('empty, null, and undefined all vanish — "presence is signal"', () => {

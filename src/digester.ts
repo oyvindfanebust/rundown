@@ -37,7 +37,7 @@ import {
   type YourResponse,
 } from "./digest-contract.ts";
 import { label, NAME_MAX, TITLE_MAX } from "./label.ts";
-import { clamp, defang, oneLine, stripInvisible } from "./sanitize.ts";
+import { clamp, defang, oneLine, stripInvisible, TRUNCATION_MARKER } from "./sanitize.ts";
 import { summarize } from "./summarize.ts";
 import { zonedIso, zonedWeekday } from "./temporal.ts";
 import { unwrap } from "./trust.ts";
@@ -46,10 +46,8 @@ import { unwrap } from "./trust.ts";
 export const INPUT_BUDGET = 400_000;
 /** About this many chars of messages render per entry, newest first. */
 export const ENTRY_TEXT_MAX = 8_000;
-/** Longest single rendered message. */
+/** Longest single rendered message, the mark included. Equals the normalizer's BODY_MAX (see normalize.ts). */
 export const MESSAGE_TEXT_MAX = 2_000;
-
-const TRUNCATION_MARKER = "…[truncated]";
 
 export class DigestError extends Error {
   constructor(message: string) {
@@ -116,7 +114,7 @@ Write plain text: no links, no URLs, no markdown.`;
 // ── Rendering helpers ──
 
 function capField(text: string, max: number): string {
-  return text.length <= max ? text : `${text.slice(0, max)}${TRUNCATION_MARKER}`;
+  return clamp(text, max, TRUNCATION_MARKER);
 }
 
 function renderInstant(instant: string, tz: string): string {

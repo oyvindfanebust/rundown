@@ -70,14 +70,17 @@ export function oneLine(text: string): string {
 /** The mark a clamped string ends in. */
 export const ELLIPSIS = "…";
 
+/** The mark a cut message body or chat text ends in, so the Summarizer knows text is missing. */
+export const TRUNCATION_MARKER = "…[truncated]";
+
 /**
- * Cut `text` to at most `max` UTF-16 units, ending in "…" when it was cut. A surrogate pair
- * is never split.
+ * Cut `text` to at most `max` UTF-16 units, the `mark` included, ending in `mark` (default
+ * "…") when it was cut. A surrogate pair is never split.
  */
-export function clamp(text: string, max: number): string {
+export function clamp(text: string, max: number, mark = ELLIPSIS): string {
   if (text.length <= max) return text;
-  let end = max - ELLIPSIS.length;
+  let end = max - mark.length;
   const last = text.charCodeAt(end - 1);
   if (last >= 0xd800 && last <= 0xdbff) end -= 1;
-  return `${text.slice(0, end)}${ELLIPSIS}`;
+  return `${text.slice(0, end)}${mark}`;
 }

@@ -126,7 +126,8 @@ input, joins the model's output, and copies every trusted value and label into t
   entry ids in the digest are the `entryKey` digests (ADR-0020 §5), which the model never sees.
 - **Rendering.** Each mail and chat entry renders as a block under its opaque id: trusted metadata
   (counts, times, `lastFromYou`, `continuesFromBefore`) and its newest messages up to about 8,000
-  chars, each message capped at 2,000. Older messages become one line, "N earlier messages in the
+  chars, each message capped at 2,000; a cut message ends in "…[truncated]", whether the
+  normalizer or the Digester cut it. Older messages become one line, "N earlier messages in the
   window not shown", and the entry carries a trusted `truncated` count. Meetings render as context
   for the overview only. Timezone and weekday rendering and date-only handling move here from the
   Planner.

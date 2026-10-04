@@ -526,6 +526,17 @@ describe("digest — chat caps", () => {
     // Chat text is no longer cut at the 255-char record cap: a 404-char message renders whole.
     expect(calls[0]!.data).toContain(`49:${"t".repeat(400)}`);
   });
+
+  test("a 3,000-char message renders to the model cut, with …[truncated]", async () => {
+    const { calls } = await run([chat({ text: "t".repeat(3_000) })]);
+    expect(calls[0]!.data).toContain("t…[truncated]");
+  });
+
+  test("a long message whose whitespace collapses on one line still shows …[truncated]", async () => {
+    const text = Array.from({ length: 30 }, (_, i) => `${i}:${"p".repeat(95)}`).join("\n\n");
+    const { calls } = await run([chat({ text })]);
+    expect(calls[0]!.data).toContain("…[truncated]");
+  });
 });
 
 describe("digest — the call", () => {
@@ -586,5 +597,15 @@ describe("digest — labels", () => {
   test("names clamp at 120", async () => {
     const { result } = await run([mail({ from: { name: "N".repeat(200), handle: "n@x.test", isMe: false } })]);
     expect(result.mail[0]!.lastFrom).toBe(`${"N".repeat(119)}…`);
+  });
+
+  test("a 300-char mail subject read through the normalizer emits a 255-char label ending in …", async () => {
+    const { result } = await run([mail({ subject: "s".repeat(300) })]);
+    expect(result.mail[0]!.subject).toBe(`${"s".repeat(254)}…`);
+  });
+
+  test("a subject over 255 whose whitespace collapses still ends in …", async () => {
+    const { result } = await run([mail({ subject: `${"a ".repeat(100)}\n\n\n${"b".repeat(100)}` })]);
+    expect(result.mail[0]!.subject.endsWith("…")).toBe(true);
   });
 });

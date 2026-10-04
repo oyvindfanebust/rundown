@@ -226,7 +226,10 @@ interface ChatMessage extends RecordBase {
   brands, truncates and validates records. Its free-text cap
   (`TEXT_MAX`) rises from 200 to 255, so a subject of Outlook's full length survives to the label
   clamp. A mail body and a chat message's text keep up to 2,000 chars (`BODY_MAX`), the most the
-  Digester renders per message ([ADR-0021](0021-the-digest.md)).
+  Digester renders per message ([ADR-0021](0021-the-digest.md)). The normalizer marks its own
+  cuts, within the cap: free text ends in "…" and a body in "…[truncated]". Its caps equal the
+  downstream ones, so `label()` and the Digester never see text over their limit; the mark is
+  what keeps a cut visible (#141).
 
 ## Consequences
 

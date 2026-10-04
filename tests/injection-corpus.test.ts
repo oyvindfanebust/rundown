@@ -333,7 +333,8 @@ describe("injection corpus: 6. oversized payloads", () => {
   test.each(CARRIERS)("a >2,000-char hostile %s arrives truncated at the transport", async (_carrier, build) => {
     expect(oversized.length).toBeGreaterThan(2_000);
     const { userContent } = await assembled([build(oversized)]);
-    expect(userContent).toContain(`${oversized.slice(0, 2_000)}…[truncated]`);
+    // 2,000 chars in all: 1,988 of the payload, then the 12-char mark.
+    expect(userContent).toContain(`${oversized.slice(0, 1_988)}…[truncated]`);
     expect(userContent).not.toContain(oversized);
   });
 

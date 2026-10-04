@@ -1,6 +1,6 @@
 // The normalizer: the record builders every Source hands its parsed fields to
 // (ADR-0019 §6). It owns branding (every free-text field and id boxed Untrusted),
-// truncation of free text to TEXT_MAX, the digests (`fingerprint`, `entryKey`), and
+// marked truncation of free text, the digests (`fingerprint`, `entryKey`), and
 // validating the structural instants, the one check that can throw: a non-ISO instant
 // is backend garbage and fails hard here (ADR-0007 §6) rather than sliding through as a
 // trusted string. No I/O. It is the sole trust.ts importer among sources and the only
@@ -10,10 +10,20 @@
 
 import { createHash } from "node:crypto";
 import type { Attendee, CalendarEvent, ChatMessage, Conversation, Email, Person } from "../domain.ts";
+import { clamp, ELLIPSIS, TRUNCATION_MARKER } from "../sanitize.ts";
 import { untrusted, untrustedOpt } from "../trust.ts";
 
+// The normalizer marks its own cuts. Its caps equal the downstream ones (TEXT_MAX is
+// label.ts's TITLE_MAX, BODY_MAX is the Digester's MESSAGE_TEXT_MAX), so a downstream cap
+// never sees text over its limit and cannot add a mark itself. A margin would not fix that:
+// the Digester and label() collapse whitespace first, which can pull a cut text back under
+// the cap. So a cut here ends in "…" (free text) or "…[truncated]" (bodies), the cut text
+// including the mark stays within the cap, and the mark survives both downstream steps
+// (it has no whitespace, and a downstream re-cut adds its own). The constants may then
+// coincide or differ freely; any cut, here or downstream, stays visible (#141).
+
 /**
- * Max length for a free-text field (title / subject / preview / …). 255 so a subject of
+ * Max length for a free-text field (title / subject / name / …). 255 so a subject of
  * Outlook's full length survives to the label clamp (#141).
  */
 export const TEXT_MAX = 255;
@@ -25,13 +35,14 @@ export const TEXT_MAX = 255;
 export const BODY_MAX = 2_000;
 
 /**
- * The free-text marker (grilled design): truncate to {@link TEXT_MAX},
- * and let absence collapse — `""`/`null`/`undefined` → `undefined`, so compaction
- * can treat presence as signal.
+ * The free-text marker (grilled design): truncate to `max` (default {@link TEXT_MAX}),
+ * ending in `mark` when cut, and let absence collapse — `""`/`null`/`undefined` →
+ * `undefined`, so compaction can treat presence as signal. Pass `mark = ""` for an
+ * identifier that must not change shape.
  */
-export function text(v: string | null | undefined, max = TEXT_MAX): string | undefined {
+export function text(v: string | null | undefined, max = TEXT_MAX, mark = ELLIPSIS): string | undefined {
   if (v === null || v === undefined || v === "") return undefined;
-  return v.slice(0, max);
+  return clamp(v, max, mark);
 }
 
 /**
@@ -105,7 +116,8 @@ export interface PersonSpec {
 export function person(spec: PersonSpec): Person {
   return {
     name: untrustedOpt(text(spec.name)),
-    handle: untrusted(text(spec.handle) ?? ""),
+    // A handle is a dedup key, never shown: cut without a mark.
+    handle: untrusted(text(spec.handle, TEXT_MAX, "") ?? ""),
     isMe: spec.isMe,
   };
 }
@@ -157,7 +169,7 @@ export function emailRecord(spec: EmailSpec): Email {
     to: spec.to.map(person),
     cc: spec.cc.map(person),
     byMe: from.isMe || sentBy?.isMe === true,
-    body: untrusted(text(spec.body, BODY_MAX) ?? ""),
+    body: untrusted(text(spec.body, BODY_MAX, TRUNCATION_MARKER) ?? ""),
     importance: spec.importance,
     isRead: spec.isRead,
     flagged: spec.flagged,
@@ -214,7 +226,7 @@ export function chatMessageRecord(spec: ChatMessageSpec): ChatMessage {
     author,
     byMe: author.isMe,
     mentionsMe: spec.mentionsMe,
-    text: untrusted(text(spec.text, BODY_MAX) ?? ""),
+    text: untrusted(text(spec.text, BODY_MAX, TRUNCATION_MARKER) ?? ""),
   };
 }
 
