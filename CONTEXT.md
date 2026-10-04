@@ -259,7 +259,7 @@ The component that turns a [Bundle](#bundle) into a [digest](#digest)
 [digest entries](#digest-entry), renders the mail and chat entries (and the meetings, as context
 for the overview) under opaque per-run ids, makes the one [Summarizer](#summarizer) call for the
 window, joins the returned summaries back onto the entries by id, and copies trusted values and
-labels into each entry by code. A window whose rendered data exceeds 400,000 chars fails before the
+labels into each entry by code. A window whose rendered data exceeds 800,000 chars fails before the
 call; an empty bundle makes no call. Grouping reads untrusted content (mail threads merge on sender
 and subject), so it lives here, at one of the two places untrusted bytes are unwrapped, and the
 [Aggregator](#aggregator) stays content-blind. It fails hard on Summarizer failure.

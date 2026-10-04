@@ -73,7 +73,7 @@ export interface Email extends RecordBase {
   cc: Person[];
   /** The user wrote it: `from.isMe || sentBy?.isMe`. */
   byMe: boolean;
-  /** `bodyPreview`. Summarizer input only. */
+  /** `uniqueBody` as text, or `bodyPreview` without one. Summarizer input only. */
   body: Untrusted<string>;
   importance: "low" | "normal" | "high";
   isRead: boolean;

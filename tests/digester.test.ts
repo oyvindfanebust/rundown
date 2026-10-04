@@ -601,15 +601,27 @@ describe("digest — the call", () => {
     expect(fake.calls[0]!.data).not.toContain("Generated at");
   });
 
-  test("a window over the 400,000-char budget fails before any call", async () => {
-    const records = Array.from({ length: 1_800 }, (_, i) =>
-      mail({ id: `m${i}`, groupId: `t${i}`, subject: `S${i}`, body: "y".repeat(250) }),
+  test("a window over the 800,000-char budget fails before any call", async () => {
+    const records = Array.from({ length: 400 }, (_, i) =>
+      mail({ id: `m${i}`, groupId: `t${i}`, subject: `S${i}`, body: "y".repeat(2_000) }),
     );
     const fake = fakeSummarizer();
     const attempt = digest(bundle(records), CTX, { summarize: fake.summarize });
     await expect(attempt).rejects.toBeInstanceOf(DigestError);
-    await expect(attempt).rejects.toThrow(/^The window has 1,800 entries \([\d,]+ chars\); the limit is 400,000\. Use a shorter window\.$/);
+    await expect(attempt).rejects.toThrow(/^The window has 400 entries \([\d,]+ chars\); the limit is 800,000\. Use a shorter window\.$/);
     expect(fake.calls).toHaveLength(0);
+  });
+
+  test("a 500,000-char window is under the budget and reaches the Summarizer", async () => {
+    // A one-message mail entry with a 2,000-char body renders to about 2,160 chars.
+    const records = Array.from({ length: 231 }, (_, i) =>
+      mail({ id: `m${i}`, groupId: `t${i}`, subject: `S${i}`, body: "y".repeat(2_000) }),
+    );
+    const fake = fakeSummarizer();
+    await digest(bundle(records), CTX, { summarize: fake.summarize });
+    expect(fake.calls).toHaveLength(1);
+    expect(fake.calls[0]!.data.length).toBeGreaterThan(490_000);
+    expect(fake.calls[0]!.data.length).toBeLessThan(510_000);
   });
 
   test("entry ids are stable across two runs and independent of order", async () => {

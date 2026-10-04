@@ -95,11 +95,12 @@ function graphGet(debug: DebugSink = noDebug, sleep = realSleep): FetchJson {
     const u = new URL(url);
     for (let attempt = 0; ; attempt++) {
       // IdType="ImmutableId" (ADR-0018): backend ids survive folder moves, so a mail
-      // item's fingerprint is durable across inbox → archive.
+      // item's fingerprint is durable across inbox → archive. body-content-type="text"
+      // returns a mail's uniqueBody as plain text rather than HTML.
       const r = await fetch(url, {
         headers: {
           Authorization: `Bearer ${token}`,
-          Prefer: 'outlook.timezone="UTC", IdType="ImmutableId"',
+          Prefer: 'outlook.timezone="UTC", IdType="ImmutableId", outlook.body-content-type="text"',
         },
       });
       debug({ kind: "http", source: "graph", method: "GET", host: u.host, pathShape: u.pathname, status: r.status });
@@ -162,6 +163,8 @@ interface GraphMessage {
   toRecipients?: GraphRecipient[];
   ccRecipients?: GraphRecipient[];
   bodyPreview?: string;
+  /** The body without quoted history; plain text under the `outlook.body-content-type` preference. */
+  uniqueBody?: { content?: string };
   importance?: unknown;
   isRead?: unknown;
   hasAttachments?: unknown;
@@ -403,7 +406,7 @@ async function readMailFolder(
 ): Promise<GraphMessage[]> {
   return (await paginate(fetchJson, token, `/me/mailFolders/${folder}/messages`, {
     $filter: `${timeField} ge ${window.from} and ${timeField} lt ${window.to}`,
-    $select: `id,conversationId,conversationIndex,subject,from,sender,toRecipients,ccRecipients,${timeField},bodyPreview,importance,isRead,hasAttachments,flag,inferenceClassification`,
+    $select: `id,conversationId,conversationIndex,subject,from,sender,toRecipients,ccRecipients,${timeField},uniqueBody,bodyPreview,importance,isRead,hasAttachments,flag,inferenceClassification`,
     $orderby: timeField,
     $top: "50",
   })) as GraphMessage[];
@@ -432,7 +435,9 @@ function toEmail(
     sentBy: m.sender !== undefined && addressKey(m.sender) !== addressKey(m.from) ? personOf(m.sender, me) : undefined,
     to: (m.toRecipients ?? []).map((r) => personOf(r, me)),
     cc: (m.ccRecipients ?? []).map((r) => personOf(r, me)),
-    body: m.bodyPreview,
+    // The reply without quoted history; the 255-char preview when Graph sends none or an empty one.
+    // emailRecord caps it at BODY_MAX, so a long body never enters the pipeline.
+    body: m.uniqueBody?.content || m.bodyPreview,
     importance: importanceOf(m.importance),
     isRead: m.isRead !== false,
     flagged: m.flag?.flagStatus === "flagged",

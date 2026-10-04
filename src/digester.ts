@@ -43,7 +43,7 @@ import { zonedIso, zonedWeekday } from "./temporal.ts";
 import { unwrap } from "./trust.ts";
 
 /** Most chars of rendered data one Summarizer call takes, after the entry caps. */
-export const INPUT_BUDGET = 400_000;
+export const INPUT_BUDGET = 800_000;
 /** About this many chars of messages render per entry, newest first. */
 export const ENTRY_TEXT_MAX = 8_000;
 /** Longest single rendered message, the mark included. Equals the normalizer's BODY_MAX (see normalize.ts). */

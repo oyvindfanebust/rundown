@@ -139,7 +139,13 @@ Mail:
 - `entryKey` digests `conversationId`. `continuesFromBefore` is set when the message's
   `conversationIndex` is longer than its 22-byte header, which means the thread started before
   this message.
-- `body` is `bodyPreview`.
+- `body` is `uniqueBody`, the message without its quoted history, read as plain text through
+  `outlook.body-content-type="text"` in the `Prefer` header, and `bodyPreview` when Graph sends no
+  `uniqueBody` or an empty one. The normalizer caps it at `BODY_MAX` (2,000 chars), the most the
+  Digester renders per message, so a long body never enters the pipeline. Measured on live data
+  (#141): 53–60% of `bodyPreview` values hit Graph's 255-char limit (median 255), while plain-text
+  `uniqueBody` has a median of 1,000–2,000 chars, a p90 of 15,000–17,000 and a maximum of about
+  180,000. Graph returns `contentType` `text` for it on the message list.
 
 Calendar:
 

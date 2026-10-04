@@ -210,7 +210,7 @@ Residual strains are downstream, not abstraction-breakers:
 - Source-implementation details (out of scope here): thread-vs-message granularity (Slack);
   title synthesis plus transcript truncation (Claude Code, where a session has no natural title, and
   transcripts are large, so `read` synthesizes a `title` and truncates content into `extras`,
-  as `graph` already truncates `bodyPreview`).
+  as `graph` already truncates the mail body).
 - Aggregation concern ([ADR-0003](0003-aggregation-model.md)): standing/recent/upcoming
   bucketing is derived, not a core field. The Aggregator knows the requested window, so it
   buckets each item by

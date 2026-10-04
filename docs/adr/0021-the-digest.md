@@ -131,9 +131,14 @@ input, joins the model's output, and copies every trusted value and label into t
   window not shown", and the entry carries a trusted `truncated` count. Meetings render as context
   for the overview only. Timezone and weekday rendering and date-only handling move here from the
   Planner.
-- **Input budget.** The rendered data, after the entry caps, may be at most 400,000 chars. Over it,
-  the run fails before any Summarizer call with "The window has N entries (M chars); the limit is
-  400,000. Use a shorter window." A real week measures about 150 entries and 240,000 chars.
+- **Input budget.** The rendered data, after the entry caps, may be at most 800,000 chars, about
+  444,000 tokens of Sonnet 5's 1M context. Over it, the run fails before any Summarizer
+  call with "The window has N entries (M chars); the limit is 800,000. Use a shorter window." The
+  budget is about twice a busy week. Measured on live data when mail bodies moved from Graph's
+  `bodyPreview` to `uniqueBody` (#141): 53–60% of previews hit Graph's 255-char limit, so the
+  Summarizer saw only the start of most mails; a week's rendered data was 176,000 chars on
+  previews and 279,000–293,000 chars on `uniqueBody`, after the entry caps. The budget was 400,000
+  before the switch.
 - **One Summarizer call per window.** The trusted instruction region carries `generatedAt`, the
   timezone and one overview prompt for every window: describe what happened before `generatedAt`
   and what is scheduled after it, and do not judge what is still open. `REVIEW_TASK` and

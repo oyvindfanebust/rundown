@@ -598,6 +598,33 @@ describe("GraphSource.read mail", () => {
     expect(mailOf(items)[0]!.subject).toEqual(untrusted(`${"S".repeat(254)}…`));
   });
 
+  test("the body is the message's uniqueBody text, not its preview", async () => {
+    const items = await readMail({
+      inbox: { value: [message({ uniqueBody: { contentType: "text", content: "The full reply." } })] },
+    });
+    expect(mailOf(items)[0]!.body).toEqual(untrusted("The full reply."));
+  });
+
+  test("a long uniqueBody is capped at 2,000 chars", async () => {
+    const items = await readMail({
+      inbox: { value: [message({ uniqueBody: { contentType: "text", content: "b".repeat(5_000) } })] },
+    });
+    expect(mailOf(items)[0]!.body).toEqual(untrusted("b".repeat(2_000)));
+  });
+
+  test("a missing or empty uniqueBody falls back to the preview", async () => {
+    const items = await readMail({
+      inbox: {
+        value: [
+          message({ id: "a", subject: "missing", bodyPreview: "Preview A" }),
+          message({ id: "b", subject: "empty", bodyPreview: "Preview B", uniqueBody: { contentType: "text", content: "" } }),
+        ],
+      },
+    });
+    expect(bySubject(items, "missing").body).toEqual(untrusted("Preview A"));
+    expect(bySubject(items, "empty").body).toEqual(untrusted("Preview B"));
+  });
+
   test("selects every field the record needs", async () => {
     const { fetchJson, urls } = fakeFetch({ inbox: { value: [message()] } });
     await graphSource({ fetchJson }, { kinds: ["message"] }).read(WINDOW);
@@ -613,6 +640,8 @@ describe("GraphSource.read mail", () => {
         "hasAttachments",
         "flag",
         "inferenceClassification",
+        "uniqueBody",
+        "bodyPreview",
       ]) {
         expect(select).toContain(field);
       }
@@ -891,7 +920,7 @@ describe("GraphSource.read request headers", () => {
     globalThis.fetch = realFetch;
   });
 
-  test("every request prefers UTC timezone and immutable ids", async () => {
+  test("every request prefers UTC timezone, immutable ids and plain-text bodies", async () => {
     const headers: Record<string, string>[] = [];
     globalThis.fetch = (async (_url: string, init?: { headers?: Record<string, string> }) => {
       headers.push(init?.headers ?? {});
@@ -901,7 +930,7 @@ describe("GraphSource.read request headers", () => {
     await new GraphSource({}, { auth: fakeAuth() }).read(WINDOW);
     expect(headers.length).toBeGreaterThan(0);
     for (const h of headers) {
-      expect(h.Prefer).toBe('outlook.timezone="UTC", IdType="ImmutableId"');
+      expect(h.Prefer).toBe('outlook.timezone="UTC", IdType="ImmutableId", outlook.body-content-type="text"');
     }
   });
 });
