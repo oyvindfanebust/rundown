@@ -200,16 +200,24 @@ interface Built<T> {
   sortKey: number;
 }
 
-const SUBJECT_PREFIX = /^(\s*(re|fw|fwd)\s*:\s*)+/i;
+const SUBJECT_PREFIX = /^(\s*(re|fw|fwd|sv|vs)\s*:\s*)+/i;
+/** The placeholder `emailRecord` (src/sources/normalize.ts) stores for an empty or missing subject. */
+const NO_SUBJECT = "(no subject)";
 
-/** A subject for the merge: "Re:"/"Fw:" prefixes stripped, whitespace collapsed, case folded. */
+/**
+ * A subject for the merge: "Re:"/"Fw:" prefixes and their Norwegian forms "SV:"/"VS:" stripped,
+ * whitespace collapsed, case folded.
+ */
 function mergeSubject(subject: string): string {
   return oneLine(subject.replace(SUBJECT_PREFIX, "")).toLowerCase();
 }
 
 /**
  * Mail entries: one per thread (`entryKey`), with threads whose earliest message has the same
- * sender address and the same subject (ignoring "Re:"/"Fw:") merged into the earliest thread.
+ * sender address and the same subject (as `mergeSubject` folds it) merged into the earliest
+ * thread. A thread whose earliest message is by the user, or has an empty or missing subject,
+ * never merges. The check is per thread: a thread the user sent from a shared address is its own
+ * entry while that address's other threads still merge.
  */
 function groupMail(emails: Email[]): Email[][] {
   const threads = new Map<string, Email[]>();
@@ -225,7 +233,12 @@ function groupMail(emails: Email[]): Email[][] {
   for (const thread of ordered) {
     const first = thread[0]!;
     const sender = unwrap(first.from.handle).toLowerCase();
-    const key = sender === "" ? undefined : `${sender}\n${mergeSubject(unwrap(first.subject))}`;
+    const subject = mergeSubject(unwrap(first.subject));
+    // Two mails the user sent with one subject, or two mails with no subject, are separate
+    // mails, not a repeated notice.
+    const key = sender === "" || first.byMe || subject === "" || subject === NO_SUBJECT
+      ? undefined
+      : `${sender}\n${subject}`;
     const existing = key === undefined ? undefined : merged.get(key);
     if (existing) {
       existing.push(thread);

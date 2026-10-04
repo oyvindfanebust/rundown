@@ -193,6 +193,47 @@ describe("digest — mail", () => {
     expect(result.counts.mail).toEqual({ records: 4, entries: 2 });
   });
 
+  test("separate threads you sent with the same subject stay separate entries", async () => {
+    const { result } = await run([
+      mail({ id: "s1", groupId: "conv-a", folder: "sent", from: ME, to: [ADA], subject: "Status" }),
+      mail({ id: "s2", groupId: "conv-b", at: "2026-07-08T09:00:00Z", folder: "sent", from: ME, to: [BOB], subject: "Status" }),
+    ]);
+    expect(result.mail).toHaveLength(2);
+    expect(result.mail.every((m) => m.threads === undefined)).toBe(true);
+  });
+
+  test("a thread you sent from a shared address stays its own entry; that address's other threads still merge", async () => {
+    const SHARED = { name: "Team", handle: "team@x.test", isMe: false };
+    const { result } = await run([
+      mail({ id: "t1", groupId: "conv-a", folder: "sent", from: SHARED, sentBy: ME, subject: "Notice" }),
+      mail({ id: "t2", groupId: "conv-b", at: "2026-07-08T09:00:00Z", from: SHARED, subject: "Notice" }),
+      mail({ id: "t3", groupId: "conv-c", at: "2026-07-09T09:00:00Z", from: SHARED, subject: "Notice" }),
+    ]);
+    expect(result.mail).toHaveLength(2);
+    expect(result.mail.map((m) => m.threads ?? 1).sort()).toEqual([1, 2]);
+  });
+
+  test("threads with an empty or missing subject from one sender stay separate entries", async () => {
+    const { result } = await run([
+      mail({ id: "e1", groupId: "conv-a", subject: "" }),
+      mail({ id: "e2", groupId: "conv-b", at: "2026-07-08T09:00:00Z", subject: null }),
+      mail({ id: "e3", groupId: "conv-c", at: "2026-07-09T09:00:00Z", subject: undefined }),
+      mail({ id: "e4", groupId: "conv-d", at: "2026-07-10T09:00:00Z", subject: "Re: " }),
+    ]);
+    expect(result.mail).toHaveLength(4);
+    expect(result.mail.every((m) => m.threads === undefined)).toBe(true);
+  });
+
+  test("Norwegian SV: and VS: prefixes are ignored by the merge", async () => {
+    const { result } = await run([
+      mail({ id: "n1", groupId: "conv-a", subject: "Foo" }),
+      mail({ id: "n2", groupId: "conv-b", at: "2026-07-08T09:00:00Z", subject: "SV: Foo" }),
+      mail({ id: "n3", groupId: "conv-c", at: "2026-07-09T09:00:00Z", subject: "vs: Sv: foo" }),
+    ]);
+    expect(result.mail).toHaveLength(1);
+    expect(result.mail[0]!.threads).toBe(3);
+  });
+
   test("bulk when every message not by you is in Other; a sent message does not break it", async () => {
     const { result } = await run([
       mail({ id: "a", inferenceClassification: "other" }),

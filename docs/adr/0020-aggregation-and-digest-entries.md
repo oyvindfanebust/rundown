@@ -59,9 +59,14 @@ content and belongs to the Digester (§4).
 An entry is one group of the window's records:
 
 - **Mail:** one thread per `conversationId`. Threads whose earliest message has the same sender
-  address and the same subject, with leading "Re:" and "Fw:" prefixes ignored, merge into one
-  entry. The entry's `threads` counts the merged threads, and the entry takes the earliest
-  thread's id. A notice sent eleven times in a week is one entry with `threads: 11`.
+  address and the same subject, with leading "Re:" and "Fw:" prefixes and their Norwegian forms
+  "SV:" and "VS:" ignored, merge into one entry. The entry's `threads` counts the merged threads,
+  and the entry takes the earliest thread's id. A notice sent eleven times in a week is one entry
+  with `threads: 11`. A thread whose earliest message is by the user, or whose subject is empty
+  or missing, never merges: two mails the user sent with one subject, possibly to different
+  people, are separate mails, and so are two subject-less mails from one sender. The check is
+  per thread, so a thread the user sent from a shared address is its own entry while that address's
+  other threads still merge.
 - **Chat:** one conversation per Slack channel id over the window: a DM, a group DM or a channel.
 - **Meetings:** one entry per recurring series (`seriesMasterId`), listing its occurrences in the
   window, or one entry per one-off event.
