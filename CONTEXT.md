@@ -334,11 +334,13 @@ confinement of leaked content).
 ### digest entry
 
 Planned, not yet built (map [#117](https://github.com/oyvindfanebust/rundown/issues/117)). One
-line in the digest: one conversation or calendar commitment, grouping the typed records that
-belong to it within the window. A mail thread, a Slack conversation (DM, group DM or channel) over
-the whole window, a recurring calendar series with its occurrences, or a one-off event. Only
-records inside the window belong to an entry; one that began earlier is flagged as continuing,
-not extended backwards. The unit is the same whatever the window's length.
+flat object in the digest: one conversation or calendar commitment, grouping the typed records
+that belong to it within the window. A mail thread (merged with any others the same sender started
+under the same subject), a Slack conversation (DM, group DM or channel) over the whole window, a
+recurring calendar series with its occurrences, or a one-off event. Only records inside the window
+belong to an entry; one that began earlier is flagged as continuing, not extended backwards. The
+unit is the same whatever the window's length. An entry that needs the user carries
+[attention](#attention).
 _Avoid_: digest item (collides with [ExtractedItem](#extracteditem)), message, event (those are records).
 
 ### Emission
