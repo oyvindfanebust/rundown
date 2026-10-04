@@ -16,7 +16,6 @@
   "dependencies": {
     "@anthropic-ai/sdk": "^0.110.0",
     "@azure/msal-node": "^2.16.2",
-    "@linear/sdk": "^88.1.0",
     "zod": "^4.4.3"
   },
   "devDependencies": {

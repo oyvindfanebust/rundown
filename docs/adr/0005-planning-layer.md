@@ -1,6 +1,12 @@
 # ADR 0005 — The Planner and Summarizer components
 
-**Status:** Accepted
+**Status:** Retired ([#117](https://github.com/oyvindfanebust/rundown/issues/117))
+
+Removed in [#150](https://github.com/oyvindfanebust/rundown/issues/150): the digest replaces the
+Brief, and the consuming session plans. The Planner, plan items, evidence, `ExtractedItem`,
+`guidance` and `windowIsPast` are gone. The Summarizer survives, generic and tool-less, with its
+hardening, retries and model parameters. The Digester takes over bundle rendering, the empty-bundle
+short-circuit and the trusted top-level fields the envelope carried. Both are in [ADR-0021](0021-the-digest.md). The rest of this ADR is the record of the removed design.
 
 Builds directly on the aggregation model ([ADR-0003](0003-aggregation-model.md)) and the trust
 boundary ([ADR-0004](0004-trust-boundary-enforcement.md)), and pins the Summarizer contract.

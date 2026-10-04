@@ -4,7 +4,6 @@
 // primitive, not a domain noun.
 
 import type { Untrusted } from "./trust.ts";
-import type { BriefItem } from "./brief-contract.ts";
 
 /** An absolute time window: two ISO-8601 instants. `to` is exclusive. */
 export interface Window {
@@ -12,102 +11,177 @@ export interface Window {
   to: string;
 }
 
+// ── Typed records (ADR-0019) ──
+//
+// What a Source emits, one record type per thing a backend holds. Free text and ids stay
+// boxed as `Untrusted<T>`. Every unboxed field is a trusted value: a number, instant,
+// boolean, closed enum or digest, parsed by the source and dropped (or defaulted, for a
+// required enum or flag) when the parse fails.
+
+/** An ISO-8601 instant, validated by the source as the normalizer's `instant()` does. */
+export type Instant = string;
+
+/** A 16-hex-char truncated SHA-256 of rundown-chosen inputs. Carries no backend bytes. */
+export type Hash = string;
+
 /**
- * Who and where — the attribution every source has, under a different name each time
- * (#54). Before this, `where`/`who` were buried in `extras` under five vocabularies
- * (`folder`, `project`+`team`, `channel`+`counterpart`, `projectPath`+`gitBranch`),
- * so the Brief had nothing uniform to carry and the model was asked for attribution
- * prose it could get wrong.
- *
- * Two ideas make it work:
- *
- * 1. Uniform slot, source-specific wording. Each source writes its own honest label
- *    into `where` — Slack decides between "#flow-mgmt" and "DM with Ada Lovelace",
- *    Linear decides whether the locus is the project or the team. The container is
- *    not forced into a shared vocabulary it does not have.
- * 2. It splits the two audiences `extras` used to serve at once. `attribution` is
- *    human-facing: pre-formatted labels, code-copied into Brief evidence, never
- *    model-supplied. `extras` stays the summarizer's clustering material — ids,
- *    states, flags, roles. A `channel.id` in `extras` and a `where` of "#flow-mgmt"
- *    are not duplication: one is a join key, the other is a caption.
- *
- * Untrusted like every other backend-controlled field: display names and channel
- * names are source bytes, so they are branded here and defanged on the way out.
- * Code-copied means unfabricated, not trusted.
+ * One person as one source sees them. Per source: Ada on mail and Ada on Slack are two
+ * Persons, never merged.
  */
-export interface Attribution {
-  /** Human label for the container this item lives in. Omitted when there is no honest one. */
-  where?: string;
-  /** People involved, most salient first. Roles stay in `extras` — this is caption text. */
-  who?: string[];
-  /** Why this item is the user's: authored | mentions | dms | assigned | created | … */
-  relationship?: string;
+export interface Person {
+  /** Display name. The only part that may leave the binary, and only as a label. */
+  name?: Untrusted<string>;
+  /** Mail address or Slack user id. Never leaves the binary. */
+  handle: Untrusted<string>;
+  /**
+   * Set by the source from the account it knows, never by the model. Graph matches
+   * `handle` against the `/me` address set; Slack compares with its `auth.test` user id.
+   */
+  isMe: boolean;
 }
 
-/**
- * The common shape every Source emits (ADR-0002 §4). A thin structural-trusted
- * core the Aggregator groups/orders/attributes by, plus untrusted backend content.
- */
-export interface NormalizedItem {
-  // ── structural (trusted) — produced by rundown's own source module ──
-  /** Registry key / provenance. */
-  source: string;
-  /** "event" | "message" | "issue" | "session" | … */
-  kind: string;
-  /** Primary instant (the ordering key), ISO-8601 with offset. */
-  timestamp: string;
-  /** Optional interval end (events, sessions). */
-  end?: string;
+/** The fields every typed record shares. */
+export interface RecordBase {
+  source: "graph" | "slack";
+  /** Identity of this record: a digest of source, record type and backend id. */
+  fingerprint: Hash;
   /**
-   * `timestamp`/`end` encode a calendar date, not a clock time — an all-day event's
-   * UTC-midnight bounds, a due date's synthetic end-of-day anchor. Set by the source
-   * module (a domain judgment, not backend bytes); the renderer shows the UTC
-   * calendar date instead of an offset-shifted wall time, which would land on the
-   * wrong local day (#106).
+   * Identity of the group this record belongs to: a digest of the mail `conversationId`,
+   * the Slack channel id or the calendar `seriesMasterId`, domain-separated per type. A
+   * record with no group id is its own group.
    */
-  dateOnly?: boolean;
-  /**
-   * Stable identity for cross-window dedup (#108): a truncated SHA-256 of
-   * `source + kind + raw backend id`, computed by the normalizer. Trusted because it
-   * is a one-way digest — no backend bytes survive into it — and structural because
-   * rundown's own code derives it. Absent when the backend supplied no id. Same item
-   * in two Briefs → same fingerprint; that is its whole contract.
-   */
-  fingerprint?: string;
-  /**
-   * Stable identity of the recurring group an item belongs to (#107, ADR-0018): a
-   * truncated SHA-256 of `source + kind + "-series" + raw group id`, computed by the
-   * normalizer like `fingerprint`. A calendar backend expands recurrences into
-   * occurrences with per-occurrence ids, and a mail thread is several messages each
-   * with its own id, so `fingerprint` differs per item; this digest is constant
-   * across a series' occurrences or a thread's messages and is what a `series`
-   * suppression rule matches. Absent for items that belong to no group.
-   */
-  seriesFingerprint?: string;
+  entryKey: Hash;
+  /** The record's group started before the window. Set only where it is free to know. */
+  continuesFromBefore: boolean;
+}
 
-  // ── untrusted (backend content) — a hostile backend controls these bytes ──
-  id: Untrusted<string>;
+/** One mail message from the inbox or the sent folder (Graph). */
+export interface Email extends RecordBase {
+  type: "email";
+  source: "graph";
+  /** `receivedDateTime` in the inbox, `sentDateTime` in sent. */
+  at: Instant;
+  folder: "inbox" | "sent";
+  subject: Untrusted<string>;
+  from: Person;
+  /**
+   * Graph's `sender`, kept only when it differs from `from`: a delegate sending for the
+   * user, or the user sending on behalf of a shared mailbox.
+   */
+  sentBy?: Person;
+  to: Person[];
+  cc: Person[];
+  /** The user wrote it: `from.isMe || sentBy?.isMe`. */
+  byMe: boolean;
+  /** `uniqueBody` as text, or `bodyPreview` without one. Summarizer input only. */
+  body: Untrusted<string>;
+  importance: "low" | "normal" | "high";
+  isRead: boolean;
+  /** `flag.flagStatus` is `flagged`. */
+  flagged: boolean;
+  hasAttachments: boolean;
+  /** Outlook's Focused/Other sort. Unknown values read as `focused`. */
+  inferenceClassification: "focused" | "other";
+}
+
+/** The Slack conversation a {@link ChatMessage} was posted in. */
+export interface Conversation {
+  kind: "dm" | "group_dm" | "channel";
+  /** Slack Connect: the conversation is shared with another workspace. */
+  isExternal: boolean;
+  /** The channel name. Channels only: a DM or group DM has no honest name. */
+  name?: Untrusted<string>;
+  /**
+   * A DM's counterpart, or a group DM's members with the user among them, read from the
+   * conversation name. When the name cannot be read, the authors seen in the window
+   * instead, so silent members are missing. Absent for channels.
+   */
+  members?: Person[];
+}
+
+/** One Slack message the user wrote, was mentioned in, or received in a DM (`search.messages`). */
+export interface ChatMessage extends RecordBase {
+  type: "chat-message";
+  source: "slack";
+  at: Instant;
+  conversation: Conversation;
+  /** A bot or file-only message may have no user id; its handle is then empty. */
+  author: Person;
+  /** The user wrote it: `author.isMe`. */
+  byMe: boolean;
+  /** The `mentions` query found it, or its text mentions the user's id. */
+  mentionsMe: boolean;
+  /** The message text with Slack's reference tokens made readable. */
+  text: Untrusted<string>;
+}
+
+/** An attendee's answer to an invitation, as Graph's `responseStatus.response` spells it. */
+export type EventResponse =
+  | "none"
+  | "organizer"
+  | "tentativelyAccepted"
+  | "accepted"
+  | "declined"
+  | "notResponded";
+
+/** One person invited to an event, with their answer. Rooms and other resources are never attendees. */
+export interface Attendee extends Person {
+  response: EventResponse;
+  /** Graph attendee type `optional`; `required` reads as false. */
+  optional: boolean;
+}
+
+/** A calendar date, `YYYY-MM-DD`, validated by the source. */
+export type CalendarDate = string;
+
+/** One calendar event or one occurrence of a series in the window (Graph `calendarView`). */
+export interface CalendarEvent extends RecordBase {
+  type: "calendar-event";
+  source: "graph";
+  /** An all-day event's `start`/`end` are calendar dates; `end` is exclusive. */
+  isAllDay: boolean;
+  start: Instant | CalendarDate;
+  end: Instant | CalendarDate;
+  /** The series slot a moved exception was moved from. Absent on everything else. */
+  originalStart?: Instant;
   title: Untrusted<string>;
-  url?: Untrusted<string>;
-  /**
-   * The sender's address on message-like items (#107). Like `id`, it is untrusted
-   * and never rendered into the bundle — it exists so a `sender` suppression rule
-   * can match an address when the display name in `extras.from` is unstable
-   * ("GitHub" vs `notifications@github.com`). Exposing it to the model would be a
-   * separate, eval-gated change (ADR-0012).
-   */
-  sender?: Untrusted<string>;
-  /** Who and where, uniform across sources — the Brief's evidence attribution. */
-  attribution?: Untrusted<Attribution>;
-  /** All source-specific fields: people/roles, body/preview, status, … */
-  extras?: Untrusted<Record<string, unknown>>;
+  /** Free-text place: what Graph's location says beyond the room names. Absent when nothing is left. */
+  location?: Untrusted<string>;
+  /** Graph's organizer. An absent one is a Person with no name and an empty handle. */
+  organizer: Person;
+  /** The user organizes this event: Graph's `isOrganizer`. */
+  isOrganizer: boolean;
+  /** People only: resource attendees and attendees that are one of the event's locations go to `rooms`. */
+  attendees: Attendee[];
+  /** Display names of the rooms booked for the event. A room without one is not listed. */
+  rooms: Untrusted<string>[];
+  myResponse: EventResponse;
+  showAs: "free" | "tentative" | "busy" | "oof" | "workingElsewhere" | "unknown";
+  isCancelled: boolean;
+  /** The event has an online meeting. The join URL is never read. */
+  isOnlineMeeting: boolean;
+  /** An occurrence or exception of a series. */
+  recurring: boolean;
 }
 
-/** The derived, structural-trusted temporal label on each bundled item (ADR-0003 §4). */
-export type Bucket = "standing" | "recent" | "upcoming";
+/** What a Source emits, discriminated on `type`. */
+export type SourceRecord = Email | CalendarEvent | ChatMessage;
 
-/** A NormalizedItem plus its derived bucket. */
-export type AnnotatedItem = NormalizedItem & { bucket: Bucket };
+/** An event bound as an instant: itself, or UTC midnight of an all-day event's date. */
+export function eventBoundInstant(e: CalendarEvent, bound: Instant | CalendarDate): Instant {
+  return e.isAllDay ? `${bound}T00:00:00Z` : bound;
+}
+
+/** A record's ordering instant: its own time, an event's start. */
+export function instantOf(item: SourceRecord): string {
+  switch (item.type) {
+    case "chat-message":
+    case "email":
+      return item.at;
+    case "calendar-event":
+      return eventBoundInstant(item, item.start);
+  }
+}
 
 /** One entry in the Bundle's provenance manifest — trusted scalars only. */
 export interface SourceManifestEntry {
@@ -116,72 +190,13 @@ export interface SourceManifestEntry {
 }
 
 /**
- * One user-authored suppression rule (#107, ADR-0017). Criteria within a rule AND
- * together; the config's rules OR. `title` and `sender` are case-insensitive
- * substring matches (via the trust.ts comparison primitives); `series` is an exact
- * match against a trusted `seriesFingerprint`; `source` scopes to a registry key.
- * User-authored config, so trusted — a rule may be echoed into the Brief envelope.
- */
-export interface SuppressRule {
-  source?: string;
-  sender?: string;
-  title?: string;
-  series?: string;
-}
-
-/**
- * The audit trail for one rule that suppressed at least one item (#107): the rule
- * echoed verbatim (trusted — the user wrote it), how many items it removed, and
- * their fingerprints (trusted digests, no source bytes). Deliberately counts and
- * digests, never suppressed content: emitting titles here would be a channel of raw
- * untrusted bytes that bypasses the summarize→verify→defang pipeline entirely.
- */
-export interface SuppressedEntry {
-  rule: SuppressRule;
-  count: number;
-  /** Fingerprints of the suppressed items that carried one. */
-  fingerprints: string[];
-}
-
-/**
- * The single normalized structure the Aggregator hands toward the Summarizer
- * (ADR-0003 §3). Wholly untrusted (it carries `extras`); flows only
- * Aggregator → Summarizer as a sealed in-process value, never to the agent.
+ * What the Aggregator hands the Digester (ADR-0020): the window's typed records, merged,
+ * filtered to the window and ordered by each record's own instant, plus the per-source
+ * manifest. Wholly untrusted (it carries record text); it flows only Aggregator → Digester
+ * as a sealed in-process value, never to the agent.
  */
 export interface Bundle {
   window: Window;
   sources: SourceManifestEntry[];
-  items: AnnotatedItem[];
-}
-
-// ── Brief (the Planner's output; ADR-0005 §2–4) ──
-
-// The Brief's output contract — `ExtractedKind`, `Evidence`, `ExtractedItem`, and
-// the `SummarizerOutput` pair — is defined once in brief-contract.ts (a Zod source
-// of truth; ADR-0011); import it from there directly. `Brief` itself stays here —
-// it wraps the summarizer's output in the trusted envelope, so it composes the
-// contract's `BriefItem` (post-resolution) with the domain's Window/manifest.
-
-/**
- * The Planner's output: a trusted envelope around an untrusted-derived core
- * (ADR-0005 §2). The Summarizer emits only `{summary, items}`; the Planner
- * attaches the `envelope` by copying the Bundle's trusted scalars plus the run's
- * timezone. `timezone` is the IANA zone bundle timestamps were rendered in for the
- * Summarizer — the zone the model's `when` phrasing is anchored to — so a consumer
- * never has to guess what clock a Brief speaks (#106).
- */
-export interface Brief {
-  envelope: {
-    window: Window;
-    sources: SourceManifestEntry[];
-    timezone: string;
-    /**
-     * Per-rule suppression audit (#107) — present only when at least one configured
-     * rule matched (presence is signal). `sources[].itemCount` already reflects the
-     * post-suppression bundle, so this is what accounts for the difference.
-     */
-    suppressed?: SuppressedEntry[];
-  };
-  summary: string;
-  items: BriefItem[];
+  records: SourceRecord[];
 }

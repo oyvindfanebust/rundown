@@ -1,6 +1,11 @@
 # ADR 0016 — Evidence fingerprint: stable item identity for cross-window dedup
 
-**Status:** Accepted
+**Status:** Retired ([#117](https://github.com/oyvindfanebust/rundown/issues/117))
+
+Removed in [#150](https://github.com/oyvindfanebust/rundown/issues/150) with the Brief's evidence,
+so evidence fingerprints are gone. Stable digests survive as digest entry ids, a one-way digest of
+the source group id ([ADR-0020](0020-aggregation-and-digest-entries.md) §5). The rest of this ADR
+is the record of the removed design.
 
 This ADR gives Brief evidence entries a stable identity so a consumer can dedup mechanically
 across overlapping Briefs (#108): a `fingerprint` field, a truncated digest of the cited source

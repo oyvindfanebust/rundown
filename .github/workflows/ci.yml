@@ -13,11 +13,11 @@ jobs:
         with:
           bun-version: latest
       - run: bun install
-      - name: Typecheck (load-bearing for the Untrusted<T> trust boundary — ADR-0004 §3)
+      - name: Typecheck (the Untrusted<T> trust boundary depends on it — ADR-0022 §3)
         run: bun x tsc --noEmit
       - name: Unit tests
         run: bun test
       - name: Shellcheck shell scripts
         run: git ls-files '*.sh' | xargs -r shellcheck
-      - name: "Trust-boundary: sole unwrap site (ADR-0004 §3)"
+      - name: "Trust-boundary: the two unwrap sites (ADR-0022 §3)"
         run: bash scripts/check-unwrap-sites.sh

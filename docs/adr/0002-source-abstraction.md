@@ -1,6 +1,15 @@
 # ADR 0002 — The Source abstraction
 
-**Status:** Accepted
+**Status:** Superseded by [ADR-0019](0019-typed-records.md) ([#117](https://github.com/oyvindfanebust/rundown/issues/117))
+
+**Amendment (digest, [#117](https://github.com/oyvindfanebust/rundown/issues/117)).** The Claude
+Code logs source is removed ([#144](https://github.com/oyvindfanebust/rundown/issues/144)), after
+Linear and Jira ([#143](https://github.com/oyvindfanebust/rundown/issues/143)). Graph and Slack
+remain, and both log in interactively, so interactive login no longer varies between sources. §2
+changes with that: `login()` is required, like `read` and `status`, and the no-auth and
+credential-only paths it allowed for are gone, including the descriptor's `interactive` flag and
+the "(no auth required)" status note. References below to Linear, Jira, Claude Code logs, token-paste
+sources and local sources describe removed code.
 
 This ADR fixes the Source abstraction that the multi-source aggregation model
 ([ADR-0003](0003-aggregation-model.md)) and the trust-boundary enforcement
@@ -201,7 +210,7 @@ Residual strains are downstream, not abstraction-breakers:
 - Source-implementation details (out of scope here): thread-vs-message granularity (Slack);
   title synthesis plus transcript truncation (Claude Code, where a session has no natural title, and
   transcripts are large, so `read` synthesizes a `title` and truncates content into `extras`,
-  as `graph` already truncates `bodyPreview`).
+  as `graph` already truncates the mail body).
 - Aggregation concern ([ADR-0003](0003-aggregation-model.md)): standing/recent/upcoming
   bucketing is derived, not a core field. The Aggregator knows the requested window, so it
   buckets each item by

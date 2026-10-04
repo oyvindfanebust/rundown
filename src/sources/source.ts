@@ -1,9 +1,9 @@
 // The Source interface + per-source option-schema declaration (ADR-0002 §2, §5).
-// A Source is a read-only adapter for one backend / one auth boundary. The
-// required surface is `read` + `status` (every source has a total readiness
-// answer); `login` is the opt-in interactive-auth capability a source declares.
+// A Source is a read-only adapter for one backend / one auth boundary. Its
+// surface is `read`, `status` and `login`: every source has a total readiness
+// answer, and every source logs in interactively (ADR-0002, amended).
 
-import type { NormalizedItem, Window } from "../domain.ts";
+import type { SourceRecord, Window } from "../domain.ts";
 import type { DebugSink } from "../debug.ts";
 
 /** A single declared config option for a source (drives validation + the init template). */
@@ -84,26 +84,17 @@ export interface StatusNarration {
   glyph: "✓" | "✗" | "○";
   /** Bare readiness phrase, e.g. "ready" / "not authenticated" / "not configured". */
   label: string;
-  /** Trailing clause: resolved identity, "(no auth required)", or the fix-it detail. */
+  /** Trailing clause: resolved identity, or the fix-it detail. */
   note?: string;
   /** The command that moves a not-ready source forward. Absent when already ready. */
   remedy?: string;
 }
 
-/**
- * Narrate a {@link SourceStatus}. `interactive` is whether the source has a
- * `login` (its presence is the interactive-auth declaration): it decides only how
- * a `ready`-without-identity source reads — an interactive source is simply
- * "ready", a no-auth local source is "ready (no auth required)".
- */
-export function narrateStatus(status: SourceStatus, opts: { interactive: boolean }): StatusNarration {
+/** Narrate a {@link SourceStatus}. */
+export function narrateStatus(status: SourceStatus): StatusNarration {
   switch (status.state) {
     case "ready":
-      return {
-        glyph: "✓",
-        label: "ready",
-        note: status.identity ?? (opts.interactive ? undefined : "(no auth required)"),
-      };
+      return { glyph: "✓", label: "ready", note: status.identity };
     case "not-authenticated":
       return { glyph: "✗", label: "not authenticated", remedy: "rundown login" };
     case "not-configured":
@@ -112,7 +103,7 @@ export function narrateStatus(status: SourceStatus, opts: { interactive: boolean
 }
 
 export interface Source {
-  /** Stable registry key / provenance (also the `NormalizedItem.source` value). */
+  /** Stable registry key / provenance (also the records' `source` value). */
   readonly key: string;
   /** Human-facing label. */
   readonly label: string;
@@ -122,14 +113,14 @@ export interface Source {
    * is injected at construction (ADR-0002 §5), so `read` closes over `this.config`
    * rather than taking a per-call `options` argument.
    */
-  read(window: Window): Promise<NormalizedItem[]>;
+  read(window: Window): Promise<SourceRecord[]>;
 
-  /** Optional interactive auth — only sources with interactive login implement it. Returns identity. */
-  login?(): Promise<string>;
+  /** Interactive auth. Returns identity. */
+  login(): Promise<string>;
 
   /**
    * Readiness/identity report — **required**: every source has a meaningful
-   * total answer to "can I read you right now?" (a local source: always ready).
+   * total answer to "can I read you right now?".
    * Closes over `this.config`, so no per-call argument (config injection, #27).
    */
   status(): Promise<SourceStatus>;
@@ -146,7 +137,7 @@ export type Sources = Record<string, Source>;
 /**
  * A static source descriptor (ADR-0008 §5, #27): everything about a source that
  * exists before any config does — its key/label, its option schema (read by
- * `init` and config validation), whether it has interactive `login`, and a
+ * `init` and config validation), and a
  * `build` step that constructs a config-injected instance. The registry is a map
  * of these; `buildRegistry` composes the selected ones into a {@link Sources}.
  */
@@ -155,15 +146,6 @@ export interface SourceDescriptor {
   label: string;
   /** Declared per-source options — the config-validation + init-template surface, available without an instance. */
   options: OptionSchema;
-  /** Whether the source has interactive `login()` — the static declaration read where no instance exists. */
-  interactive: boolean;
-  /**
-   * Env var names a non-interactive source reads for auth, documented verbatim in
-   * the `init` template so a credential-only source (Linear, Jira) says what to set
-   * rather than "No auth required". Absent for interactive sources (they log in) and
-   * genuinely no-auth local sources.
-   */
-  credentials?: readonly string[];
   /**
    * Construct the source with its resolved per-source config injected, plus the
    * debug sink it emits structural diagnostics into (ADR-0015 §4). Both are

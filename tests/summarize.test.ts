@@ -1,12 +1,13 @@
 import { test, expect, describe } from "bun:test";
-import type Anthropic from "@anthropic-ai/sdk";
+import Anthropic from "@anthropic-ai/sdk";
 import {
+  anthropicTransport,
   summarize,
   SummarizerError,
   SummarizerRefusal,
   type MessageTransport,
 } from "../src/summarize.ts";
-import { SummarizerOutputSchema } from "../src/brief-contract.ts";
+import { SummarizerOutputSchema } from "../src/digest-contract.ts";
 
 // The transport seam lets us drive summarize()'s retry-by-failure-class engine
 // with scripted responses — no live call, no ANTHROPIC_API_KEY, and every
@@ -20,6 +21,13 @@ function textResponse(text: string): Anthropic.Message {
 
 function refusalResponse(): Anthropic.Message {
   return { stop_reason: "refusal", content: [] } as unknown as Anthropic.Message;
+}
+
+function maxTokensResponse(): Anthropic.Message {
+  return {
+    stop_reason: "max_tokens",
+    content: [{ type: "text", text: '{"summary": "cut' }],
+  } as unknown as Anthropic.Message;
 }
 
 /**
@@ -51,6 +59,15 @@ describe("summarize retry classes", () => {
     expect(calls).toHaveLength(1);
   });
 
+  test("a max_tokens stop is terminal: one call, a message to shorten the window", async () => {
+    const { transport, calls } = scripted([maxTokensResponse(), textResponse(JSON.stringify({ summary: "ok" }))]);
+    const err = await summarize(INPUT, { transport }).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(SummarizerError);
+    expect(err).not.toBeInstanceOf(SummarizerRefusal);
+    expect(String((err as Error).message)).toMatch(/shorten the window/i);
+    expect(calls).toHaveLength(1);
+  });
+
   test("schema-parse failure retries, bounded, then gives up (3 attempts)", async () => {
     const { transport, calls } = scripted([textResponse("not json at all")]);
     await expect(summarize(INPUT, { transport })).rejects.toBeInstanceOf(SummarizerError);
@@ -59,10 +76,10 @@ describe("summarize retry classes", () => {
   });
 
   test("schema-parse failure recovers on a later attempt", async () => {
-    const good = JSON.stringify({ summary: "ok", items: [] });
+    const good = JSON.stringify({ summary: "ok", entries: [] });
     const { transport, calls } = scripted([textResponse("still warming up"), textResponse(good)]);
-    const out = await summarize<{ summary: string; items: unknown[] }>(INPUT, { transport });
-    expect(out).toEqual({ summary: "ok", items: [] });
+    const out = await summarize<{ summary: string; entries: unknown[] }>(INPUT, { transport });
+    expect(out).toEqual({ summary: "ok", entries: [] });
     expect(calls).toHaveLength(2); // one retry sufficed
   });
 
@@ -76,7 +93,7 @@ describe("summarize retry classes", () => {
 describe("summarize request assembly (ADR-0004 invariants stay inside)", () => {
   test("carries the hardening prompt, the nonce'd untrusted-data delimiter, structured output, and zero tools", async () => {
     // Inject a fixed nonce so this deliberate security-invariant pin stays deterministic.
-    const { transport, calls } = scripted([textResponse(JSON.stringify({ summary: "", items: [] }))]);
+    const { transport, calls } = scripted([textResponse(JSON.stringify({ summary: "", entries: [] }))]);
     await summarize(INPUT, { transport, nonce: () => "pinnednonce" });
 
     const req = calls[0]!;
@@ -93,6 +110,9 @@ describe("summarize request assembly (ADR-0004 invariants stay inside)", () => {
     expect(userContent).toBe("<untrusted-data-pinnednonce>\nMEETING: launch review\n</untrusted-data-pinnednonce>");
     expect(system).not.toContain("launch review");
 
+    // A 64K output ceiling: room for a full window's summaries (#146).
+    expect(req.max_tokens).toBe(64_000);
+
     // Structured output via the response format, and ZERO tools (the crown-jewel rule).
     expect((req.output_config as any)?.format?.type).toBe("json_schema");
     expect((req as any).tools).toBeUndefined();
@@ -107,7 +127,7 @@ describe("summarize delimiter breakout (ADR-0004 §2 Layer-1)", () => {
   const realCloser = `</untrusted-data-${NONCE}>`;
 
   async function userTurnFor(data: string): Promise<string> {
-    const { transport, calls } = scripted([textResponse(JSON.stringify({ summary: "", items: [] }))]);
+    const { transport, calls } = scripted([textResponse(JSON.stringify({ summary: "", entries: [] }))]);
     await summarize({ ...INPUT, data }, { transport, ...fixed });
     return String(calls[0]!.messages[0]!.content);
   }
@@ -139,7 +159,7 @@ describe("summarize delimiter breakout (ADR-0004 §2 Layer-1)", () => {
   });
 
   test("the default nonce is unguessable — a fresh, distinct token per call", async () => {
-    const { transport, calls } = scripted([textResponse(JSON.stringify({ summary: "", items: [] }))]);
+    const { transport, calls } = scripted([textResponse(JSON.stringify({ summary: "", entries: [] }))]);
     await summarize(INPUT, { transport }); // no injected nonce → production generator
     await summarize(INPUT, { transport });
     const opener = (c: unknown) => String(c).slice(0, String(c).indexOf(">") + 1);
@@ -153,14 +173,14 @@ describe("summarize delimiter breakout (ADR-0004 §2 Layer-1)", () => {
 describe("summarize invisible-Unicode stripping (defense-in-depth)", () => {
   // The nonce'd delimiter protects the quarantine boundary; it says nothing about what the
   // model reads INSIDE it. Invisible/smuggled Unicode in source content can hide instructions
-  // that survive any human review of the rendered brief. All test literals use explicit
+  // that survive any human review of the rendered digest input. All test literals use explicit
   // `\u`/`\u{...}` escapes rather than literal invisible characters, for the same reviewability
   // reason the stripped constant itself is defined that way.
   const NONCE = "unicodenonce";
   const fixed = { nonce: () => NONCE };
 
   async function userTurnFor(data: string): Promise<string> {
-    const { transport, calls } = scripted([textResponse(JSON.stringify({ summary: "", items: [] }))]);
+    const { transport, calls } = scripted([textResponse(JSON.stringify({ summary: "", entries: [] }))]);
     await summarize({ ...INPUT, data }, { transport, ...fixed });
     return String(calls[0]!.messages[0]!.content);
   }
@@ -239,9 +259,9 @@ describe("summarize output validation (the parse seam)", () => {
   const parse = (value: unknown) => SummarizerOutputSchema.parse(value);
 
   test("well-formed JSON that fails the shape validator is retried, then fails hard", async () => {
-    // Valid JSON, wrong shape (summary is a number, items is a string): the API's
+    // Valid JSON, wrong shape (summary is a number, entries is a string): the API's
     // output_config might wave this through, but the injected parse rejects it.
-    const wrongShape = JSON.stringify({ summary: 123, items: "not an array" });
+    const wrongShape = JSON.stringify({ summary: 123, entries: "not an array" });
     const { transport, calls } = scripted([textResponse(wrongShape)]);
     await expect(summarize({ ...INPUT, parse }, { transport })).rejects.toBeInstanceOf(SummarizerError);
     expect(calls).toHaveLength(3); // 1 initial + MAX_SCHEMA_RETRIES(2), same as a JSON.parse failure
@@ -250,24 +270,97 @@ describe("summarize output validation (the parse seam)", () => {
   test("output conforming to the schema is parsed and returned", async () => {
     const conforming = JSON.stringify({
       summary: "ok",
-      items: [{ kind: "task", summary: "reply to Anna", evidence: [] }],
+      entries: [{ id: "e1", summary: "Anna asks for a reply" }],
     });
     const { transport } = scripted([textResponse(conforming)]);
     const out = await summarize({ ...INPUT, parse }, { transport });
     expect(out).toEqual({
       summary: "ok",
-      items: [{ kind: "task", summary: "reply to Anna", evidence: [] }],
+      entries: [{ id: "e1", summary: "Anna asks for a reply" }],
     });
   });
 
   test("a wrong-shape attempt can recover on a later, conforming attempt", async () => {
-    const conforming = JSON.stringify({ summary: "ok", items: [] });
+    const conforming = JSON.stringify({ summary: "ok", entries: [] });
     const { transport, calls } = scripted([
       textResponse(JSON.stringify({ wrong: true })),
       textResponse(conforming),
     ]);
     const out = await summarize({ ...INPUT, parse }, { transport });
-    expect(out).toEqual({ summary: "ok", items: [] });
+    expect(out).toEqual({ summary: "ok", entries: [] });
     expect(calls).toHaveLength(2); // one retry sufficed
+  });
+});
+
+describe("the default transport (real SDK client over a fake HTTP edge)", () => {
+  // Drives the production transport through the installed SDK with a scripted `fetch`, so the
+  // test covers what the SDK does with a 64K request: it must stream, because the SDK refuses
+  // non-streaming requests whose max_tokens implies more than ten minutes (about 21,333).
+  function sse(events: Array<Record<string, unknown>>): Response {
+    const body = events.map((e) => `event: ${e.type}\ndata: ${JSON.stringify(e)}\n\n`).join("");
+    return new Response(body, { status: 200, headers: { "content-type": "text/event-stream" } });
+  }
+
+  function streamedMessage(text: string, stopReason: string): Array<Record<string, unknown>> {
+    return [
+      {
+        type: "message_start",
+        message: {
+          id: "msg_test",
+          type: "message",
+          role: "assistant",
+          model: "claude-sonnet-5",
+          content: [],
+          stop_reason: null,
+          stop_sequence: null,
+          usage: { input_tokens: 10, output_tokens: 0 },
+        },
+      },
+      { type: "content_block_start", index: 0, content_block: { type: "text", text: "" } },
+      { type: "content_block_delta", index: 0, delta: { type: "text_delta", text: text.slice(0, 5) } },
+      { type: "content_block_delta", index: 0, delta: { type: "text_delta", text: text.slice(5) } },
+      { type: "content_block_stop", index: 0 },
+      { type: "message_delta", delta: { stop_reason: stopReason, stop_sequence: null }, usage: { output_tokens: 7 } },
+      { type: "message_stop" },
+    ];
+  }
+
+  function fakeClient(events: Array<Record<string, unknown>>): { client: Anthropic; bodies: any[] } {
+    const bodies: any[] = [];
+    const fakeFetch = (async (_url: unknown, init?: RequestInit) => {
+      bodies.push(JSON.parse(String(init?.body)));
+      return sse(events);
+    }) as unknown as typeof globalThis.fetch;
+    return { client: new Anthropic({ apiKey: "test-key", maxRetries: 0, fetch: fakeFetch }), bodies };
+  }
+
+  test("streams the 64K request and returns the assembled final message", async () => {
+    const out = JSON.stringify({ summary: "ok", entries: [] });
+    const { client, bodies } = fakeClient(streamedMessage(out, "end_turn"));
+    const result = await summarize(INPUT, { transport: anthropicTransport(client) });
+
+    expect(result).toEqual({ summary: "ok", entries: [] });
+    expect(bodies).toHaveLength(1);
+    expect(bodies[0].stream).toBe(true);
+    expect(bodies[0].max_tokens).toBe(64_000);
+    expect(bodies[0].tools).toBeUndefined();
+  });
+
+  test("a streamed max_tokens stop is terminal: one request, shorten-the-window message", async () => {
+    const { client, bodies } = fakeClient(streamedMessage('{"summary": "cut', "max_tokens"));
+    const err = await summarize(INPUT, { transport: anthropicTransport(client) }).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(SummarizerError);
+    expect(String((err as Error).message)).toMatch(/shorten the window/i);
+    expect(bodies).toHaveLength(1);
+  });
+
+  test("an error event mid-stream fails hard: one request, no schema retry, nothing partial", async () => {
+    // The SDK retries transient failures only until the response starts. An error event after
+    // that rejects the stream, and summarize lets it propagate (fail-hard, ADR-0005 §8).
+    const events = streamedMessage('{"summary": "ok"}', "end_turn").slice(0, 3);
+    events.push({ type: "error", error: { type: "overloaded_error", message: "Overloaded" } });
+    const { client, bodies } = fakeClient(events);
+    await expect(summarize(INPUT, { transport: anthropicTransport(client) })).rejects.toThrow("Overloaded");
+    expect(bodies).toHaveLength(1);
   });
 });

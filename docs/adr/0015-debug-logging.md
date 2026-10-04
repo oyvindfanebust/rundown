@@ -2,6 +2,23 @@
 
 **Status:** Accepted
 
+**Amendment (digest, [#117](https://github.com/oyvindfanebust/rundown/issues/117)).** The Linear
+and Jira sources are removed ([#143](https://github.com/oyvindfanebust/rundown/issues/143)), and
+with them the `pagination` and `route` events, which only Jira emitted, and `httpStatusNote`, the
+HTTP status note on a rejected `status()` detail, which only Linear and Jira used. The Claude Code
+logs source is removed too ([#144](https://github.com/oyvindfanebust/rundown/issues/144)), and with
+it the `scan` event, which only that source emitted. Suppression is removed
+([#145](https://github.com/oyvindfanebust/rundown/issues/145)), and with it the `suppress` event.
+Graph and Slack events stay, so the union is `config-path`, `http`, `auth-verify`, `source-run`
+and the self-update gate's `update-gate`. With the digest
+([#150](https://github.com/oyvindfanebust/rundown/issues/150)), `rundown digest` replaces `brief`
+in §3's list of commands that honor debug, stdout is reserved for the digest
+([ADR-0006](0006-output-emission.md), amended), and the progress sink is declared in
+`src/digest.ts`. The channel still never unwraps: the unwrap sites are the Digester and `label()`
+([ADR-0022](0022-trust-boundary.md) §3, superseding ADR-0004). References below to Linear, Jira,
+Claude Code logs and their events, to `brief` and the Brief, and to `plan.ts` as the sole unwrap
+site describe removed code.
+
 This ADR fixes the design of a debug logging channel for the CLI: an opt-in `--debug` /
 `RUNDOWN_DEBUG` switch that emits structural diagnostic signal to stderr, carried by a closed,
 trusted-scalar-only event union so it cannot become a leak path. It extends, and operates under,

@@ -2,6 +2,13 @@
 
 **Status:** Accepted
 
+**Amendment (digest, [#117](https://github.com/oyvindfanebust/rundown/issues/117)).** `rundown brief --window` is now `rundown digest --window`
+([#150](https://github.com/oyvindfanebust/rundown/issues/150)); the window syntax is unchanged. §5's second point is void: `windowIsPast` and the
+review-versus-plan prompt switch are removed with the Planner. The run's single clock is
+`generatedAt`, read once in the composition root and given to the Summarizer, whose one prompt
+describes what happened before it and what is scheduled after it, so a wholly past explicit window
+needs no special case ([ADR-0021](0021-the-digest.md) §1, §4).
+
 Extends the window surface fixed by [ADR-0007](0007-config-personalization-layer.md) §2/§5: a run may
 scope its window to arbitrary calendar dates, not just the four symbolic spans.
 
@@ -80,7 +87,7 @@ otherwise just as strict, fail-hard, and targeted in its messages as ADR-0007 §
   explicit windows. It is used only for progress and `status` display, never as control flow.
 - A wholly-past explicit window (e.g. `--window 2026-06-01..2026-06-07`) automatically gets the
   retrospective task. The config resolver already reconciles `window.to <= now` into the neutral
-  `windowIsPast` boolean that the [Planner](../../src/plan.ts) maps to the review-vs-plan prompt
+  `windowIsPast` boolean that the Planner (`src/plan.ts`, since removed) maps to the review-vs-plan prompt
   switch, so no new logic is needed: the past-window review behavior extends to explicit dates
   without further work. Single-clock reconciliation lives in config, per
   [ADR-0005](0005-planning-layer.md).

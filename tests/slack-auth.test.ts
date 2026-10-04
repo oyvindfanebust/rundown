@@ -4,14 +4,12 @@ import { tmpdir, homedir } from "node:os";
 import { join } from "node:path";
 import {
   tokenPath,
-  scopesFor,
   authorizeUrl,
   tokenFromExchange,
   readCachedAuth,
   writeCachedAuth,
   slackAppConfig,
   BASE_SCOPES,
-  HISTORY_SCOPES,
 } from "../src/sources/slack/auth.ts";
 
 // tokenPath()/configDir() read RUNDOWN_CONFIG at call time; save + restore around
@@ -35,15 +33,10 @@ describe("slack auth tokenPath", () => {
   });
 });
 
-describe("slack auth scopesFor", () => {
-  test("base scopes only when threads is off", () => {
-    expect(scopesFor(false)).toEqual(BASE_SCOPES);
-    expect(scopesFor(false)).not.toContain("channels:history");
-  });
-
-  test("adds the *:history family when threads is on", () => {
-    const scopes = scopesFor(true);
-    for (const s of [...BASE_SCOPES, ...HISTORY_SCOPES]) expect(scopes).toContain(s);
+describe("slack auth scopes", () => {
+  test("login requests the base user scopes only, no *:history family", () => {
+    const url = new URL(authorizeUrl("cid-123", BASE_SCOPES, "http://localhost:53912"));
+    expect(url.searchParams.get("user_scope")).toBe("search:read,users:read");
   });
 });
 

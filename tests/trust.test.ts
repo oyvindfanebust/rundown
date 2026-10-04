@@ -8,8 +8,9 @@
 
 import { test, expect } from "bun:test";
 import { inspect } from "node:util";
-import { untrusted, unwrap, untrustedOpt, untrustedIncludes, untrustedExtrasInclude } from "../src/trust.ts";
-import type { AnnotatedItem } from "../src/domain.ts";
+import { untrusted, unwrap, untrustedOpt } from "../src/trust.ts";
+import type { ChatMessage } from "../src/domain.ts";
+import { chatMessageRecord } from "../src/sources/normalize.ts";
 
 test("unwrap returns the original value", () => {
   expect(unwrap(untrusted("hello"))).toBe("hello");
@@ -85,50 +86,27 @@ test("untrustedOpt(undefined) is undefined; untrustedOpt(x) boxes x", () => {
   expect(String(boxed)).toBe("[untrusted]");
 });
 
-// ── 4. an AnnotatedItem-shaped object graph leaks no title/url/extras bytes ──
+// ── 4. an AnnotatedItem-shaped object graph leaks no untrusted bytes ──
 
-test("JSON.stringify of an AnnotatedItem-shaped graph leaks no title/url/extras bytes", () => {
-  const item: AnnotatedItem = {
-    source: "graph",
-    kind: "event",
-    timestamp: "2026-07-08T09:00:00Z",
-    bucket: "recent",
-    id: untrusted("secret-id-123"),
-    title: untrusted("SECRET MEETING TITLE"),
-    url: untrusted("https://secret.example/leak"),
-    extras: untrusted({ body: "SECRET BODY TEXT", organizer: "SECRET ORGANIZER" }),
-  };
+test("JSON.stringify of a record graph leaks no text, name or handle bytes", () => {
+  const item: ChatMessage = chatMessageRecord({
+      channelId: "C-secret-id-123",
+      ts: "1783414800.000100",
+      at: "2026-07-08T09:00:00Z",
+      conversation: { kind: "channel", isExternal: false, name: "SECRET CHANNEL" },
+      author: { name: "SECRET AUTHOR", handle: "U-SECRET-HANDLE", isMe: false },
+      mentionsMe: false,
+      text: "SECRET MESSAGE TEXT https://secret.example/leak",
+    });
 
   const s = JSON.stringify(item);
   expect(s).not.toContain("secret-id-123");
-  expect(s).not.toContain("SECRET MEETING TITLE");
+  expect(s).not.toContain("SECRET CHANNEL");
+  expect(s).not.toContain("SECRET AUTHOR");
+  expect(s).not.toContain("U-SECRET-HANDLE");
+  expect(s).not.toContain("SECRET MESSAGE TEXT");
   expect(s).not.toContain("secret.example");
-  expect(s).not.toContain("SECRET BODY TEXT");
-  expect(s).not.toContain("SECRET ORGANIZER");
   // Trusted structural fields still come through untouched.
-  expect(s).toContain("graph");
-  expect(s).toContain("event");
-  expect(s).toContain("recent");
-});
-
-// The boolean comparison primitives (ADR-0017): suppression matching runs INSIDE
-// trust.ts, and only a boolean escapes — these are the audit's other members
-// alongside unwrap(). The tests pin the matching semantics (case-insensitive
-// substring) and that absence never matches.
-
-test("untrustedIncludes: case-insensitive substring, only a boolean out", () => {
-  const title = untrusted("Release Pipeline approval NEEDED");
-  expect(untrustedIncludes(title, "release pipeline")).toBe(true);
-  expect(untrustedIncludes(title, "Needed")).toBe(true);
-  expect(untrustedIncludes(title, "standup")).toBe(false);
-  expect(untrustedIncludes(undefined, "anything")).toBe(false);
-});
-
-test("untrustedExtrasInclude: matches one named string field; non-strings are absence", () => {
-  const extras = untrusted({ from: "GitHub", count: 7, nested: { from: "x" } });
-  expect(untrustedExtrasInclude(extras, "from", "github")).toBe(true);
-  expect(untrustedExtrasInclude(extras, "from", "gitlab")).toBe(false);
-  expect(untrustedExtrasInclude(extras, "count", "7")).toBe(false);
-  expect(untrustedExtrasInclude(extras, "missing", "x")).toBe(false);
-  expect(untrustedExtrasInclude(undefined, "from", "x")).toBe(false);
+  expect(s).toContain("slack");
+  expect(s).toContain("chat-message");
 });

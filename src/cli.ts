@@ -1,5 +1,5 @@
 // The external surface (ADR-0008 §4): parse args, dispatch the five commands,
-// and own emission (Brief JSON → stdout, errors → stderr, exit codes). No domain
+// and own emission (digest JSON → stdout, errors → stderr, exit codes). No domain
 // logic lives here.
 
 import { parseArgs, type ParseArgsConfig } from "node:util";
@@ -8,7 +8,7 @@ import { existsSync, realpathSync } from "node:fs";
 import { mkdir, writeFile, access } from "node:fs/promises";
 import { constants } from "node:fs";
 import { dirname } from "node:path";
-import { buildBrief } from "./brief.ts";
+import { buildDigest } from "./digest.ts";
 import { configDir, configPath, resolveConfig, ConfigError } from "./config.ts";
 import { parseWindowSelector, WindowError, WINDOW_SPANS, type WindowSelector } from "./temporal.ts";
 import { descriptors, registeredKeys, buildRegistry } from "./sources/registry.ts";
@@ -36,7 +36,7 @@ const VERSION = typeof RUNDOWN_VERSION === "string" ? RUNDOWN_VERSION : "0.0.0-d
  * Build this invocation's debug sink (ADR-0015 §2, §4) and emit the one event
  * every command shares. Debug goes to stderr unconditionally — unlike the
  * TTY-gated progress sink — because its whole purpose is capturing signal from a
- * piped or CI run. stdout stays reserved for the Brief (ADR-0006).
+ * piped or CI run. stdout stays reserved for the digest (ADR-0006).
  *
  * The config-path event is emitted here rather than per command: which file was
  * read, and whether `RUNDOWN_CONFIG` chose it, is the first question every
@@ -71,16 +71,8 @@ function renderSourceEntry(key: string): string {
     optionLines.push(`      // ${spec.description}`);
     optionLines.push(`      ${JSON.stringify(name)}: ${def}${comma}`);
   });
-  // Interactive sources need `rundown login`; credential-only sources name the env
-  // secrets to set; genuinely no-auth local sources say so — rather than print a
-  // misleading hint. `interactive` and `credentials` are static declarations (#27),
-  // read here where no instance exists yet.
-  const auth = descriptor.interactive
-    ? "Auth: rundown login"
-    : descriptor.credentials?.length
-      ? `Auth: set ${descriptor.credentials.join(", ")} in your environment.`
-      : "No auth required.";
-  return [`    // ${descriptor.label}. ${auth}`, `    ${JSON.stringify(key)}: {`, ...optionLines, `    }`].join("\n");
+  // Every source logs in interactively.
+  return [`    // ${descriptor.label}. Auth: rundown login`, `    ${JSON.stringify(key)}: {`, ...optionLines, `    }`].join("\n");
 }
 
 function initTemplate(): string {
@@ -97,7 +89,7 @@ function initTemplate(): string {
   // IANA timezone. Window spans + all-day items resolve against it. Omit to use the system tz.
   "timezone": ${JSON.stringify(tz)},
 
-  // Default planning window. Override per run: rundown brief --window today
+  // Default window. Override per run: rundown digest --window today
   // Spans: ${WINDOW_SPANS.join(" | ")}
   "window": "this-week",
 
@@ -111,20 +103,6 @@ function initTemplate(): string {
   "sources": {
 ${sources}
   },
-
-  // Freeform steering for the planner. Trusted — reaches the model as instructions.
-  // Say what to surface first and the tone you want.
-  "guidance": "Surface commitments I've made to others first, then anything time-sensitive or that people are waiting on me for. Keep it terse.",
-
-  // Deterministic noise filter: items matching a rule are dropped before the model
-  // sees them. Criteria in one rule AND together; rules OR. "title"/"sender" are
-  // case-insensitive substring matches; "series" names a recurring calendar series
-  // by the seriesFingerprint shown in a Brief's evidence; optional "source" scopes
-  // a rule to one source. The Brief's envelope reports what each rule suppressed.
-  // "suppress": [
-  //   { "sender": "notifications@github.com", "title": "Release Pipeline" },
-  //   { "series": "0123456789abcdef" }
-  // ]
 }
 `;
 }
@@ -140,7 +118,7 @@ async function cmdInit(): Promise<void> {
   process.stdout.write(
     `Wrote ${path} (annotated template).\n\n` +
       `Next:\n` +
-      `  1. edit the file — set your timezone, guidance, and any source options\n` +
+      `  1. edit the file — set your timezone and any source options\n` +
       `  2. rundown login    (authenticate every configured source)\n` +
       `  3. rundown status   (check what's still missing)\n`,
   );
@@ -192,9 +170,8 @@ async function cmdStatus(debug: DebugSink): Promise<void> {
     const source = sources[sourceKey]!;
     const st = await source.status();
     // The narration owns the glyph/phrase/identity wording; this line
-    // just lays out the parts. Identity shows whenever a source reports one; a
-    // no-auth local source reads "(no auth required)".
-    const n = narrateStatus(st, { interactive: Boolean(source.login) });
+    // just lays out the parts. Identity shows whenever a source reports one.
+    const n = narrateStatus(st);
     out.write(`  ${sourceKey}    ${n.glyph} ${n.label}${n.note ? `   ${n.note}` : ""}\n`);
     if (st.state === "ready") ready++;
     else if (st.state === "not-authenticated") unauthed.push(sourceKey);
@@ -205,54 +182,28 @@ async function cmdStatus(debug: DebugSink): Promise<void> {
   if (!keyPresent) out.write(`Next: export ANTHROPIC_API_KEY\n`);
   else if (unauthed.length > 0) out.write(`Next: rundown login   (authenticates ${unauthed.join(", ")})\n`);
   else if (ready < total) out.write(`Next: fix source configuration above, then re-run rundown status\n`);
-  else out.write(`Next: rundown brief\n`);
+  else out.write(`Next: rundown digest\n`);
 }
 
-// ── login: walk every configured-but-unauthenticated interactive source, or ──
+// ── login: walk every configured-but-unauthenticated source, or ─────────────
 // (with a positional) target one source by its registry key ─────────────────
 
 /**
- * A `not-configured` detail conventionally reads "set VAR[, VAR2]" (Graph, Linear
- * both phrase it this way) — strip that prefix so the credential can be named on
- * its own (e.g. in "authenticates via LINEAR_API_KEY"). Details that don't follow
- * the convention pass through unchanged rather than being mangled.
- */
-function credentialHint(detail: string): string {
-  const m = /^set (.+)$/.exec(detail);
-  return m ? m[1]! : detail;
-}
-
-/**
- * Log in one interactive source, printing the same per-source lines the bare walk
+ * Log in one source, printing the same per-source lines the bare walk
  * has always printed. Returns whether it newly authenticated (false when it was
  * already ready) — shared by the bare walk and the targeted `login <source>` path.
  */
 async function loginOne(out: NodeJS.WritableStream, key: string, source: Source): Promise<boolean> {
   const st = await source.status();
   if (st.state === "ready") {
-    const n = narrateStatus(st, { interactive: true });
+    const n = narrateStatus(st);
     out.write(`  ${key}   ${n.glyph} already authenticated${n.note ? `   ${n.note}` : ""}\n`);
     return false;
   }
   out.write(`  ${key}   authenticating…\n`);
-  const identity = await source.login!();
+  const identity = await source.login();
   out.write(`  ${key}   ✓ authenticated   ${identity}\n`);
   return true;
-}
-
-/**
- * The message for `login <source>` when the named source has no `login()` — auth
- * is structural (ADR-0002 §2): `login()` presence is the interactive declaration,
- * so its absence always means "nothing to log in" here, whether the source needs
- * a declared env-credential (its `status()` can report `not-configured`, with the
- * credential named in `detail`) or no auth at all.
- */
-async function nonInteractiveLoginError(key: string, source: Source): Promise<string> {
-  const st = await source.status();
-  if (st.state === "not-configured" && st.detail) {
-    return `${key} authenticates via ${credentialHint(st.detail)} — nothing to log in`;
-  }
-  return `${key} requires no authentication — nothing to log in`;
 }
 
 async function cmdLogin(debug: DebugSink, sourceKey?: string): Promise<void> {
@@ -267,46 +218,27 @@ async function cmdLogin(debug: DebugSink, sourceKey?: string): Promise<void> {
     // Config-independent: build with empty config (#27). A source that needs config
     // reports `not-configured` from status(), which the login paths already narrate.
     const source = descriptor.build({}, debug);
-    if (!source.login) fail(await nonInteractiveLoginError(sourceKey, source));
     const authenticated = await loginOne(out, sourceKey, source);
     out.write(authenticated ? `\nDone. Next: rundown status\n` : `\nAlready authenticated. Next: rundown status\n`);
     return;
   }
 
-  // Bare mode: walk every configured-but-unauthenticated interactive source —
-  // and never claim success while a configured env-credential source (no
-  // `login()`, but declared via a `not-configured` status) is unreadable.
+  // Bare mode: walk every configured-but-unauthenticated source.
   const config = await resolveConfig(descriptors);
   const sources = buildRegistry(config.selection, debug);
   let walked = 0;
-  const unready: { key: string; hint: string }[] = [];
   for (const { sourceKey: key } of config.selection) {
-    const source = sources[key]!;
-    if (!source.login) {
-      const st = await source.status();
-      if (st.state !== "ready") {
-        unready.push({ key, hint: st.state === "not-configured" && st.detail ? credentialHint(st.detail) : "its credentials" });
-      }
-      continue;
-    }
-    if (await loginOne(out, key, source)) walked++;
-  }
-
-  if (unready.length > 0) {
-    out.write(`\n`);
-    for (const { key, hint } of unready) out.write(`  ${key}   needs ${hint} in your environment\n`);
-    out.write(`\nNext: export ${unready.map((u) => u.hint).join(", ")}, then re-run rundown login\n`);
-    return;
+    if (await loginOne(out, key, sources[key]!)) walked++;
   }
 
   out.write(walked === 0 ? `\nAll configured sources already authenticated.\n` : `\nDone. Next: rundown status\n`);
 }
 
-// ── brief: the composed pipeline; emit one Brief as JSON on stdout ───────────
+// ── digest: the composed pipeline; emit one digest as JSON on stdout ─────────
 
-async function cmdBrief(debug: DebugSink, windowOverride?: WindowSelector, sourceFilter?: string[]): Promise<void> {
+async function cmdDigest(debug: DebugSink, windowOverride?: WindowSelector, sourceFilter?: string[]): Promise<void> {
   // Progress goes to stderr, and only when it's a terminal — a piped/agent run
-  // gets clean silent streams; stdout stays reserved for the Brief JSON (ADR-0006).
+  // gets clean silent streams; stdout stays reserved for the digest JSON (ADR-0006).
   const onProgress = process.stderr.isTTY
     ? (message: string) => process.stderr.write(`${message}\n`)
     : undefined;
@@ -314,15 +246,15 @@ async function cmdBrief(debug: DebugSink, windowOverride?: WindowSelector, sourc
   // A permanently broken updater must not stay invisible to a human. Gated on the
   // same terminal check as progress output, so a piped or agent-driven run stays
   // byte-for-byte silent on both streams and no automated consumer is affected.
-  // Nothing about this reaches the Brief: ADR-0011 pins that contract with a schema
+  // Nothing about this reaches the digest: ADR-0021 pins that contract with a schema
   // test, and it is the untrusted-derived artifact.
   if (process.stderr.isTTY) {
     const warning = persistentFailureWarning(await readUpdateState(fsUpdateStateIO, configDir()));
     if (warning) process.stderr.write(`${warning}\n`);
   }
-  const brief = await buildBrief({ windowOverride, sourceFilter, onProgress, onDebug: debug });
+  const result = await buildDigest({ windowOverride, sourceFilter, onProgress, onDebug: debug });
   // Bun.write awaits the flush, so the JSON is fully emitted before we exit.
-  await Bun.write(Bun.stdout, JSON.stringify(brief) + "\n");
+  await Bun.write(Bun.stdout, JSON.stringify(result) + "\n");
 }
 
 // ── self-update: the internal worker mode, then the gate ─────────────────────
@@ -419,7 +351,7 @@ if (command === "--version" || command === "-v") {
 // the flags it accepts, so a flag a command doesn't own is a hard error rather
 // than silently ignored (issue #30). parseArgs is strict, so it throws on any
 // undeclared flag; parseCommandArgs translates that into a clean fail() naming
-// the command. Only `brief` accepts flags today (--window, --source); the rest
+// the command. Only `digest` accepts flags today (--window, --source); the rest
 // accept none (login still takes its optional <source> positional).
 function parseCommandArgs<const T extends ParseArgsConfig["options"]>(name: string, options: T) {
   try {
@@ -446,10 +378,10 @@ function parseWindow(w: string | undefined): WindowSelector | undefined {
   }
 }
 
-const USAGE = `rundown — a readout of where you stand across your work sources
+const USAGE = `rundown — a readout of your mail, chat and calendar
 
 Usage:
-  rundown brief [--window <span|date|range>] [--source <name>]…   compose and emit the Brief as JSON on stdout
+  rundown digest [--window <span|date|range>] [--source <name>]…  emit the window's digest as JSON on stdout
   rundown login [<source>]                     authenticate every configured source, or just <source>
   rundown status                               per-source configured/authed diagnostic
   rundown init                                 write the annotated config template
@@ -463,23 +395,23 @@ Window:
 Debug:
   --debug on any command (or RUNDOWN_DEBUG=1) writes structural diagnostics to
   stderr: config path, HTTP method/host/path/status, auth outcomes, per-source
-  timings and counts. Never source content. stdout stays the Brief.
+  timings and counts. Never source content. stdout stays the digest.
 
 Source:
   --source narrows this run to a subset of the configured sources; repeat it to
-  keep several (--source graph --source linear). Omit it to run them all.`;
+  keep several (--source graph --source slack). Omit it to run them all.`;
 
 try {
   switch (command) {
-    case "brief": {
-      // Repeatable --source (`--source graph --source linear`) narrows this run
+    case "digest": {
+      // Repeatable --source (`--source graph --source slack`) narrows this run
       // to a subset of the configured sources; absent = the full selection.
-      const { values } = parseCommandArgs("brief", {
+      const { values } = parseCommandArgs("digest", {
         window: { type: "string" },
         source: { type: "string", multiple: true },
         debug: { type: "boolean" },
       });
-      await cmdBrief(startDebug(values.debug), parseWindow(values.window), values.source);
+      await cmdDigest(startDebug(values.debug), parseWindow(values.window), values.source);
       break;
     }
     case "login": {

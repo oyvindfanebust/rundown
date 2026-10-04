@@ -1,7 +1,7 @@
-// The `Untrusted<T>` box and the single unwrap primitive (ADR-0004 §3), hardened
+// The `Untrusted<T>` box and the single unwrap primitive (ADR-0022), hardened
 // as a real runtime box so accidental leaks redact instead of leaking.
 //
-// Every untrusted field a Source emits (`id`, `url`, `title`, all of `extras`)
+// Every untrusted field a Source emits (record text, names, handles, labels)
 // carries this brand. It is a REAL runtime box now, not a phantom cast: at
 // runtime the value is wrapped in an `UntrustedBox` instance, and the type
 // system additionally treats `Untrusted<T>` as opaque — not assignable to `T`
@@ -10,8 +10,9 @@
 // type; no other object can structurally impersonate one). So the only way to
 // obtain the raw bytes through the type system is an explicit `unwrap()`, and
 // the call sites of `unwrap()` ARE the leak-path audit: a short, greppable
-// list of every place untrusted data legitimately flows. The sole legitimate
-// unwrap site is the summarizer-prompt assembly in `plan.ts`.
+// list of every place untrusted data legitimately flows. The two legitimate
+// unwrap sites are the Digester (`digester.ts`), for Summarizer input and grouping,
+// and `label()` (`label.ts`), for labels (ADR-0022).
 //
 // The box is a defense-in-depth layer UNDERNEATH the type-level guarantee: any
 // path the typechecker can't see (a `catch (e)` stringifying an item,
@@ -83,40 +84,4 @@ export function unwrap<T>(value: Untrusted<T>): T {
 /** Brand an optional value, preserving `undefined`. */
 export function untrustedOpt<T>(value: T | undefined): Untrusted<T> | undefined {
   return value === undefined ? undefined : untrusted(value);
-}
-
-// ── Boolean comparison primitives (ADR-0017) ──
-//
-// Suppression rules (config-authored, trusted) must match against untrusted fields
-// without adding an unwrap site outside plan.ts. These primitives compute the
-// comparison HERE, inside trust.ts, and let only a boolean escape: the needle is
-// user-authored config, the haystack never leaves this module. Together with
-// `unwrap()` they ARE the leak-path audit — a short greppable list. Deliberately
-// no `withUntrusted(value, callback)` form: a callback receiving raw bytes is an
-// unwrap in disguise. The one-bit-per-call channel is driven entirely by
-// user-authored patterns, so an attacker controls neither the query nor the readout.
-
-/** Case-insensitive substring test against an untrusted string. Only a boolean escapes. */
-export function untrustedIncludes(
-  value: Untrusted<string> | undefined,
-  needle: string,
-): boolean {
-  if (value === undefined) return false;
-  return unwrap(value).toLowerCase().includes(needle.toLowerCase());
-}
-
-/**
- * Case-insensitive substring test against one named string field of an untrusted
- * extras record. A non-string field (or an absent one) never matches. Only a
- * boolean escapes.
- */
-export function untrustedExtrasInclude(
-  extras: Untrusted<Record<string, unknown>> | undefined,
-  key: string,
-  needle: string,
-): boolean {
-  if (extras === undefined) return false;
-  const field = unwrap(extras)[key];
-  if (typeof field !== "string") return false;
-  return field.toLowerCase().includes(needle.toLowerCase());
 }

@@ -2,6 +2,20 @@
 
 **Status:** Accepted
 
+**Amendment (digest, [#117](https://github.com/oyvindfanebust/rundown/issues/117)).** Config loses `guidance` and `suppress`
+([#145](https://github.com/oyvindfanebust/rundown/issues/145), [#150](https://github.com/oyvindfanebust/rundown/issues/150)). The digest is summarized, not planned, so there is no planning-guidance
+input and nothing in config reaches the model as text; the window and timezone enter the
+Summarizer's instruction region as trusted facts. Each removed key fails with a dedicated error
+that names it and says why it went ([#138](https://github.com/oyvindfanebust/rundown/issues/138)). §2's four fields are now `timezone`, `window`,
+`autoUpdate` ([ADR-0001](0001-package-rundown-cli-as-compiled-binaries-in-skills.md) §5) and
+`sources`, and `autoUpdate` defaults to `true`. §5's resolver runs in the `rundown digest`
+composition root and hands the selection, window and timezone to the Aggregator and Digester;
+`generatedAt` is read once there and `windowIsPast` is gone ([ADR-0021](0021-the-digest.md) §1).
+Sources are Graph and Slack only: Linear, Jira and `claude-code` leave the `init` template and the
+examples ([#143](https://github.com/oyvindfanebust/rundown/issues/143), [#144](https://github.com/oyvindfanebust/rundown/issues/144)), and Slack's `threads` option fails as an unknown option
+([#142](https://github.com/oyvindfanebust/rundown/issues/142)). §8's guidance row is void. References below to `guidance`, the Planner and
+`brief` describe removed code.
+
 Config is the last piece of the design. The four components are fixed in [ADR-0002](0002-source-abstraction.md)
 (Sources), [ADR-0003](0003-aggregation-model.md) (Aggregation),
 [ADR-0004](0004-trust-boundary-enforcement.md) (Trust boundary), [ADR-0005](0005-planning-layer.md)

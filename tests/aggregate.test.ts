@@ -1,15 +1,23 @@
 import { test, expect, describe } from "bun:test";
-import { aggregate, bucketOf, AggregateError } from "../src/aggregate.ts";
-import { untrusted } from "../src/trust.ts";
-import type { NormalizedItem, Window } from "../src/domain.ts";
+import { aggregate, inWindow } from "../src/aggregate.ts";
+import type { ChatMessage, Window } from "../src/domain.ts";
+import { calendarEventRecord, chatMessageRecord, emailRecord } from "../src/sources/normalize.ts";
 import type { Source, Sources } from "../src/sources/source.ts";
 import type { DebugEvent } from "../src/debug.ts";
 
 const window: Window = { from: "2026-07-06T00:00:00.000Z", to: "2026-07-13T00:00:00.000Z" };
-const now = new Date("2026-07-08T12:00:00Z");
 
-function item(source: string, kind: string, timestamp: string, title: string): NormalizedItem {
-  return { source, kind, timestamp, id: untrusted(`${source}-${title}`), title: untrusted(title) };
+/** A Slack message record at `at`; `ts` keeps each fixture's fingerprint distinct. */
+function item(at: string, ts = at): ChatMessage {
+  return chatMessageRecord({
+    channelId: "C1",
+    ts,
+    at,
+    conversation: { kind: "channel", isExternal: false, name: "general" },
+    author: { name: "Ada", handle: "U2", isMe: false },
+    mentionsMe: true,
+    text: "hi",
+  });
 }
 
 /** Every source now has a required, total `status()`; fakes default to ready. */
@@ -17,67 +25,157 @@ async function ready() {
   return { state: "ready" as const };
 }
 
+/** Every source logs in; the aggregator never calls it. */
+async function login() {
+  return "me@example.test";
+}
+
 /** Build an in-memory source lookup from fake sources, keyed by each source's `key`. */
 function sourcesOf(...list: Source[]): Sources {
   return Object.fromEntries(list.map((s) => [s.key, s]));
 }
 
-describe("bucketOf", () => {
-  test("classifies before-window / in-window / after-now", () => {
-    expect(bucketOf(item("s", "e", "2026-07-01T00:00:00Z", "a"), window, now)).toBe("standing");
-    expect(bucketOf(item("s", "e", "2026-07-07T00:00:00Z", "b"), window, now)).toBe("recent");
-    expect(bucketOf(item("s", "e", "2026-07-10T00:00:00Z", "c"), window, now)).toBe("upcoming");
+describe("inWindow", () => {
+  const event = (isAllDay: boolean, start: string, end: string) =>
+    calendarEventRecord({
+      id: start,
+      continuesFromBefore: false,
+      isAllDay,
+      start,
+      end,
+      title: "e",
+      organizer: { isMe: false },
+      isOrganizer: false,
+      attendees: [],
+      rooms: [],
+      myResponse: "none",
+      showAs: "busy",
+      isCancelled: false,
+      isOnlineMeeting: false,
+      recurring: false,
+    });
+
+  test("a message counts by its own time, from inclusive and to exclusive", () => {
+    expect(inWindow(item("2026-07-05T23:59:59Z"), window)).toBe(false);
+    expect(inWindow(item("2026-07-06T00:00:00Z"), window)).toBe(true);
+    expect(inWindow(item("2026-07-12T23:59:59Z"), window)).toBe(true);
+    expect(inWindow(item("2026-07-13T00:00:00Z"), window)).toBe(false);
   });
 
-  // Once the normalizer rejects garbage, an unparseable timestamp reaching
-  // bucketOf is a bug. Fail hard (ADR-0007 §6) instead of the old silent `recent`
-  // fallback, which mislabelled rather than surfaced the error.
-  test("throws on a NaN timestamp instead of silently returning recent", () => {
-    const bad = item("s", "e", "not-a-date", "x");
-    expect(() => bucketOf(bad, window, now)).toThrow();
+  test("a timed event counts when it overlaps the window", () => {
+    expect(inWindow(event(false, "2026-07-05T23:00:00Z", "2026-07-06T01:00:00Z"), window)).toBe(true);
+    expect(inWindow(event(false, "2026-07-05T22:00:00Z", "2026-07-05T23:00:00Z"), window)).toBe(false);
+    expect(inWindow(event(false, "2026-07-13T00:00:00Z", "2026-07-13T01:00:00Z"), window)).toBe(false);
+  });
+
+  test("an all-day event is kept as the source returned it", () => {
+    expect(inWindow(event(true, "2026-07-05", "2026-07-06"), window)).toBe(true);
+  });
+
+  test("throws on an unparseable instant", () => {
+    // A record that bypassed the builder's instant check is a bug, not data.
+    const bad = { ...item("2026-07-07T00:00:00Z"), at: "not-a-date" };
+    expect(() => inWindow(bad, window)).toThrow(/unparseable/);
   });
 });
 
 describe("aggregate", () => {
-  test("merges, buckets, and sorts chronologically", async () => {
+  test("merges, filters to the window, and sorts chronologically", async () => {
     const fake: Source = {
       key: "fake",
       label: "Fake",
+      login,
       status: ready,
       async read() {
         return [
-          item("fake", "event", "2026-07-10T00:00:00Z", "upcoming"),
-          item("fake", "event", "2026-07-01T00:00:00Z", "standing"),
-          item("fake", "event", "2026-07-07T00:00:00Z", "recent"),
+          item("2026-07-10T00:00:00Z"),
+          item("2026-07-01T00:00:00Z"),
+          item("2026-07-07T00:00:00Z"),
         ];
       },
     };
-    const bundle = await aggregate(window, [{ sourceKey: "fake", options: {} }], sourcesOf(fake), now);
-    expect(bundle.items.map((i) => i.bucket)).toEqual(["standing", "recent", "upcoming"]);
+    const bundle = await aggregate(window, [{ sourceKey: "fake", options: {} }], sourcesOf(fake));
+    // The record before the window is dropped; the manifest counts what the source read.
+    expect(bundle.records.map((r) => (r.type === "chat-message" ? r.at : ""))).toEqual([
+      "2026-07-07T00:00:00Z",
+      "2026-07-10T00:00:00Z",
+    ]);
     expect(bundle.sources).toEqual([{ source: "fake", itemCount: 3 }]);
+  });
+
+  test("carries every record type, ordered by its own time", async () => {
+    const mail = (id: string, at: string) =>
+      emailRecord({
+        id,
+        continuesFromBefore: false,
+        at,
+        folder: "inbox",
+        subject: id,
+        from: { name: "Ada", handle: "ada@x.test", isMe: false },
+        to: [],
+        cc: [],
+        body: "",
+        importance: "normal",
+        isRead: true,
+        flagged: false,
+        hasAttachments: false,
+        inferenceClassification: "focused",
+      });
+    const fake: Source = {
+      key: "graph",
+      label: "Graph",
+      login,
+      status: ready,
+      async read() {
+        return [
+          mail("later", "2026-07-10T00:00:00Z"),
+          item("2026-07-07T00:00:00Z"),
+          mail("earlier", "2026-07-06T09:00:00Z"),
+        ];
+      },
+    };
+    const bundle = await aggregate(window, [{ sourceKey: "graph", options: {} }], sourcesOf(fake));
+    expect(bundle.records.map((r) => r.type)).toEqual(["email", "chat-message", "email"]);
+    expect(bundle.sources).toEqual([{ source: "graph", itemCount: 3 }]);
   });
 
   test("tie-breaks equal timestamps by source", async () => {
     const ts = "2026-07-07T00:00:00Z";
-    const a: Source = { key: "aaa", label: "", status: ready, async read() { return [item("aaa", "e", ts, "x")]; } };
-    const b: Source = { key: "zzz", label: "", status: ready, async read() { return [item("zzz", "e", ts, "y")]; } };
+    const mail = emailRecord({
+      id: "m",
+      continuesFromBefore: false,
+      at: ts,
+      folder: "inbox",
+      subject: "m",
+      from: { name: "Ada", handle: "ada@x.test", isMe: false },
+      to: [],
+      cc: [],
+      body: "",
+      importance: "normal",
+      isRead: true,
+      flagged: false,
+      hasAttachments: false,
+      inferenceClassification: "focused",
+    });
+    const slack: Source = { key: "slack", label: "", login, status: ready, async read() { return [item(ts)]; } };
+    const graph: Source = { key: "graph", label: "", login, status: ready, async read() { return [mail]; } };
     const bundle = await aggregate(
       window,
-      [{ sourceKey: "zzz", options: {} }, { sourceKey: "aaa", options: {} }],
-      sourcesOf(a, b),
-      now,
+      [{ sourceKey: "slack", options: {} }, { sourceKey: "graph", options: {} }],
+      sourcesOf(slack, graph),
     );
-    expect(bundle.items.map((i) => i.source)).toEqual(["aaa", "zzz"]);
+    expect(bundle.records.map((i) => i.source)).toEqual(["graph", "slack"]);
   });
 
   test("pre-flight throws on not-authenticated", async () => {
     const fake: Source = {
       key: "fake",
       label: "Fake",
+      login,
       async read() { return []; },
       async status() { return { state: "not-authenticated" }; },
     };
-    expect(aggregate(window, [{ sourceKey: "fake", options: {} }], sourcesOf(fake), now)).rejects.toThrow(
+    expect(aggregate(window, [{ sourceKey: "fake", options: {} }], sourcesOf(fake))).rejects.toThrow(
       /not authenticated.*rundown login/,
     );
   });
@@ -86,10 +184,11 @@ describe("aggregate", () => {
     const fake: Source = {
       key: "fake",
       label: "Fake",
+      login,
       async read() { return []; },
       async status() { return { state: "not-configured", detail: "set FOO" }; },
     };
-    expect(aggregate(window, [{ sourceKey: "fake", options: {} }], sourcesOf(fake), now)).rejects.toThrow(
+    expect(aggregate(window, [{ sourceKey: "fake", options: {} }], sourcesOf(fake))).rejects.toThrow(
       /not configured — set FOO.*rundown status/,
     );
   });
@@ -98,22 +197,22 @@ describe("aggregate", () => {
     const fake: Source = {
       key: "fake",
       label: "Fake",
+      login,
       status: ready,
-      async read() { return [item("fake", "e", "2026-07-07T00:00:00Z", "ok")]; },
+      async read() { return [item("2026-07-07T00:00:00Z")]; },
     };
-    const bundle = await aggregate(window, [{ sourceKey: "fake", options: {} }], sourcesOf(fake), now);
-    expect(bundle.items).toHaveLength(1);
+    const bundle = await aggregate(window, [{ sourceKey: "fake", options: {} }], sourcesOf(fake));
+    expect(bundle.records).toHaveLength(1);
   });
 
   test("fails hard when a read errors — no partial bundle", async () => {
-    const good: Source = { key: "good", label: "", status: ready, async read() { return [item("good", "e", "2026-07-07T00:00:00Z", "ok")]; } };
-    const bad: Source = { key: "bad", label: "", status: ready, async read() { throw new Error("boom"); } };
+    const good: Source = { key: "good", label: "", login, status: ready, async read() { return [item("2026-07-07T00:00:00Z")]; } };
+    const bad: Source = { key: "bad", label: "", login, status: ready, async read() { throw new Error("boom"); } };
     expect(
       aggregate(
         window,
         [{ sourceKey: "good", options: {} }, { sourceKey: "bad", options: {} }],
         sourcesOf(good, bad),
-        now,
       ),
     ).rejects.toThrow("boom");
   });
@@ -125,10 +224,11 @@ describe("aggregate debug events (ADR-0015)", () => {
     const a: Source = {
       key: "a",
       label: "A",
+      login,
       status: ready,
-      read: async () => [item("a", "event", "2026-07-07T00:00:00Z", "x")],
+      read: async () => [item("2026-07-07T00:00:00Z")],
     };
-    const b: Source = { key: "b", label: "B", status: ready, read: async () => [] };
+    const b: Source = { key: "b", label: "B", login, status: ready, read: async () => [] };
     await aggregate(
       window,
       [
@@ -136,7 +236,6 @@ describe("aggregate debug events (ADR-0015)", () => {
         { sourceKey: "b", options: {} },
       ],
       sourcesOf(a, b),
-      now,
       (e) => events.push(e),
     );
     const runs = events.filter((e) => e.kind === "source-run");
@@ -147,7 +246,7 @@ describe("aggregate debug events (ADR-0015)", () => {
   });
 
   test("defaults to the no-op sink when none is passed", async () => {
-    const a: Source = { key: "a", label: "A", status: ready, read: async () => [] };
-    await expect(aggregate(window, [{ sourceKey: "a", options: {} }], sourcesOf(a), now)).resolves.toBeDefined();
+    const a: Source = { key: "a", label: "A", login, status: ready, read: async () => [] };
+    await expect(aggregate(window, [{ sourceKey: "a", options: {} }], sourcesOf(a))).resolves.toBeDefined();
   });
 });

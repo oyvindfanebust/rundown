@@ -2,31 +2,32 @@
 
 > Give me the rundown.
 
-A readout of where you stand across your work sources: what you've committed to, what's coming
-up, and what you've been working on. `rundown` reads your work systems, has a sandboxed Claude
-call summarize them, and prints a structured Brief as JSON on stdout. A coding agent installs the
-`rundown` skill and drives it on demand; landing and rendering the Brief are the agent's job.
+A readout of your mail, chat and calendar over a window. `rundown` reads your work systems, groups
+what it finds into one entry per meeting, mail thread and chat conversation, has a sandboxed Claude
+call summarize them, and prints the result as a digest in JSON on stdout. Nothing is curated out,
+ranked or turned into tasks. A coding agent installs the `rundown` skill, drives it on demand and
+answers your question from the digest; planning, landing and rendering are the agent's job.
 
-Today `rundown` reads five sources: Microsoft Graph (calendar and mail), Linear (issues you're
-involved in), Jira (issues you're involved in), Slack (messages you were part of), and Claude Code
-logs (local session transcripts).
+Today `rundown` reads two sources: Microsoft Graph (calendar and mail) and Slack (messages you were
+part of).
 
 ## The trust boundary
 
 This is the design decision the rest of the project hangs on. Untrusted source content — meeting
-titles, email and message bodies, issue titles from any backend, anywhere an external party can
+titles, email and message bodies, names from any backend, anywhere an external party can
 hide instructions — meets a model only in the sandboxed, tool-less Summarizer. And no command
 emits raw source data: the whole read → aggregate → summarize pipeline runs sealed inside the
 `rundown` binary, and the only thing that ever crosses the CLI surface is the post-summarizer
-Brief.
+digest.
 
 That gives you two guarantees:
 
 - Injection is inert and confined. The Summarizer has no tools, so a hidden instruction has
-  nothing to act with, and the structured output frames any leaked text as a quoted, attributed
-  snippet rather than a command.
-- A tool-capable agent never sees raw content. It sees only the reduced Brief, which it is
-  instructed to treat as data, and there is no raw-fetch command for it to reach for.
+  nothing to act with. Every string in the digest is either a short model summary or a label
+  (a subject, title, name or channel) that code copied from the source, defanged and clamped.
+  Bodies, addresses, handles, backend ids and URLs never leave the binary.
+- A tool-capable agent never sees raw content. It sees only the digest, which it is instructed to
+  treat as data, and there is no raw-fetch command for it to reach for.
 
 The full enforcement model — structural, in-code (`Untrusted<T>`), and behavioral — is in
 [`AGENTS.md`](AGENTS.md).
@@ -36,10 +37,13 @@ The full enforcement model — structural, in-code (`Untrusted<T>`), and behavio
 `rundown` is one bounded context with a single external surface, the CLI. Inside are four
 components (see [`CONTEXT.md`](CONTEXT.md)):
 
-- **Sources** — read-only adapters, one per backend/auth boundary (Graph, Linear, Jira, Slack, Claude Code logs).
-- **Aggregator** — pulls the selected sources concurrently into one normalized, bucketed Bundle.
-- **Summarizer** — the tool-less Anthropic call; the only place untrusted content meets a model.
-- **Planner** — turns the Bundle into a plan-my-week Brief.
+- **Sources**: read-only adapters, one per backend/auth boundary (Graph, Slack), each returning
+  typed records.
+- **Aggregator**: pulls the selected sources concurrently into one Bundle of typed records in the
+  window.
+- **Summarizer**: the tool-less Anthropic call; the only place untrusted content meets a model.
+- **Digester**: groups the records into digest entries, makes one Summarizer call for the window,
+  and builds the digest.
 
 ## Install
 
@@ -82,10 +86,10 @@ Installing the binary doesn't make a source ready to run. Getting a source live 
 
 - **Phase 1 — once per org, manual.** Provider-side setup: registering an app, granting scopes,
   creating a key. A human does this once for the whole organization.
-- **Phase 2 — per user.** Each user either runs `rundown login` once or exports an env var.
+- **Phase 2 — per user.** Each user runs `rundown login` once.
 
 Secrets are read from the environment and never live in the config file. The config carries only
-what feeds the binary (timezone, sources, guidance), so it is safe to copy or commit.
+what feeds the binary (timezone, window, sources), so it is safe to copy or commit.
 
 ### Phase 1: Microsoft Graph (Azure)
 
@@ -109,58 +113,6 @@ Graph is the reference source. Register an app once:
 Phase 2 is `rundown login`: it opens a browser for Microsoft sign-in once, and tokens refresh
 silently after that.
 
-### Phase 1: Linear — get your key
-
-Linear doesn't use `rundown login`; the API key alone is the credential:
-
-1. In Linear, go to **Settings → Security & access → Personal API keys** and create a **read-only**
-   personal API key.
-2. Export it:
-
-   ```sh
-   export LINEAR_API_KEY=...
-   ```
-
-`rundown status` verifies the key against the API and reports if it's missing or rejected.
-
-Note that some workspaces disable personal API keys by policy. In that case the Linear source is
-unavailable until the policy allows it. OAuth (via the same `login()` interface Graph already
-uses) is the planned way around this.
-
-### Phase 1: Jira — get your API token
-
-Jira doesn't use `rundown login` either; the account email and an API token together are the
-credential:
-
-1. At [id.atlassian.com](https://id.atlassian.com), go to **Security → API tokens** and create an
-   API token.
-2. Export the token and the Atlassian account email it belongs to — both halves are secrets:
-
-   ```sh
-   export JIRA_EMAIL=...
-   export JIRA_API_TOKEN=...
-   ```
-
-3. Set the required `site` option in `~/.config/rundown/config.json`. It names the Jira Cloud site
-   to read, which the token does not carry:
-
-   ```json
-   "sources": {
-     "jira": { "site": "your-domain.atlassian.net" }
-   }
-   ```
-
-   A full `https://` origin works too. `site` is config rather than a secret, so it belongs in the
-   file; the two env vars stay in the environment.
-
-The other options are optional scope: `relationships` picks which of `assigned`, `created`, and
-`watching` to pull (omit for `assigned` only), `statuses` picks which of the `new`,
-`indeterminate`, and `done` status categories to include (omit for all three), and `projects`
-restricts the read to a list of project keys (omit for all projects).
-
-`rundown status` verifies the credentials against the API and reports if either env var is
-missing, if `site` is unset, or if the credentials are rejected.
-
 ### Phase 1: Slack
 
 Slack uses `rundown login`, like Graph. Register one app once for the whole workspace:
@@ -168,9 +120,7 @@ Slack uses `rundown login`, like Graph. Register one app once for the whole work
 1. At [api.slack.com/apps](https://api.slack.com/apps), create an app in your workspace.
 2. Under **OAuth & Permissions**, add a **redirect URL** of `http://localhost:53912` — the loopback
    address `rundown login` listens on.
-3. Under **User Token Scopes** (not bot scopes), add `search:read` and `users:read`. The optional
-   `threads` config option needs the `*:history` family (`channels:history`, `groups:history`,
-   `im:history`, `mpim:history`) as well — adding it later is a re-login, not an admin re-approval.
+3. Under **User Token Scopes** (not bot scopes), add `search:read` and `users:read`.
 4. From **Basic Information**, note the **Client ID** and **Client Secret**, and export them:
 
    ```sh
@@ -181,17 +131,12 @@ Slack uses `rundown login`, like Graph. Register one app once for the whole work
 Phase 2 is `rundown login`: it opens a browser to authorize the app once and caches your user
 token. `rundown` reads only what your own account can see, via `search.messages`.
 
-### Phase 1: Claude Code logs
-
-A local source that reads your Claude Code session transcripts. No auth, nothing to configure —
-it's always ready.
-
 ## Commands
 
 Five commands make up the whole surface:
 
 ```
-rundown brief [--window <span|date|range>]   compose the pipeline; emit one Brief as JSON on stdout
+rundown digest [--window <span|date|range>]  compose the pipeline; emit one digest as JSON on stdout
 rundown login [<source>]                     interactively authenticate configured sources
 rundown status                               per-source configured/authed diagnostic + next step
 rundown init                                 write the annotated config template (if absent)
@@ -202,64 +147,54 @@ Onboarding runs them in order:
 
 ```sh
 rundown init      # writes ~/.config/rundown/config.json (annotated JSONC, zero secrets)
-# edit the config — timezone, source selection, planning guidance
+# edit the config: timezone, source selection, source options
 rundown login     # opens a browser for Microsoft sign-in (once; tokens refresh silently)
-rundown status    # poll until it prints `Next: rundown brief`
+rundown status    # poll until it prints `Next: rundown digest`
 ```
 
 `rundown status` prints one readiness phrase per source plus an `N of M ready` line and a single
-`Next:` line telling you what remains; when it says `Next: rundown brief`, you're done. It also
+`Next:` line telling you what remains; when it says `Next: rundown digest`, you're done. It also
 reports whether the Summarizer's `ANTHROPIC_API_KEY` is present:
 
 ```sh
 export ANTHROPIC_API_KEY=...   # the Summarizer credential, read from the env like every secret
 ```
 
-`rundown login` authenticates every configured interactive source and prints an exit summary of
-what it did and what still needs an env var. Pass an optional source name — `rundown login graph`
-— to authenticate just one. Linear and Jira are never part of `login`; they authenticate from
-their env credentials alone.
+`rundown login` authenticates every configured source and prints an exit summary of
+what it did. Pass an optional source name — `rundown login graph` — to authenticate just one.
 
 The config file `~/.config/rundown/config.json` (override the path with `RUNDOWN_CONFIG`) owns
-only `timezone`, `window`, `sources` (selection = presence; the one mandatory field), freeform
-`guidance` for the planner, and `suppress` rules. No secrets, ever.
+only `timezone`, `window`, `autoUpdate` and `sources` (selection = presence; the one mandatory
+field). No secrets, ever.
 
-`suppress` drops recurring non-task noise before the model sees it — deterministic, unlike
-`guidance`. Each rule matches by `sender` and/or `title` (case-insensitive substring), or by
-`series` — the `seriesFingerprint` a Brief's evidence shows for any occurrence of a recurring
-calendar event or any message in a mail thread. Criteria within a rule AND together; rules OR; an optional `source` key scopes a
-rule to one source. The Brief's envelope carries a `suppressed` audit (the rule, a count, and the
-suppressed items' fingerprints) for every rule that fired, so nothing disappears silently:
-
-```jsonc
-"suppress": [
-  { "sender": "notifications@github.com", "title": "Release Pipeline" },
-  { "series": "0123456789abcdef" }
-]
-```
+The `guidance` and `suppress` keys were removed. A config that still has either fails with an error
+naming the key; delete it.
 
 ## Usage
 
 ```sh
-rundown brief                                  # this week's rundown as JSON on stdout
-rundown brief --window today                   # a symbolic span
-rundown brief --window 2026-07-14              # a single calendar day
-rundown brief --window 2026-07-06..2026-07-12  # an explicit, end-inclusive range
+rundown digest                                  # this week's digest as JSON on stdout
+rundown digest --window today                   # a symbolic span
+rundown digest --window 2026-07-14              # a single calendar day
+rundown digest --window 2026-07-06..2026-07-12  # an explicit, end-inclusive range
 ```
 
 `--window` accepts a symbolic span (`today` | `this-week` | `next-week` | `last-week`), a single
 `YYYY-MM-DD` date, or an explicit end-inclusive date range. Spans are the recommended form and the
 only form the config file's `window` accepts; explicit dates are for one-off invocations.
 
-stdout is either a valid Brief or empty; errors and refusals go to stderr with a non-zero exit.
-An empty window emits an empty Brief and exits 0.
+stdout is either a valid digest or empty; errors and refusals go to stderr with a non-zero exit.
+An empty window emits an empty digest and exits 0. A window too large for one Summarizer call fails
+with a message asking for a shorter window.
 
 ## Using it from a coding agent
 
 `rundown` is published as a single-skill collection. A coding agent installs the `rundown` skill
 (`SKILL.md` + `references/onboarding.md`) and drives the CLI: the skill carries the treat-as-data
-trust contract and the rendering guidance, while the CLI is installed separately. The skill walks
-the agent through onboarding and renders each Brief; where the output lands is the agent's call.
+trust contract, a reference for every digest field and its trust class, and how to drive the CLI,
+while the CLI is installed separately. The skill walks the agent through onboarding; the agent then
+answers the user's question from the digest rather than reproducing it, and decides where any
+output lands.
 
 ## Development
 
@@ -269,8 +204,9 @@ bun test              # unit tests for every component
 scripts/e2e.sh        # end-to-end acceptance against live Graph (needs BYO credentials + login)
 ```
 
-The typecheck is not optional: the `Untrusted<T>` sole-unwrap-site guarantee is enforced at
-typecheck time, so a green `tsc` run is part of the trust boundary.
+The typecheck is not optional: the `Untrusted<T>` two-unwrap-site guarantee is enforced at
+typecheck time, so a green `tsc` run is part of the trust boundary. `scripts/check-unwrap-sites.sh`
+checks that only the Digester and `label()` call `unwrap()`.
 
 Design record: [`CONTEXT.md`](CONTEXT.md) (the domain glossary) and [`docs/adr/`](docs/adr/) (the
 decision record).

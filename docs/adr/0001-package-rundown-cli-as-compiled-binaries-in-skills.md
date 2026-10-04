@@ -2,6 +2,13 @@
 
 **Status:** Accepted
 
+**Amendment (digest, [#117](https://github.com/oyvindfanebust/rundown/issues/117)).** `rundown digest` replaces `rundown brief`
+([#150](https://github.com/oyvindfanebust/rundown/issues/150), [ADR-0021](0021-the-digest.md)), so §5's five-command surface is
+`digest`/`login`/`status`/`init`/`--version`. What §5 and the consequences say of `brief` (output
+determinism, no version network call on the summarizer path, the terminal-gated line after repeated
+update failures) holds for `digest`. The trust boundary this ADR points to is
+[ADR-0022](0022-trust-boundary.md), which supersedes ADR-0004.
+
 The compiled-binary distribution described below (the release workflow and `install.sh`) ships as of
 v0.1.0; releases carry the nine assets (§2). Background self-update (§5) ships as of v0.7.0, enabled
 by default, and §8's build-provenance attestation is produced from that release forward. The launcher

@@ -41,24 +41,6 @@ const AUTHORIZE_URL = "https://slack.com/oauth/v2/authorize";
 /** Shipped user scopes (ADR-0014 §6, #20): least-privilege, search-driven. */
 export const BASE_SCOPES = ["search:read", "users:read"];
 
-/**
- * The `*:history` family `conversations.replies` needs for the opt-in `threads`
- * reconstruction (ADR-0014 §5), one per channel type. Requested only when the
- * `threads` option is on, so enabling it is a user re-login against the
- * admin-approved `user_scope` ceiling, not an admin re-approval.
- */
-export const HISTORY_SCOPES = [
-  "channels:history",
-  "groups:history",
-  "im:history",
-  "mpim:history",
-];
-
-/** The user scopes to request at login, given the resolved `threads` option. */
-export function scopesFor(threads: boolean): string[] {
-  return threads ? [...BASE_SCOPES, ...HISTORY_SCOPES] : [...BASE_SCOPES];
-}
-
 export interface SlackAppConfig {
   clientId: string;
   clientSecret: string;
@@ -208,14 +190,14 @@ async function exchangeCode(cfg: SlackAppConfig, code: string, redirectUri: stri
 }
 
 /**
- * Interactive login via the OAuth v2 code flow. `threads` widens the requested
- * `user_scope` to the `*:history` family (ADR-0014 §5). Mints and caches the
- * `xoxp-`, then confirms it with a live `auth.test` and returns the account name.
+ * Interactive login via the OAuth v2 code flow, requesting the base user scopes.
+ * Mints and caches the `xoxp-`, then confirms it with a live `auth.test` and
+ * returns the account name.
  */
-export async function login(threads: boolean): Promise<string> {
+export async function login(): Promise<string> {
   const cfg = requireAppConfig();
   const redirectUri = `http://localhost:${SLACK_REDIRECT_PORT}`;
-  const authUrl = authorizeUrl(cfg.clientId, scopesFor(threads), redirectUri);
+  const authUrl = authorizeUrl(cfg.clientId, BASE_SCOPES, redirectUri);
   const code = await awaitAuthCode(SLACK_REDIRECT_PORT, authUrl);
   const auth = await exchangeCode(cfg, code, redirectUri);
   await writeCachedAuth(auth);

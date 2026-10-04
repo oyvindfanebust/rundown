@@ -17,9 +17,10 @@ land on the trust boundary described below will get priority attention.
 
 ## Threat model
 
-`rundown` reads from work sources — calendar, mail, issue trackers, chat — and has a model
-summarize what it finds into a plain-language Brief. The content it reads is untrusted: a meeting
-title, an email body, a message, or an issue title can be authored by someone other than you, and
+`rundown` reads from work sources (calendar, mail and chat) and emits a digest: one entry per
+meeting, mail thread and chat conversation, with facts copied by code and short summaries written by
+a model. The content it reads is untrusted: a meeting title, an email body, a message, or a display
+name can be authored by someone other than you, and
 that someone could hide instructions in it aimed at a model or an agent acting on your behalf.
 That is the threat this project defends against: prompt injection carried in untrusted
 work-source content, aimed at making a tool-capable agent do something its user didn't ask for.
@@ -27,24 +28,28 @@ work-source content, aimed at making a tool-capable agent do something its user 
 ### The three enforcement layers
 
 1. **Structural seal.** The entire read → aggregate → summarize pipeline runs sealed inside the
-   compiled `rundown` binary. The only commands the binary exposes are `brief`, `login`, `status`,
+   compiled `rundown` binary. The only commands the binary exposes are `digest`, `login`, `status`,
    `init`, and `--version`, and every one of them is post-summarizer. There is no raw-fetch
    command in the release build; raw source content never crosses the CLI surface at all.
-2. **Sole-unwrap-site typing.** Every field that carries untrusted content is branded with a type
+2. **Two-unwrap-site typing.** Every field that carries untrusted content is branded with a type
    (`Untrusted<T>`) that forces an explicit, greppable "unwrap" to get at the raw bytes. Exactly
-   one place in the codebase is allowed to unwrap — the prompt assembly that feeds the Summarizer.
-   Every other output channel (status text, logs, error messages, the source manifest)
-   structurally cannot touch raw untrusted bytes. If an unwrap ever happens somewhere else by
+   two places in the codebase are allowed to unwrap: the Digester, which builds the Summarizer's
+   input and groups records, and `label()`, which strips, defangs and clamps a subject, title,
+   name or channel before code copies it into the digest. Every digest field has one trust class:
+   a trusted value (a number, instant, boolean, closed enum or digest), a label, or model output.
+   Bodies, addresses, handles, backend ids and URLs never leave the binary. Every other output
+   channel (status text, logs, error messages, the source manifest) structurally cannot touch raw
+   untrusted bytes. If an unwrap ever happens somewhere else by
    accident, the wrapper redacts to a fixed `[untrusted]` marker on every common
    accidental-serialization path rather than printing the real content.
-3. **Brief-as-data.** The model that actually reads untrusted content — the Summarizer — has zero
-   tools. It can only produce text; it cannot act on anything it's told to do. Its output (the
-   Brief) is never treated as fully trusted: any agent consuming it is expected to treat every
-   field as quoted data describing your work, never as an instruction to follow.
+3. **Digest-as-data.** The model that reads untrusted content, the Summarizer, has zero tools. It
+   can only produce text; it cannot act on anything it's told to do. The digest's summaries and
+   labels are never treated as fully trusted: any agent consuming the digest is expected to treat
+   them as quoted data describing your work, never as an instruction to follow.
 
 Taken together: injection against the Summarizer is inert (it has nothing to act with), a leak
-that somehow escapes the Summarizer's prompt boundary is confined to labeled, structured fields
-rather than a bare imperative, and the one component with tools (the agent driving `rundown`)
+that somehow escapes the Summarizer's prompt boundary is confined to typed, length-bounded,
+defanged fields rather than a bare imperative, and the one component with tools (the agent driving `rundown`)
 never sees raw content in the first place.
 
 ### What's explicitly *not* in this threat model
@@ -72,15 +77,16 @@ never sees raw content in the first place.
 These are security vulnerabilities — please report them privately:
 
 - Any path where untrusted source bytes reach a tool-capable context, or reach any output channel
-  other than the Summarizer's prompt — e.g., an `unwrap()` call (or equivalent leak) outside
-  `src/plan.ts`'s prompt assembly that lets untrusted content reach status output, logs, error
-  messages, or the source manifest.
+  other than the Summarizer's prompt or a label, e.g. an `unwrap()` call (or equivalent leak)
+  outside `src/digester.ts` and `src/label.ts` that lets untrusted content reach status output,
+  logs, error messages, or the source manifest, or a body, address, handle, id or URL that reaches
+  the digest.
 - A delimiter breakout: a way to make source content escape the untrusted-data region of the
   Summarizer's prompt and land in the trusted-instruction region, where it would be followed
   instead of described.
 - A new agent-facing command, flag, or code path that emits pre-summarizer or otherwise raw
   source content.
-- An exfiltration vector carried in Brief fields — for example, a source-influenced URL or
+- An exfiltration vector carried in digest fields — for example, a source-influenced URL or
   markdown image reference that survives into rendered output and could be used for zero-click
   tracking or data exfiltration.
 - Any change that would add tools to the Summarizer, or otherwise give it the ability to act
@@ -88,7 +94,7 @@ These are security vulnerabilities — please report them privately:
 
 These are regular bugs, not vulnerabilities — please use a normal GitHub Issue:
 
-- Crashes, incorrect bucketing or sorting, formatting glitches, auth-flow UX rough edges, config
+- Crashes, incorrect grouping or sorting, formatting glitches, auth-flow UX rough edges, config
   parsing errors, missing or incomplete source data.
 - Anything that doesn't cross the untrusted-content → trusted-output boundary described above.
 

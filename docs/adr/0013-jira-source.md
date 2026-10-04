@@ -1,6 +1,10 @@
 # ADR 0013 — The Jira source
 
-**Status:** Accepted
+**Status:** Retired ([#117](https://github.com/oyvindfanebust/rundown/issues/117))
+
+Removed in [#143](https://github.com/oyvindfanebust/rundown/issues/143): Jira has a good interface
+of its own, so `rundown` drops the source and its upkeep. The rest of this ADR is the record of the
+removed design.
 
 This ADR fixes the design of the Jira (Cloud) source: a read-only adapter under `src/sources/jira/`
 that follows the Source pattern in [ADR-0002](0002-source-abstraction.md), brands all backend

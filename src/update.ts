@@ -503,7 +503,7 @@ export async function runUpdateWorker(deps: {
     const swapped = await deps.swap(found.latest);
     if (swapped.ok) {
       // The new version takes effect on the next invocation; this process is not
-      // mutated, so a Brief in flight stays deterministic.
+      // mutated, so a digest in flight stays deterministic.
       await writeUpdateState(
         deps.io,
         deps.dir,
@@ -751,14 +751,14 @@ export const FAILURE_WARN_THRESHOLD = 7;
  *
  * Everything else about update failure is deliberately silent, and the visible
  * signal lives in `status`. But the primary consumer is an agent, and an agent runs
- * `brief`; it has no reason to call `status` again after onboarding. An install
+ * `digest`; it has no reason to call `status` again after onboarding. An install
  * where every check has failed for months looks identical to a healthy one from the
  * only command anyone actually runs.
  *
  * Accepted limitation: a fully headless install never has a terminal, so it stays
- * silent regardless. The rejected alternative was surfacing this in the Brief,
- * which would pollute a contract ADR-0011 pins with a schema test and which is the
- * untrusted-derived artifact.
+ * silent regardless. The rejected alternative was surfacing this in the digest,
+ * which would pollute an output contract pinned by a schema (ADR-0011, ADR-0021)
+ * with a field that is not about the user's window.
  */
 export function persistentFailureWarning(state: UpdateState | undefined): string | undefined {
   if (!state || state.outcome !== "failed" && state.outcome !== "refused") return undefined;

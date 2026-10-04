@@ -10,7 +10,7 @@
 // opaque (a TypeScript `private` field), so it is not assignable to `string` or
 // `number`. Every field of every event below is a plain scalar, so handing an
 // untrusted value to the sink is a COMPILE ERROR. The only way to raw bytes stays
-// `unwrap()`, whose sole call site is the summarizer-prompt assembly in `plan.ts`
+// `unwrap()`, whose only callers are the Digester and `label()` (ADR-0022)
 // (enforced by `scripts/check-unwrap-sites.sh`); nothing in this module imports it.
 //
 // Two rules keep the union honest as it grows — both close a leak that a naive
@@ -22,12 +22,12 @@
 //     a numeric `httpStatus` read through the shared `statusOf` scrub.
 //  2. Host and path SHAPE only — never a populated URL or query string, which can
 //     carry user or query content. A `path` field is a control-plane filesystem
-//     path (the config file, a log directory), not a backend-authored value.
+//     path (the config file), not a backend-authored value.
 //
 // The union is CLOSED and source-agnostic: every remote source emits the same
 // `http` event, parameterized by a `source` key, so it does not grow per source.
 // It grows only for a genuinely new KIND of structural signal — and that edit is
-// the boundary review, the same discipline as the sole-unwrap-site rule.
+// the boundary review, the same discipline as the unwrap-site rule.
 
 /**
  * One debug event. Every field is a trusted structural scalar; see the module
@@ -42,19 +42,6 @@ export type DebugEvent =
   | { kind: "auth-verify"; source: string; outcome: "ready" | "rejected"; httpStatus?: number }
   /** One source's read: wall time and how many items it returned. */
   | { kind: "source-run"; source: string; ms: number; itemCount: number }
-  /** One page fetched by a paginating source. */
-  | { kind: "pagination"; source: string; page: number; items: number }
-  /** A transport routing decision (e.g. Jira's gateway-vs-instance fallback). */
-  | { kind: "route"; source: string; via: string; reason?: "preferred" | "fallback" }
-  /** A local source's filesystem scan: which directory, how many files. */
-  | { kind: "scan"; source: string; path: string; fileCount: number }
-  /**
-   * One configured suppression rule's tally for this run (#107): its 1-based
-   * position in the config's `suppress` array and how many items it matched —
-   * including zero, which is the "why isn't my rule firing" signal. Position and
-   * count only: the rule's content is user-authored, but the union stays scalar.
-   */
-  | { kind: "suppress"; rule: number; count: number }
   /**
    * The self-update gate's decision and why (ADR-0001 §5). `reason` is a short
    * structural marker from a closed set the gate owns — never a message, never a
@@ -110,14 +97,6 @@ export function formatDebugEvent(e: DebugEvent): string {
       return `[debug] ${e.source}  auth-verify ${e.outcome}${e.httpStatus !== undefined ? ` (HTTP ${e.httpStatus})` : ""}`;
     case "source-run":
       return `[debug] ${e.source}  source-run ${e.ms}ms ${e.itemCount} item(s)`;
-    case "pagination":
-      return `[debug] ${e.source}  page ${e.page} → ${e.items} item(s)`;
-    case "route":
-      return `[debug] ${e.source}  route via=${e.via}${e.reason ? ` (${e.reason})` : ""}`;
-    case "scan":
-      return `[debug] ${e.source}  scan path=${e.path} files=${e.fileCount}`;
-    case "suppress":
-      return `[debug] suppress  rule ${e.rule} → ${e.count} item(s)`;
     case "update-gate":
       return `[debug] update  gate ${e.spawned ? "spawn" : `skip (${e.reason})`}`;
   }
@@ -128,7 +107,7 @@ export function formatDebugEvent(e: DebugEvent): string {
  * progress sink this is NOT gated on `stderr.isTTY` (ADR-0015 §4): progress is
  * ambient noise a piped run should not see, but debug is explicitly requested and
  * its main use is capturing signal from a piped or CI run. stdout stays reserved
- * for the Brief (ADR-0006) either way.
+ * for the digest (ADR-0006) either way.
  */
 export function makeDebugSink(enabled: boolean, write: (s: string) => void): DebugSink {
   if (!enabled) return noDebug;

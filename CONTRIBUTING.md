@@ -32,7 +32,7 @@ bun x tsc --noEmit     # typecheck — the hard gate, see below
 ```
 
 `bun x tsc --noEmit` is a hard gate because the trust boundary depends on it: the `Untrusted<T>`
-sole-unwrap-site guarantee (below) is enforced at typecheck time, not at runtime. A PR that
+two-unwrap-site guarantee (below) is enforced at typecheck time, not at runtime. A PR that
 doesn't pass `tsc --noEmit` cannot be merged, no exceptions.
 
 `scripts/e2e.sh` runs an end-to-end acceptance pass against live Microsoft Graph. It's useful for
@@ -41,9 +41,9 @@ credentials and a completed `rundown login`.
 
 ## The one rule
 
-`rundown` reads content from your work sources — meeting titles, email and message bodies, issue
-titles — and text like that can be authored by anyone: a coworker, an external sender, anyone who
-can put a word into your calendar or inbox. That makes it untrusted: it might contain
+`rundown` reads content from your work sources (meeting titles, email and message bodies, names
+and channel names), and text like that can be authored by anyone: a coworker, an external sender,
+anyone who can put a word into your calendar or inbox. That makes it untrusted: it might contain
 instructions someone hid there, hoping a model or an agent acting on your behalf would follow
 them instead of just reporting on them.
 
@@ -57,13 +57,15 @@ Three things follow from that rule, and a contributor must never do any of them:
 1. **Never add tools to the Summarizer.** It stays a plain text-in/text-out call, permanently.
    Give it a tool and any injected instruction hiding in the content it reads gains something to
    act with.
-2. **Never add an `unwrap()` call site outside `src/plan.ts`'s prompt assembly.** Every untrusted
-   field is wrapped in the `Untrusted<T>` type (`src/trust.ts`). `unwrap()` is the sole primitive
-   that extracts the raw value, and `src/plan.ts`'s prompt assembly is its only legitimate caller.
-   The set of unwrap call sites is the project's security audit, which only works if it stays at
-   one site. (CI checks this mechanically — see the unwrap-gate check in the workflow.)
+2. **Never add an `unwrap()` call site outside `src/digester.ts` and `src/label.ts`.** Every
+   untrusted field is wrapped in the `Untrusted<T>` type (`src/trust.ts`). `unwrap()` is the sole
+   primitive that extracts the raw value, and it has two legitimate callers: the Digester, which
+   reads untrusted text to build the Summarizer's input and to group records, and `label()`,
+   which defangs and clamps a subject, title, name or channel before code copies it into the
+   digest. The set of unwrap call sites is the project's security audit, which only works if it
+   stays at those two. CI checks this with `scripts/check-unwrap-sites.sh`.
 3. **Never add a command or code path that emits raw source data to the caller.** The only
-   agent-facing commands are `brief`, `login`, `status`, `init`, and `--version`, and every one of
+   agent-facing commands are `digest`, `login`, `status`, `init`, and `--version`, and every one of
    them is post-summarizer. There is no raw-fetch command, by design — don't add one, and don't
    add a debug flag that behaves like one.
 
@@ -71,7 +73,7 @@ A PR that weakens this boundary is rejected regardless of how valuable the featu
 
 If you're planning a change anywhere near the Summarizer, `Untrusted<T>`, source adapters, or the
 CLI surface, read [`SECURITY.md`](SECURITY.md) for the full threat model and
-[ADR-0004](docs/adr/0004-trust-boundary-enforcement.md) (with [`CONTEXT.md`](CONTEXT.md) for the
+[ADR-0022](docs/adr/0022-trust-boundary.md) (with [`CONTEXT.md`](CONTEXT.md) for the
 surrounding vocabulary) before you start — it'll save you a review round-trip.
 
 ## Reporting security issues

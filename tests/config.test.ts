@@ -19,11 +19,13 @@ const readySource = (key: string, label: string): Source => ({
   async status() {
     return { state: "ready" };
   },
+  async login() {
+    return "me@example.test";
+  },
 });
 const fakeGraph: SourceDescriptor = {
   key: "graph",
   label: "Fake Graph",
-  interactive: true,
   options: {
     kinds: {
       type: "string[]",
@@ -36,7 +38,6 @@ const fakeGraph: SourceDescriptor = {
 const fakeLinear: SourceDescriptor = {
   key: "linear",
   label: "Fake Linear",
-  interactive: false,
   options: {},
   build: () => readySource("linear", "Fake Linear"),
 };
@@ -180,7 +181,7 @@ describe("parseConfig", () => {
 
 // resolveConfig is the untested wiring around temporal.ts's tested fortress: it
 // picks the selector (--window override vs config default vs this-week fallback),
-// derives the windowSpan display label, and reconciles `now` into windowIsPast.
+// and derives the windowSpan display label.
 describe("resolveConfig", () => {
   const originalConfig = process.env.RUNDOWN_CONFIG;
   let dir: string | undefined;
@@ -226,25 +227,6 @@ describe("resolveConfig", () => {
     expect(cfg.windowSpan).toBe("2026-07-06..2026-07-12");
   });
 
-  test("windowIsPast flips exactly at the boundary instant (to <= now)", async () => {
-    writeConfig(`{"timezone":"UTC","sources":{"graph":{}}}`);
-    // A single-day window: inclusive 2026-07-10 → exclusive `to` at 2026-07-11T00:00Z.
-    const windowOverride = parseWindowSelector("2026-07-10");
-
-    const atBoundary = await resolveConfig(descriptors, {
-      now: new Date("2026-07-11T00:00:00.000Z"),
-      windowOverride,
-    });
-    expect(atBoundary.window.to).toBe("2026-07-11T00:00:00.000Z");
-    expect(atBoundary.windowIsPast).toBe(true); // to <= now → the window has closed
-
-    const justBefore = await resolveConfig(descriptors, {
-      now: new Date("2026-07-10T23:59:59.999Z"),
-      windowOverride,
-    });
-    expect(justBefore.windowIsPast).toBe(false); // to > now → still open by 1ms
-  });
-
   // --source narrows the configured selection for one run; it can only subset what
   // config selects, never reach past config to the registry.
   describe("--source narrowing", () => {
@@ -286,63 +268,53 @@ describe("resolveConfig", () => {
   });
 });
 
-describe("suppress (#107)", () => {
+describe("removed config keys (#145, #150)", () => {
   const src = `"sources": {"graph": {}}`;
 
-  test("parses valid rules and defaults to an empty list when absent", () => {
-    const parsed = parseConfig(
-      `{"suppress": [
-         {"sender": "notifications@github.com", "title": "Release Pipeline"},
-         {"series": "0123456789abcdef"},
-         {"source": "graph", "title": "standup"}
-       ], ${src}}`,
-      descriptors,
-    );
-    expect(parsed.suppress).toHaveLength(3);
-    expect(parsed.suppress[1]).toEqual({ series: "0123456789abcdef" });
-    expect(parseConfig(`{${src}}`, descriptors).suppress).toEqual([]);
+  test("a config with suppress fails with the removed-key error naming it", () => {
+    let message = "";
+    try {
+      parseConfig(`{"suppress": [{"title": "standup"}], ${src}}`, descriptors);
+    } catch (e) {
+      expect(e).toBeInstanceOf(ConfigError);
+      message = (e as Error).message;
+    }
+    expect(message).toMatch(/^Config key "suppress" was removed/);
+    expect(message).toMatch(/[Dd]elete it/);
+    // The dedicated error, not the generic unknown-key message with a near-miss suggestion.
+    expect(message).not.toMatch(/Unknown config key|did you mean|Known keys/);
   });
 
-  test("rejects a non-array suppress", () => {
-    expect(() => parseConfig(`{"suppress": {}, ${src}}`, descriptors)).toThrow(/array of rules/);
+  test("the removed-key error fires for any value of the key, even an empty one", () => {
+    expect(() => parseConfig(`{"suppress": [], ${src}}`, descriptors)).toThrow(/"suppress" was removed/);
   });
 
-  test("rejects a rule with an unknown key, with a did-you-mean", () => {
-    expect(() => parseConfig(`{"suppress": [{"tittle": "x"}], ${src}}`, descriptors)).toThrow(
-      /Unknown key "tittle" in "suppress" rule 1.*title/,
-    );
-  });
-
-  test("rejects a rule with no matching criterion — including source-only", () => {
-    expect(() => parseConfig(`{"suppress": [{}], ${src}}`, descriptors)).toThrow(
-      /no matching criterion/,
-    );
-    expect(() => parseConfig(`{"suppress": [{"source": "graph"}], ${src}}`, descriptors)).toThrow(
-      /no matching criterion/,
+  test("the removed-key error wins over an unknown key listed before it", () => {
+    expect(() => parseConfig(`{"nonsense": 1, "suppress": [], ${src}}`, descriptors)).toThrow(
+      /"suppress" was removed/,
     );
   });
 
-  test("rejects non-string and empty criterion values", () => {
-    expect(() => parseConfig(`{"suppress": [{"title": 3}], ${src}}`, descriptors)).toThrow(
-      /"title" in "suppress" rule 1 must be a non-empty string/,
-    );
-    expect(() => parseConfig(`{"suppress": [{"title": ""}], ${src}}`, descriptors)).toThrow(
-      /non-empty string/,
+  test("a config with guidance fails with the removed-key error naming it and saying why", () => {
+    let message = "";
+    try {
+      parseConfig(`{"guidance": "keep it terse", ${src}}`, descriptors);
+    } catch (e) {
+      expect(e).toBeInstanceOf(ConfigError);
+      message = (e as Error).message;
+    }
+    expect(message).toMatch(/^Config key "guidance" was removed: the digest has no planning step to steer/);
+    expect(message).toMatch(/Delete it from config\.json\.$/);
+    expect(message).not.toMatch(/Unknown config key|did you mean|Known keys/);
+  });
+
+  test("guidance is no longer a known key", () => {
+    expect(() => parseConfig(`{"guidanc": "x", ${src}}`, descriptors)).toThrow(
+      "Known keys: timezone, window, autoUpdate, sources.",
     );
   });
 
-  test("rejects an unknown source scope, naming the rule", () => {
-    expect(() => parseConfig(`{"suppress": [{"source": "jra", "title": "x"}], ${src}}`, descriptors)).toThrow(
-      /Unknown source "jra" in "suppress" rule 1/,
-    );
-  });
-
-  test("rejects a malformed series fingerprint and points at Brief evidence", () => {
-    expect(() => parseConfig(`{"suppress": [{"series": "not-hex"}], ${src}}`, descriptors)).toThrow(
-      /16-hex-char seriesFingerprint/,
-    );
-    expect(() => parseConfig(`{"suppress": [{"series": "ABCDEF0123456789"}], ${src}}`, descriptors)).toThrow(
-      /16-hex-char seriesFingerprint/,
-    );
+  test("a key that is merely unknown still gets the generic error", () => {
+    expect(() => parseConfig(`{"suppres": [], ${src}}`, descriptors)).toThrow(/Unknown config key "suppres"/);
   });
 });
