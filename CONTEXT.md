@@ -343,6 +343,15 @@ unit is the same whatever the window's length. An entry that needs the user carr
 [attention](#attention).
 _Avoid_: digest item (collides with [ExtractedItem](#extracteditem)), message, event (those are records).
 
+### attention
+
+Planned, not yet built (map [#117](https://github.com/oyvindfanebust/rundown/issues/117)). What a
+digest entry carries when it needs the user: a kind (commitment, task, waiting or fyi), a
+model-written summary and optional human-phrased timing. It sits on the one entry it concerns, never
+in a separate list that points at entries; the consumer builds the plan view by collecting the
+entries that carry it. Successor of [ExtractedItem](#extracteditem).
+_Avoid_: plan item (implies a separate list), evidence (the pointer-and-quote mechanism it replaces).
+
 ### Emission
 
 The composition-root step where the [Brief](#brief) leaves `rundown`. `rundown brief` serializes
