@@ -1,6 +1,7 @@
-// The Graph reference Source (ADR-0002): Microsoft 365 calendar + mail, emitting
-// kind-tagged NormalizedItems. Calendar events are `event`s; inbox + sent mail
-// are `message`s. All backend content is branded Untrusted at this boundary.
+// The Graph reference Source (ADR-0002, ADR-0019): Microsoft 365 calendar + mail.
+// Inbox and sent mail are typed `Email` records; calendar events are still
+// `event` NormalizedItems until they move to records (#148). All backend content is
+// branded Untrusted at this boundary.
 //
 // Testability seam: every request flows through one injected
 // `fetchJson(token, url)` — exactly the shape the real bearer-fetch has — and all
@@ -10,8 +11,8 @@
 // through `read()`; the fake is a URL → canned-Graph-JSON map emulating Microsoft's
 // published HTTP surface, not this module's private routing.
 
-import type { NormalizedItem, Window } from "../../domain.ts";
-import { normalizer, text } from "../normalize.ts";
+import type { BundleItem, Email, NormalizedItem, Window } from "../../domain.ts";
+import { emailRecord, normalizer, type PersonSpec } from "../normalize.ts";
 import { statusOnlyError } from "../errors.ts";
 import { noDebug, type DebugSink } from "../../debug.ts";
 import type { OptionSchema, Source, SourceStatus } from "../source.ts";
@@ -103,19 +104,32 @@ interface GraphEvent {
   responseStatus?: { response?: string };
   webLink?: string;
 }
+interface GraphRecipient {
+  emailAddress?: GraphEmailAddress;
+}
 interface GraphMessage {
   id?: string;
   conversationId?: string;
+  conversationIndex?: string;
   subject?: string;
-  from?: { emailAddress?: GraphEmailAddress };
-  toRecipients?: { emailAddress?: GraphEmailAddress }[];
+  from?: GraphRecipient;
+  sender?: GraphRecipient;
+  toRecipients?: GraphRecipient[];
+  ccRecipients?: GraphRecipient[];
   bodyPreview?: string;
-  importance?: string;
-  isRead?: boolean;
-  webLink?: string;
+  importance?: unknown;
+  isRead?: unknown;
+  hasAttachments?: unknown;
+  flag?: { flagStatus?: unknown };
+  inferenceClassification?: unknown;
   // The time field is chosen per folder (receivedDateTime | sentDateTime) and read via m[timeField].
   receivedDateTime?: string;
   sentDateTime?: string;
+}
+interface GraphMe {
+  mail?: string | null;
+  userPrincipalName?: string | null;
+  proxyAddresses?: string[] | null;
 }
 
 async function paginate(
@@ -196,48 +210,114 @@ async function readCalendar(fetchJson: FetchJson, token: string, window: Window)
   });
 }
 
+/** The proxy-address prefix of an SMTP address; `SMTP:` marks the primary, `smtp:` an alias. */
+const SMTP_PREFIX = "smtp:";
+
+/** The fixed header length of a mail `conversationIndex`, in bytes. */
+const CONVERSATION_INDEX_HEADER_BYTES = 22;
+
+/**
+ * The addresses that are the signed-in user, lowercased: `mail`, the UPN and every
+ * `smtp:` proxy address (the primary `SMTP:` and its aliases) with the prefix stripped.
+ * Other proxy prefixes (X500, SIP, …) are not mail addresses and are skipped. One `/me`
+ * call per run, under the existing `User.Read`.
+ */
+async function readMe(fetchJson: FetchJson, token: string): Promise<Set<string>> {
+  const url = new URL(`${BASE}/me`);
+  url.searchParams.set("$select", "id,mail,userPrincipalName,proxyAddresses");
+  const me = (await fetchJson(token, url.toString())) as GraphMe;
+  const addresses = [me.mail, me.userPrincipalName];
+  for (const proxy of me.proxyAddresses ?? []) {
+    if (typeof proxy === "string" && proxy.toLowerCase().startsWith(SMTP_PREFIX)) {
+      addresses.push(proxy.slice(SMTP_PREFIX.length));
+    }
+  }
+  return new Set(
+    addresses.filter((a): a is string => typeof a === "string" && a !== "").map((a) => a.toLowerCase()),
+  );
+}
+
+/** A recipient's address, lowercased for comparison as Exchange compares them. "" when absent. */
+function addressKey(r: GraphRecipient | undefined): string {
+  const address = r?.emailAddress?.address;
+  return typeof address === "string" ? address.toLowerCase() : "";
+}
+
+/** One recipient as a person spec, `isMe` from the `/me` set. */
+function personOf(r: GraphRecipient | undefined, me: Set<string>): PersonSpec {
+  return { name: r?.emailAddress?.name, handle: r?.emailAddress?.address, isMe: me.has(addressKey(r)) };
+}
+
+/**
+ * A `conversationIndex` is a 22-byte header plus one 5-byte block per reply, so a
+ * longer one means the thread started before this message. Unreadable → false.
+ */
+function threadStartedBefore(conversationIndex: string | undefined): boolean {
+  if (typeof conversationIndex !== "string" || !/^[A-Za-z0-9+/]+={0,2}$/.test(conversationIndex)) return false;
+  return Buffer.from(conversationIndex, "base64").length > CONVERSATION_INDEX_HEADER_BYTES;
+}
+
+function importanceOf(v: unknown): Email["importance"] {
+  return v === "low" || v === "high" ? v : "normal";
+}
+
 async function readMailFolder(
   fetchJson: FetchJson,
   token: string,
   folder: "Inbox" | "SentItems",
   timeField: "receivedDateTime" | "sentDateTime",
   window: Window,
-): Promise<NormalizedItem[]> {
-  const messages = (await paginate(fetchJson, token, `/me/mailFolders/${folder}/messages`, {
+): Promise<GraphMessage[]> {
+  return (await paginate(fetchJson, token, `/me/mailFolders/${folder}/messages`, {
     $filter: `${timeField} ge ${window.from} and ${timeField} lt ${window.to}`,
-    $select: `id,conversationId,subject,from,toRecipients,${timeField},bodyPreview,importance,isRead,webLink`,
+    $select: `id,conversationId,conversationIndex,subject,from,sender,toRecipients,ccRecipients,${timeField},bodyPreview,importance,isRead,hasAttachments,flag,inferenceClassification`,
     $orderby: timeField,
     $top: "50",
   })) as GraphMessage[];
-  const direction = folder === "Inbox" ? "inbox" : "sent";
-  return messages.map((m): NormalizedItem => {
-    const from = m.from?.emailAddress?.name ?? m.from?.emailAddress?.address;
-    const to = (m.toRecipients ?? []).map((r) => r.emailAddress?.name ?? r.emailAddress?.address);
-    return normalize({
-      kind: "message",
-      timestamp: String(m[timeField]),
-      id: m.id,
-      title: m.subject,
-      url: m.webLink,
-      // Mail's wording for the uniform slot (#54). `extras.folder` is a DIRECTION
-      // ("inbox"/"sent"), not a folder name, so it is written out as a reader-facing
-      // label rather than passed through. `who` leads with whoever is not the user:
-      // the sender on received mail, the recipients on mail the user sent.
-      attribution: {
-        where: direction === "inbox" ? "Inbox" : "Sent",
-        who: direction === "inbox" ? [from, ...to] : [...to, from],
-      },
-      extras: {
-        folder: direction,
-        from,
-        to,
-        preview: text(m.bodyPreview),
-        // Domain judgment stays caller-side: "normal" importance is the default, not signal.
-        importance: m.importance !== "normal" ? m.importance : undefined,
-        unread: m.isRead === false,
-      },
-    });
+}
+
+/**
+ * One Graph message as an {@link Email}. Trusted fields are parsed here and fall back
+ * to their no-signal value when Graph sends something else: `normal` importance, read,
+ * not flagged, no attachments, `focused`.
+ */
+function toEmail(
+  m: GraphMessage,
+  folder: Email["folder"],
+  timeField: "receivedDateTime" | "sentDateTime",
+  me: Set<string>,
+): Email {
+  return emailRecord({
+    id: m.id,
+    groupId: m.conversationId,
+    continuesFromBefore: threadStartedBefore(m.conversationIndex),
+    at: String(m[timeField]),
+    folder,
+    subject: m.subject,
+    from: personOf(m.from, me),
+    // Graph's `sender` differs from `from` only for a delegate or a send-on-behalf.
+    sentBy: m.sender !== undefined && addressKey(m.sender) !== addressKey(m.from) ? personOf(m.sender, me) : undefined,
+    to: (m.toRecipients ?? []).map((r) => personOf(r, me)),
+    cc: (m.ccRecipients ?? []).map((r) => personOf(r, me)),
+    body: m.bodyPreview,
+    importance: importanceOf(m.importance),
+    isRead: m.isRead !== false,
+    flagged: m.flag?.flagStatus === "flagged",
+    hasAttachments: m.hasAttachments === true,
+    inferenceClassification: m.inferenceClassification === "other" ? "other" : "focused",
   });
+}
+
+async function readMail(fetchJson: FetchJson, token: string, window: Window): Promise<Email[]> {
+  const [me, inbox, sent] = await Promise.all([
+    readMe(fetchJson, token),
+    readMailFolder(fetchJson, token, "Inbox", "receivedDateTime", window),
+    readMailFolder(fetchJson, token, "SentItems", "sentDateTime", window),
+  ]);
+  return [
+    ...inbox.map((m) => toEmail(m, "inbox", "receivedDateTime", me)),
+    ...sent.map((m) => toEmail(m, "sent", "sentDateTime", me)),
+  ];
 }
 
 export class GraphSource implements Source {
@@ -256,18 +336,12 @@ export class GraphSource implements Source {
     this.auth = deps.auth ?? { azureConfig, signedInAccount, getToken, login: graphLogin };
   }
 
-  async read(window: Window): Promise<NormalizedItem[]> {
+  async read(window: Window): Promise<BundleItem[]> {
     const kinds = (this.config.kinds as string[] | undefined) ?? ["event", "message"];
     const token = await this.auth.getToken();
-    const items: NormalizedItem[] = [];
+    const items: BundleItem[] = [];
     if (kinds.includes("event")) items.push(...(await readCalendar(this.fetchJson, token, window)));
-    if (kinds.includes("message")) {
-      const [inbox, sent] = await Promise.all([
-        readMailFolder(this.fetchJson, token, "Inbox", "receivedDateTime", window),
-        readMailFolder(this.fetchJson, token, "SentItems", "sentDateTime", window),
-      ]);
-      items.push(...inbox, ...sent);
-    }
+    if (kinds.includes("message")) items.push(...(await readMail(this.fetchJson, token, window)));
     return items;
   }
 

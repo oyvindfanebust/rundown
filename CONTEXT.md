@@ -12,7 +12,7 @@ only external surface never emits untrusted content (see [ADR-0004](docs/adr/000
 Inside the context are four components, named by role — there is no "layer" and no L-numbering
 (see [ADR-0008](docs/adr/0008-bounded-context-and-component-architecture.md)):
 
-- **[Sources](#source)** — read-only adapters, one per backend/auth boundary. `read(window) → NormalizedItem[]`.
+- **[Sources](#source)** — read-only adapters, one per backend/auth boundary. `read(window) → (NormalizedItem | SourceRecord)[]` while sources move to [typed records](#typed-record).
 - **[Aggregator](#aggregator)** — pulls the selected sources into one [Bundle](#bundle). `aggregate(window, selection) → Bundle`.
 - **[Summarizer](#summarizer)** — the tool-less model call; the only place untrusted content meets a model. `summarize({instructions, data, schema}) → structured`.
 - **[Planner](#planner)** — turns a Bundle into a [Brief](#brief). `plan(bundle, windowIsPast, guidance) → Brief`.
@@ -34,7 +34,7 @@ src/
   config.ts         load + validate ~/.config/rundown/config.json; delegate window resolution to temporal.ts → { selection, window, windowIsPast, guidance, timezone }
   temporal.ts       window selector parsing + timezone resolution → absolute Window (span/date/range → instants)
   trust.ts          Untrusted<T> brand + the single unwrap primitive
-  domain.ts         shared vocabulary types: NormalizedItem, Bundle, bucket, Brief (re-exports the Brief-contract types)
+  domain.ts         shared vocabulary types: typed records and Person, NormalizedItem, Bundle, bucket, Brief (re-exports the Brief-contract types)
   brief-contract.ts the Brief output contract — Zod source of truth: schema (→ JSON Schema), kinds + descriptions, inferred types
   sources/
     source.ts       the Source interface + option-schema declaration + the option validate/default helpers
@@ -132,14 +132,17 @@ provenance attestations it now ships alongside; that is a separate decision (ADR
 
 A **Source** is the [Sources](#architecture) component's unit: a read-only adapter for one backend
 system / one auth boundary — Microsoft Graph, Slack. Graph is one
-source (calendar and mail are `kind`s within it, not separate sources), because auth is
-per-backend. A Source's job is to `read` a time window and emit a list of
-[normalized items](#normalizeditem). It never writes back.
+source (calendar and mail are record types or `kind`s within it, not separate sources), because
+auth is per-backend. A Source's job is to `read` a time window and emit a list of
+[typed records](#typed-record), or [normalized items](#normalizeditem) where a source has not moved
+yet. It never writes back.
 
 Interface (see [ADR-0002](docs/adr/0002-source-abstraction.md)):
 
-- `read(window) → NormalizedItem[]` — required. `window` is an absolute time window (two ISO-8601
-  instants); the source maps it to its native time field.
+- `read(window) → (NormalizedItem | SourceRecord)[]` — required. `window` is an absolute time
+  window (two ISO-8601 instants); the source maps it to its native time field. Graph mail returns
+  `Email` records; Graph calendar and Slack still return NormalizedItems
+  ([ADR-0019](docs/adr/0019-typed-records.md)).
 - `status()` — required; reports readiness as a discriminated union
   `{ state: "ready" | "not-authenticated" | "not-configured" }` (identity on `ready`, a fix-it
   `detail` on `not-configured`). Every source has a total answer.
@@ -152,11 +155,32 @@ Aggregator) or timezone (a caller/config concern). Secrets are machine-local and
 environment. Sources register in a static map, `sources/registry.ts`
 ([ADR-0008](docs/adr/0008-bounded-context-and-component-architecture.md) §5).
 
+### typed record
+
+What a [Source](#source) emits in place of a [NormalizedItem](#normalizeditem): one record type per
+thing a backend holds, discriminated on `type`. `Email` (Graph mail) is built; `CalendarEvent`
+(Graph calendar) and `ChatMessage` (Slack) follow. Each carries `fingerprint` (a digest of the
+record's own backend id), `entryKey` (a digest of the group it belongs to: a mail
+`conversationId`, a Slack channel, a calendar series) and `continuesFromBefore`. Free text and ids
+stay boxed as [`Untrusted<T>`](#untrustedt); every unboxed field is a
+[trusted value](#trusted-value), parsed by the source and dropped when the parse fails. Built by
+the normalizer, like NormalizedItems. See [ADR-0019](docs/adr/0019-typed-records.md).
+_Avoid_: item (the NormalizedItem it replaces), entry (a [digest entry](#digest-entry) groups records).
+
+### Person
+
+One person as one [Source](#source) sees them, on a [typed record](#typed-record): an untrusted
+display `name`, an untrusted `handle` (mail address or Slack user id) that never leaves the binary,
+and `isMe`, set by the source from the account it knows, never by the model. Graph matches the
+handle against the user's addresses from `/me` (mail, UPN and `smtp:` aliases); Slack compares the
+user id with its signed-in one. Per source: the same human on mail and on Slack is two Persons.
+
 ### NormalizedItem
 
-The common shape every Source emits, so the [Aggregator](#aggregator) can treat events, emails,
-chat messages, issues, and sessions uniformly. It is a thin structural core the aggregator uses to
-group, order, and attribute, plus an `extras` bag of source-specific fields for the summarizer.
+The common shape a Source emits until it moves to [typed records](#typed-record), so the
+[Aggregator](#aggregator) can treat events, emails, chat messages, issues, and sessions uniformly.
+It is a thin structural core the aggregator uses to group, order, and attribute, plus an `extras`
+bag of source-specific fields for the summarizer.
 
 - Structural (trusted) — `source`, `kind` (`event` | `message` | `issue` | `session` | …),
   `timestamp` (primary instant, the ordering key), `end?` (interval end). Produced by rundown's
@@ -175,7 +199,7 @@ importer among sources and the only way a Source constructs a NormalizedItem. Ea
 makes one via `normalizer(source, {untitled})` and hands it each item's extracted fields; it
 brands the backend content Untrusted, truncates every title, falls back on absent titles, and
 compacts `extras` by the union policy — presence is signal: `undefined`/`null`/`""`/`false`/empty
-arrays vanish, `0`/`true` stay. The `text()` marker (truncate to 200, empty → absent) is applied
+arrays vanish, `0`/`true` stay. The `text()` marker (truncate to 255, empty → absent) is applied
 by sources to free-text extras; only domain judgment stays at call sites. `attribution` goes through
 the same funnel: branded, label-truncated, `who` deduplicated, and collapsed to absent when nothing
 in it carries information.

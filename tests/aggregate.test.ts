@@ -1,7 +1,8 @@
 import { test, expect, describe } from "bun:test";
 import { aggregate, bucketOf, AggregateError } from "../src/aggregate.ts";
 import { untrusted } from "../src/trust.ts";
-import type { NormalizedItem, Window } from "../src/domain.ts";
+import { isRecord, type NormalizedItem, type Window } from "../src/domain.ts";
+import { emailRecord } from "../src/sources/normalize.ts";
 import type { Source, Sources } from "../src/sources/source.ts";
 import type { DebugEvent } from "../src/debug.ts";
 
@@ -61,6 +62,43 @@ describe("aggregate", () => {
     const bundle = await aggregate(window, [{ sourceKey: "fake", options: {} }], sourcesOf(fake), now);
     expect(bundle.items.map((i) => i.bucket)).toEqual(["standing", "recent", "upcoming"]);
     expect(bundle.sources).toEqual([{ source: "fake", itemCount: 3 }]);
+  });
+
+  test("carries typed records beside normalized items, ordered and bucketed by their own time", async () => {
+    const mail = (id: string, at: string) =>
+      emailRecord({
+        id,
+        continuesFromBefore: false,
+        at,
+        folder: "inbox",
+        subject: id,
+        from: { name: "Ada", handle: "ada@x.test", isMe: false },
+        to: [],
+        cc: [],
+        body: "",
+        importance: "normal",
+        isRead: true,
+        flagged: false,
+        hasAttachments: false,
+        inferenceClassification: "focused",
+      });
+    const fake: Source = {
+      key: "graph",
+      label: "Graph",
+      login,
+      status: ready,
+      async read() {
+        return [
+          mail("later", "2026-07-10T00:00:00Z"),
+          item("graph", "event", "2026-07-07T00:00:00Z", "meeting"),
+          mail("earlier", "2026-07-06T09:00:00Z"),
+        ];
+      },
+    };
+    const bundle = await aggregate(window, [{ sourceKey: "graph", options: {} }], sourcesOf(fake), now);
+    expect(bundle.items.map((i) => (isRecord(i) ? i.type : i.kind))).toEqual(["email", "event", "email"]);
+    expect(bundle.items.map((i) => i.bucket)).toEqual(["recent", "recent", "upcoming"]);
+    expect(bundle.sources).toEqual([{ source: "graph", itemCount: 3 }]);
   });
 
   test("tie-breaks equal timestamps by source", async () => {

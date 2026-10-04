@@ -17,11 +17,14 @@
 // and the "who and where" invariant is spelled once rather than five times.
 
 import { createHash } from "node:crypto";
-import type { Attribution, NormalizedItem } from "../domain.ts";
+import type { Attribution, Email, NormalizedItem, Person } from "../domain.ts";
 import { untrusted, untrustedOpt } from "../trust.ts";
 
-/** Max length for a free-text field (title / preview / description / …). */
-export const TEXT_MAX = 200;
+/**
+ * Max length for a free-text field (title / subject / preview / …). 255 so a subject of
+ * Outlook's full length survives to the label clamp (#141).
+ */
+export const TEXT_MAX = 255;
 
 /**
  * The free-text marker (grilled design): truncate to {@link TEXT_MAX},
@@ -63,7 +66,7 @@ const ISO_INSTANT = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(:\d{2}(\.\d+)?)?(Z|[+-]\d{2}
  * fails hard (ADR-0007 §6). The raw value is **never** echoed into the error:
  * it is backend-controlled, so it stays out of the error channel (CLAUDE.md).
  */
-function instant(v: string, field: "timestamp" | "end", source: string): string {
+function instant(v: string, field: string, source: string): string {
   if (!ISO_INSTANT.test(v) || Number.isNaN(Date.parse(v))) {
     throw new Error(
       `Source "${source}" emitted a structural ${field} that is not a strict ISO-8601 instant.`,
@@ -192,4 +195,89 @@ export function normalizer(
     if (rawId !== "") item.fingerprint = fingerprintOf(source, spec.kind, rawId);
     return item;
   };
+}
+
+// ── Typed records (ADR-0019) ──
+//
+// The record builders: the same branding, truncation and instant validation as the
+// normalizer, for typed records. A source parses its trusted values (enums, flags,
+// group membership) itself, since those are domain judgments about its backend, and
+// hands the builder bare strings for everything that stays boxed.
+
+/** One person as the source read them: bare name and handle, and the source's `isMe` answer. */
+export interface PersonSpec {
+  name?: string | null;
+  /** Mail address or Slack user id. */
+  handle?: string | null;
+  isMe: boolean;
+}
+
+/**
+ * Brand one person. Name and handle are free text, truncated like every other; an absent
+ * handle boxes as "" so every Person has one.
+ */
+export function person(spec: PersonSpec): Person {
+  return {
+    name: untrustedOpt(text(spec.name)),
+    handle: untrusted(text(spec.handle) ?? ""),
+    isMe: spec.isMe,
+  };
+}
+
+/** The fields one mail message hands the builder: parsed trusted values plus bare text. */
+export interface EmailSpec {
+  /** Backend message id; digested into `fingerprint`, never kept. */
+  id: string | null | undefined;
+  /** Backend thread id (`conversationId`); digested into `entryKey`. Absent → the message is its own group. */
+  groupId?: string | null;
+  continuesFromBefore: boolean;
+  at: string;
+  folder: Email["folder"];
+  subject: string | null | undefined;
+  from: PersonSpec;
+  sentBy?: PersonSpec;
+  to: PersonSpec[];
+  cc: PersonSpec[];
+  body: string | null | undefined;
+  importance: Email["importance"];
+  isRead: boolean;
+  flagged: boolean;
+  hasAttachments: boolean;
+  inferenceClassification: Email["inferenceClassification"];
+}
+
+/**
+ * Build one {@link Email}. `at` must be a strict ISO-8601 instant and `id` must be
+ * present; either failing is backend garbage and fails hard (ADR-0007 §6), without
+ * echoing the value. `byMe` is derived here so it always agrees with `from` and `sentBy`.
+ */
+export function emailRecord(spec: EmailSpec): Email {
+  const source = "graph";
+  const rawId = String(spec.id ?? "");
+  if (rawId === "") throw new Error(`Source "${source}" emitted an email with no id.`);
+  const from = person(spec.from);
+  const sentBy = spec.sentBy === undefined ? undefined : person(spec.sentBy);
+  const record: Email = {
+    type: "email",
+    source,
+    fingerprint: fingerprintOf(source, "email", rawId),
+    // Domain-separated from the record digest, so a thread key never equals a message key.
+    entryKey: fingerprintOf(source, "email-thread", spec.groupId || rawId),
+    continuesFromBefore: spec.continuesFromBefore,
+    at: instant(spec.at, "email time", source),
+    folder: spec.folder,
+    subject: untrusted(text(spec.subject) ?? "(no subject)"),
+    from,
+    to: spec.to.map(person),
+    cc: spec.cc.map(person),
+    byMe: from.isMe || sentBy?.isMe === true,
+    body: untrusted(text(spec.body) ?? ""),
+    importance: spec.importance,
+    isRead: spec.isRead,
+    flagged: spec.flagged,
+    hasAttachments: spec.hasAttachments,
+    inferenceClassification: spec.inferenceClassification,
+  };
+  if (sentBy !== undefined) record.sentBy = sentBy;
+  return record;
 }

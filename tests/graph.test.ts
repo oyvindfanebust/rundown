@@ -1,6 +1,6 @@
 import { test, expect, describe, afterEach } from "bun:test";
 import { untrusted, unwrap } from "../src/trust.ts";
-import type { NormalizedItem } from "../src/domain.ts";
+import { isRecord, type BundleItem, type Email, type NormalizedItem } from "../src/domain.ts";
 import type { Source } from "../src/sources/source.ts";
 import { GraphSource, GRAPH_OPTIONS, type GraphAuth, type FetchJson, type GraphDeps } from "../src/sources/graph/index.ts";
 
@@ -22,6 +22,7 @@ function fakeAuth(over: Partial<GraphAuth> = {}): GraphAuth {
 // ── fake fetchJson: a URL → canned-Graph-JSON map (Microsoft's HTTP surface) ──
 
 interface Routes {
+  me?: unknown;
   calendar?: unknown;
   inbox?: unknown;
   sent?: unknown;
@@ -32,6 +33,7 @@ function fakeFetch(routes: Routes): { fetchJson: FetchJson; urls: string[] } {
   const fetchJson: FetchJson = async (_token, url) => {
     urls.push(url);
     const u = new URL(url);
+    if (u.pathname.endsWith("/me")) return routes.me ?? { mail: "me@example.com" };
     if (u.pathname.endsWith("/me/calendarView")) return routes.calendar ?? { value: [] };
     if (u.pathname.includes("/mailFolders/Inbox/")) return routes.inbox ?? { value: [] };
     if (u.pathname.includes("/mailFolders/SentItems/")) return routes.sent ?? { value: [] };
@@ -48,8 +50,8 @@ function graphSource(deps: GraphDeps, options: Record<string, unknown> = {}): Gr
 // separately-constructed boxes of the same string — so this test-only lookup
 // compares by unwrapped value. (This is a test assertion helper, not a
 // production leak path — never a pattern to mirror in src/.)
-function byId(items: NormalizedItem[], id: string): NormalizedItem | undefined {
-  return items.find((i) => unwrap(i.id) === id);
+function byId(items: BundleItem[], id: string): NormalizedItem | undefined {
+  return items.filter((i): i is NormalizedItem => !isRecord(i)).find((i) => unwrap(i.id) === id);
 }
 
 // ── fixtures ───────────────────────────────────────────────────────────────
@@ -81,7 +83,7 @@ function message(over: Record<string, unknown> = {}): Record<string, unknown> {
     id: "m1",
     subject: "Re: launch",
     from: { emailAddress: { name: "Carol", address: "carol@x.com" } },
-    toRecipients: [{ emailAddress: { name: "Me" } }],
+    toRecipients: [{ emailAddress: { name: "Me", address: "me@example.com" } }],
     receivedDateTime: "2026-07-09T10:00:00Z",
     bodyPreview: "P".repeat(250),
     importance: "high",
@@ -202,55 +204,339 @@ describe("GraphSource.read calendar", () => {
   });
 });
 
-// ── read(): mail mapping ──────────────────────────────────────────────────────
+// ── read(): mail as typed Email records (#147) ─────────────────────────────────
+
+/** The mail records of one read, by their (unwrapped) subject. Test-only lookup. */
+function mailOf(items: BundleItem[]): Email[] {
+  return items.filter((i): i is Email => isRecord(i) && i.type === "email");
+}
+
+function bySubject(items: BundleItem[], subject: string): Email {
+  const found = mailOf(items).find((m) => unwrap(m.subject) === subject);
+  if (!found) throw new Error(`no mail with subject ${subject}`);
+  return found;
+}
+
+async function readMail(routes: Routes): Promise<BundleItem[]> {
+  const { fetchJson } = fakeFetch(routes);
+  return graphSource({ fetchJson }, { kinds: ["message"] }).read(WINDOW);
+}
 
 describe("GraphSource.read mail", () => {
-  test("maps inbox + sent with folder direction, truncates preview to 200, flags importance/unread", async () => {
-    const { fetchJson } = fakeFetch({
-      inbox: { value: [message()] },
-      sent: { value: [message({ id: "s1", subject: "Sent one", receivedDateTime: undefined, sentDateTime: "2026-07-09T11:00:00Z", isRead: true, importance: "normal" })] },
+  test("maps inbox and sent mail to Email records with boxed text and parsed trusted fields", async () => {
+    const items = await readMail({
+      inbox: {
+        value: [
+          message({
+            ccRecipients: [{ emailAddress: { name: "Dan", address: "dan@x.com" } }],
+            hasAttachments: true,
+            flag: { flagStatus: "flagged" },
+            inferenceClassification: "focused",
+          }),
+        ],
+      },
+      sent: {
+        value: [
+          message({
+            id: "s1",
+            subject: "Sent one",
+            from: { emailAddress: { name: "Me", address: "me@example.com" } },
+            toRecipients: [{ emailAddress: { name: "Carol", address: "carol@x.com" } }],
+            receivedDateTime: undefined,
+            sentDateTime: "2026-07-09T11:00:00Z",
+            isRead: true,
+            importance: "normal",
+          }),
+        ],
+      },
     });
-    const items = await graphSource({ fetchJson }, { kinds: ["message"] }).read(WINDOW);
 
-    const inbox = byId(items, "m1")!;
-    expect(inbox.kind).toBe("message");
-    expect(inbox.timestamp).toBe("2026-07-09T10:00:00Z");
-    expect(inbox.extras).toEqual(
-      untrusted({
-        folder: "inbox",
-        from: "Carol",
-        to: ["Me"],
-        preview: "P".repeat(200), // truncated
-        importance: "high",
-        unread: true,
-      }),
-    );
+    const inbox = bySubject(items, "Re: launch");
+    expect(inbox.type).toBe("email");
+    expect(inbox.source).toBe("graph");
+    expect(inbox.folder).toBe("inbox");
+    expect(inbox.at).toBe("2026-07-09T10:00:00Z");
+    expect(inbox.from).toEqual({ name: untrusted("Carol"), handle: untrusted("carol@x.com"), isMe: false });
+    expect(inbox.to).toEqual([{ name: untrusted("Me"), handle: untrusted("me@example.com"), isMe: true }]);
+    expect(inbox.cc).toEqual([{ name: untrusted("Dan"), handle: untrusted("dan@x.com"), isMe: false }]);
+    expect(inbox.byMe).toBe(false);
+    expect(inbox.body).toEqual(untrusted("P".repeat(250)));
+    expect(inbox.importance).toBe("high");
+    expect(inbox.isRead).toBe(false);
+    expect(inbox.flagged).toBe(true);
+    expect(inbox.hasAttachments).toBe(true);
+    expect(inbox.inferenceClassification).toBe("focused");
+    expect(inbox.sentBy).toBeUndefined();
 
-    const sent = byId(items, "s1")!;
-    expect(sent.timestamp).toBe("2026-07-09T11:00:00Z"); // sentDateTime drives the sent folder
-    expect(sent.extras).toEqual(
-      untrusted({
-        folder: "sent",
-        from: "Carol",
-        to: ["Me"],
-        preview: "P".repeat(200),
-        // importance:"normal" and isRead:true collapse to undefined (dropped)
-      }),
-    );
-
-    // Attribution (#54): `extras.folder` is a direction, so `where` is written out as a
-    // reader-facing label rather than passed through. `who` leads with whoever is not
-    // the user — the sender on received mail, the recipients on mail the user sent.
-    expect(inbox.attribution).toEqual(untrusted({ where: "Inbox", who: ["Carol", "Me"] }));
-    expect(sent.attribution).toEqual(untrusted({ where: "Sent", who: ["Me", "Carol"] }));
+    const sent = bySubject(items, "Sent one");
+    expect(sent.folder).toBe("sent");
+    expect(sent.at).toBe("2026-07-09T11:00:00Z"); // sentDateTime drives the sent folder
+    expect(sent.byMe).toBe(true);
+    expect(sent.importance).toBe("normal");
+    expect(sent.isRead).toBe(true);
+    expect(sent.flagged).toBe(false);
+    expect(sent.hasAttachments).toBe(false);
+    expect(sent.cc).toEqual([]);
   });
 
-  test("empty recipient list vanishes — presence is signal (accepted delta)", async () => {
-    const { fetchJson } = fakeFetch({ inbox: { value: [message({ id: "noto", toRecipients: [] })] } });
-    const items = await graphSource({ fetchJson }, { kinds: ["message"] }).read(WINDOW);
-    // Unwrap before inspecting keys (see the sibling "attendees" test above).
-    const extras = unwrap(byId(items, "noto")!.extras!);
-    expect("to" in extras).toBe(false);
+  test("a 255-char subject survives whole to the label clamp", async () => {
+    const subject = "S".repeat(255);
+    const items = await readMail({ inbox: { value: [message({ subject: `${subject}overflow` })] } });
+    expect(mailOf(items)[0]!.subject).toEqual(untrusted(subject));
+  });
+
+  test("selects every field the record needs", async () => {
+    const { fetchJson, urls } = fakeFetch({ inbox: { value: [message()] } });
+    await graphSource({ fetchJson }, { kinds: ["message"] }).read(WINDOW);
+    const folderUrls = urls.filter((u) => u.includes("/mailFolders/"));
+    expect(folderUrls).toHaveLength(2);
+    for (const u of folderUrls) {
+      const select = new URL(u).searchParams.get("$select")!.split(",");
+      for (const field of [
+        "conversationId",
+        "conversationIndex",
+        "sender",
+        "ccRecipients",
+        "hasAttachments",
+        "flag",
+        "inferenceClassification",
+      ]) {
+        expect(select).toContain(field);
+      }
+    }
+  });
+
+  describe("trusted fields are parsed or dropped", () => {
+    test("an unknown importance reads as normal, a non-boolean isRead as read", async () => {
+      const items = await readMail({
+        inbox: { value: [message({ importance: "URGENT!!", isRead: "no" })] },
+      });
+      const m = mailOf(items)[0]!;
+      expect(m.importance).toBe("normal");
+      expect(m.isRead).toBe(true);
+    });
+
+    test("only a flagStatus of flagged sets flagged; only true sets hasAttachments", async () => {
+      const items = await readMail({
+        inbox: {
+          value: [
+            message({ id: "a", subject: "complete", flag: { flagStatus: "complete" }, hasAttachments: "yes" }),
+            message({ id: "b", subject: "noflag", flag: undefined }),
+          ],
+        },
+      });
+      for (const m of mailOf(items)) {
+        expect(m.flagged).toBe(false);
+        expect(m.hasAttachments).toBe(false);
+      }
+    });
+
+    test("inferenceClassification reads other, and anything unknown as focused", async () => {
+      const items = await readMail({
+        inbox: {
+          value: [
+            message({ id: "o", subject: "other", inferenceClassification: "other" }),
+            message({ id: "f", subject: "odd", inferenceClassification: "Bulk" }),
+            message({ id: "n", subject: "none", inferenceClassification: undefined }),
+          ],
+        },
+      });
+      expect(bySubject(items, "other").inferenceClassification).toBe("other");
+      expect(bySubject(items, "odd").inferenceClassification).toBe("focused");
+      expect(bySubject(items, "none").inferenceClassification).toBe("focused");
+    });
+
+    test("a non-ISO received time fails the read without echoing the value", async () => {
+      const { fetchJson } = fakeFetch({ inbox: { value: [message({ receivedDateTime: "next tuesday" })] } });
+      const err = await graphSource({ fetchJson }, { kinds: ["message"] })
+        .read(WINDOW)
+        .then(() => null, (e: Error) => e);
+      expect(err?.message).toContain("not a strict ISO-8601 instant");
+      expect(err?.message).not.toContain("next tuesday");
+    });
+  });
+});
+
+// ── read(): who is me (#147) ───────────────────────────────────────────────────
+
+describe("GraphSource.read mail identity", () => {
+  const ME = {
+    id: "u1",
+    mail: "Me@Example.com",
+    userPrincipalName: "me.upn@example.onmicrosoft.com",
+    proxyAddresses: ["SMTP:me@example.com", "smtp:alias@example.com", "X500:/o=ExchangeLabs/cn=me", "SIP:me@sip.example.com"],
+  };
+
+  function from(address: string, name = "Someone") {
+    return { emailAddress: { name, address } };
+  }
+
+  test("the /me set holds mail, UPN and smtp aliases, compared case-insensitively", async () => {
+    const items = await readMail({
+      me: ME,
+      inbox: {
+        value: [
+          message({ id: "1", subject: "mail", from: from("ME@EXAMPLE.COM") }),
+          message({ id: "2", subject: "upn", from: from("me.upn@example.onmicrosoft.com") }),
+          message({ id: "3", subject: "alias", from: from("Alias@Example.com") }),
+        ],
+      },
+    });
+    for (const subject of ["mail", "upn", "alias"]) {
+      expect(bySubject(items, subject).from.isMe).toBe(true);
+      expect(bySubject(items, subject).byMe).toBe(true);
+    }
+  });
+
+  test("proxy addresses with other prefixes are skipped", async () => {
+    const items = await readMail({
+      me: ME,
+      inbox: {
+        value: [
+          message({ id: "1", subject: "x500", from: from("/o=ExchangeLabs/cn=me") }),
+          message({ id: "2", subject: "sip", from: from("me@sip.example.com") }),
+        ],
+      },
+    });
+    expect(bySubject(items, "x500").from.isMe).toBe(false);
+    expect(bySubject(items, "sip").from.isMe).toBe(false);
+  });
+
+  test("isMe is set on every recipient, not only the sender", async () => {
+    const items = await readMail({
+      me: ME,
+      inbox: {
+        value: [
+          message({
+            toRecipients: [from("carol@x.com", "Carol"), from("alias@example.com", "Me")],
+            ccRecipients: [from("me@example.com", "Me")],
+          }),
+        ],
+      },
+    });
+    const m = mailOf(items)[0]!;
+    expect(m.to.map((p) => p.isMe)).toEqual([false, true]);
+    expect(m.cc.map((p) => p.isMe)).toEqual([true]);
+  });
+
+  test("reads /me once per run, under its documented select", async () => {
+    const { fetchJson, urls } = fakeFetch({ me: ME });
+    await graphSource({ fetchJson }, { kinds: ["message"] }).read(WINDOW);
+    const meUrls = urls.filter((u) => new URL(u).pathname.endsWith("/me"));
+    expect(meUrls).toHaveLength(1);
+    expect(new URL(meUrls[0]!).searchParams.get("$select")).toBe("id,mail,userPrincipalName,proxyAddresses");
+  });
+
+  test("a calendar-only read makes no /me call", async () => {
+    const { fetchJson, urls } = fakeFetch({ me: ME, calendar: { value: [event()] } });
+    await graphSource({ fetchJson }, { kinds: ["event"] }).read(WINDOW);
+    expect(urls.some((u) => new URL(u).pathname.endsWith("/me"))).toBe(false);
+  });
+
+  test("send on behalf of a shared mailbox is by me: sentBy is me", async () => {
+    const items = await readMail({
+      me: ME,
+      sent: {
+        value: [
+          message({
+            from: from("team@example.com", "Team"),
+            sender: from("me@example.com", "Me"),
+            sentDateTime: "2026-07-09T11:00:00Z",
+          }),
+        ],
+      },
+    });
+    const m = mailOf(items)[0]!;
+    expect(m.from.isMe).toBe(false);
+    expect(m.sentBy).toEqual({ name: untrusted("Me"), handle: untrusted("me@example.com"), isMe: true });
+    expect(m.byMe).toBe(true);
+  });
+
+  test("a delegate sending for me is by me: from is me", async () => {
+    const items = await readMail({
+      me: ME,
+      inbox: {
+        value: [message({ from: from("me@example.com", "Me"), sender: from("assistant@example.com", "Asa") })],
+      },
+    });
+    const m = mailOf(items)[0]!;
+    expect(m.from.isMe).toBe(true);
+    expect(m.sentBy).toEqual({ name: untrusted("Asa"), handle: untrusted("assistant@example.com"), isMe: false });
+    expect(m.byMe).toBe(true);
+  });
+
+  test("sentBy is dropped when Graph's sender is the from address, whatever its case", async () => {
+    const items = await readMail({
+      me: ME,
+      inbox: { value: [message({ from: from("carol@x.com", "Carol"), sender: from("CAROL@x.com", "Carol L.") })] },
+    });
+    const m = mailOf(items)[0]!;
+    expect(m.sentBy).toBeUndefined();
+    expect(m.byMe).toBe(false);
+  });
+});
+
+// ── read(): mail grouping (#147) ───────────────────────────────────────────────
+
+describe("GraphSource.read mail grouping", () => {
+  /** A base64 conversationIndex of `bytes` bytes: a 22-byte header plus 5-byte child blocks. */
+  function conversationIndex(bytes: number): string {
+    return Buffer.alloc(bytes, 7).toString("base64");
+  }
+
+  test("entryKey groups messages by conversationId, inbox and sent alike", async () => {
+    const items = await readMail({
+      inbox: {
+        value: [
+          message({ id: "a", subject: "a", conversationId: "conv-1" }),
+          message({ id: "b", subject: "b", conversationId: "conv-2" }),
+        ],
+      },
+      sent: { value: [message({ id: "c", subject: "c", conversationId: "conv-1", sentDateTime: "2026-07-09T11:00:00Z" })] },
+    });
+    const [a, b, c] = ["a", "b", "c"].map((s) => bySubject(items, s));
+    expect(a!.entryKey).toBe(c!.entryKey);
+    expect(a!.entryKey).not.toBe(b!.entryKey);
+    expect(a!.entryKey).toMatch(/^[0-9a-f]{16}$/);
+    // The group key is a digest, not the raw id, and differs from the record's own identity.
+    expect(a!.entryKey).not.toBe(a!.fingerprint);
+  });
+
+  test("fingerprint and entryKey are stable across runs", async () => {
+    const routes = { inbox: { value: [message({ conversationId: "conv-1" })] } };
+    const [first, second] = [mailOf(await readMail(routes))[0]!, mailOf(await readMail(routes))[0]!];
+    expect(second.fingerprint).toBe(first.fingerprint);
+    expect(second.entryKey).toBe(first.entryKey);
+    expect(first.fingerprint).toMatch(/^[0-9a-f]{16}$/);
+  });
+
+  test("a message without a conversationId is its own group", async () => {
+    const items = await readMail({
+      inbox: {
+        value: [
+          message({ id: "a", subject: "a", conversationId: undefined }),
+          message({ id: "b", subject: "b", conversationId: undefined }),
+        ],
+      },
+    });
+    expect(bySubject(items, "a").entryKey).not.toBe(bySubject(items, "b").entryKey);
+  });
+
+  test("continuesFromBefore is set by a conversationIndex longer than its 22-byte header", async () => {
+    const items = await readMail({
+      inbox: {
+        value: [
+          message({ id: "1", subject: "first", conversationIndex: conversationIndex(22) }),
+          message({ id: "2", subject: "reply", conversationIndex: conversationIndex(27) }),
+          message({ id: "3", subject: "missing", conversationIndex: undefined }),
+          message({ id: "4", subject: "garbage", conversationIndex: "%%% not base64 %%%" }),
+        ],
+      },
+    });
+    expect(bySubject(items, "first").continuesFromBefore).toBe(false);
+    expect(bySubject(items, "reply").continuesFromBefore).toBe(true);
+    expect(bySubject(items, "missing").continuesFromBefore).toBe(false);
+    expect(bySubject(items, "garbage").continuesFromBefore).toBe(false);
   });
 });
 
@@ -278,7 +564,7 @@ describe("GraphSource.read kinds", () => {
       inbox: { value: [message()] },
     });
     const items = await graphSource({ fetchJson }, {}).read(WINDOW);
-    expect(items.map((i) => i.kind).sort()).toEqual(["event", "message"]);
+    expect(items.map((i) => (isRecord(i) ? i.type : i.kind)).sort()).toEqual(["email", "event"]);
   });
 });
 
@@ -368,7 +654,7 @@ describe("GraphSource.read pagination", () => {
     // `id` boxes aren't string-coercible for a value-sort anymore (default
     // Array#sort would coerce via the redacted toString(), making it a no-op) — sort
     // by unwrapped value so this stays an order-independent comparison.
-    expect(items.map((i) => unwrap(i.id)).sort()).toEqual(["p1", "p2"]);
+    expect(items.map((i) => unwrap((i as NormalizedItem).id)).sort()).toEqual(["p1", "p2"]);
   });
 });
 
@@ -386,7 +672,8 @@ describe("GraphSource.read grouping ids", () => {
   test("mail selects conversationId in every folder", async () => {
     const { fetchJson, urls } = fakeFetch({ inbox: { value: [message()] } });
     await graphSource({ fetchJson }, { kinds: ["message"] }).read(WINDOW);
-    expect(urls.length).toBeGreaterThan(0);
-    expect(urls.every((u) => u.includes("conversationId"))).toBe(true);
+    const folderUrls = urls.filter((u) => u.includes("/mailFolders/"));
+    expect(folderUrls).toHaveLength(2);
+    expect(folderUrls.every((u) => u.includes("conversationId"))).toBe(true);
   });
 });

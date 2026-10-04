@@ -5,7 +5,16 @@
 // attaches the trusted envelope to the summarizer's output. The Brief output schema
 // itself lives in brief-contract.ts, the Zod source of truth.
 
-import type { AnnotatedItem, Brief, Bucket, Bundle } from "./domain.ts";
+import {
+  isRecord,
+  type AnnotatedItem,
+  type Attribution,
+  type Brief,
+  type Bucket,
+  type Bundle,
+  type Email,
+  type Person,
+} from "./domain.ts";
 import {
   BRIEF_OUTPUT_SCHEMA,
   BriefOutputSchema,
@@ -94,13 +103,98 @@ function truncateField(value: string): string {
 }
 
 /**
+ * One bundle item as the Planner reads it: the NormalizedItem fields, unwrapped. A
+ * typed record is mapped onto the same fields, so the Brief renders and cites it as it
+ * did the NormalizedItem it replaces (#147). This mapping goes with the Planner (#150).
+ */
+interface ItemView {
+  source: string;
+  kind: string;
+  timestamp: string;
+  end?: string;
+  dateOnly?: boolean;
+  fingerprint?: string;
+  title: string;
+  url?: string;
+  attribution?: Attribution;
+  extras?: Record<string, unknown>;
+}
+
+/**
+ * Unwrap one bundle item for rendering and evidence resolution. This function and the
+ * two Email readers below are where plan.ts, the sole unwrap site, unwraps (ADR-0004 §3).
+ */
+function viewOf(item: AnnotatedItem): ItemView {
+  if (isRecord(item)) {
+    switch (item.type) {
+      case "email":
+        return emailView(item);
+    }
+  }
+  const view: ItemView = {
+    source: item.source,
+    kind: item.kind,
+    timestamp: item.timestamp,
+    title: unwrap(item.title),
+  };
+  if (item.end !== undefined) view.end = item.end;
+  if (item.dateOnly === true) view.dateOnly = true;
+  if (item.fingerprint !== undefined) view.fingerprint = item.fingerprint;
+  if (item.url) view.url = unwrap(item.url);
+  if (item.attribution) view.attribution = unwrap(item.attribution);
+  if (item.extras) view.extras = unwrap(item.extras);
+  return view;
+}
+
+function present(labels: Array<string | undefined>): string[] {
+  return labels.filter((l): l is string => l !== undefined);
+}
+
+/** A person's caption as the Graph source wrote it before records: name, else address. */
+function captionOf(p: Person): string | undefined {
+  const label = p.name !== undefined ? unwrap(p.name) : unwrap(p.handle);
+  return label === "" ? undefined : label;
+}
+
+/**
+ * An {@link Email} in the shape the Graph source gave a `message` NormalizedItem:
+ * `where` is Inbox or Sent, `who` leads with whoever is not the user (the sender on
+ * received mail, the recipients on sent mail), and `extras` carries the same keys
+ * under the same presence-is-signal policy.
+ */
+function emailView(m: Email): ItemView {
+  const from = captionOf(m.from);
+  const to = present(m.to.map(captionOf));
+  const inbox = m.folder === "inbox";
+  const who = [...new Set(present(inbox ? [from, ...to] : [...to, from]))];
+  const preview = unwrap(m.body);
+  const extras: Record<string, unknown> = { folder: m.folder };
+  if (from !== undefined) extras.from = from;
+  if (to.length > 0) extras.to = to;
+  if (preview !== "") extras.preview = preview;
+  if (m.importance !== "normal") extras.importance = m.importance;
+  if (!m.isRead) extras.unread = true;
+  const attribution: Attribution = { where: inbox ? "Inbox" : "Sent" };
+  if (who.length > 0) attribution.who = who;
+  return {
+    source: m.source,
+    kind: "message",
+    timestamp: m.at,
+    fingerprint: m.fingerprint,
+    title: unwrap(m.subject),
+    attribution,
+    extras,
+  };
+}
+
+/**
  * The rendered time span of one item, in the user's timezone with an explicit
  * offset (#106). A date-only item (all-day event, due-date anchor) is the
  * exception: its instants encode calendar dates as UTC bounds, so an offset
  * conversion would move it to the wrong wall time (or, in a negative-offset zone,
  * the wrong date) — it renders as its UTC calendar date(s) instead.
  */
-function renderSpan(item: AnnotatedItem, tz: string): string {
+function renderSpan(item: ItemView, tz: string): string {
   // Weekdays are spelled out so the model never derives day-of-week from a bare
   // date — observed live to miscount, which skews `when` phrasing ("Wed" on a Tuesday).
   if (item.dateOnly === true) {
@@ -118,26 +212,26 @@ function renderSpan(item: AnnotatedItem, tz: string): string {
   return item.end ? `${from} – ${zonedIso(item.end, tz)}` : from;
 }
 
-/** Render one item, unwrapping its untrusted fields. This is the sole unwrap site. */
-function renderItem(item: AnnotatedItem, ref: number, tz: string): string {
+/** Render one unwrapped item. */
+function renderItem(item: ItemView, ref: number, tz: string): string {
   const lines = [
     `- [${ref}] [${item.source}/${item.kind}] ${renderSpan(item, tz)}`,
-    `  title: ${truncateField(unwrap(item.title))}`,
+    `  title: ${truncateField(item.title)}`,
   ];
-  if (item.url) lines.push(`  url: ${truncateField(unwrap(item.url))}`);
+  if (item.url !== undefined) lines.push(`  url: ${truncateField(item.url)}`);
   // Attribution is rendered for the model too, not just carried to the Brief: "who and
   // where" is exactly the context that makes a bare message body legible, so the
   // summarizer needs it to classify and phrase items. It stays alongside `extras`
   // rather than replacing keys there — `where: "#flow-mgmt"` is the caption, the
   // `channel.id` in `extras` is the join key the model clusters on (see Attribution).
   if (item.attribution) {
-    const { where, who, relationship } = unwrap(item.attribution);
+    const { where, who, relationship } = item.attribution;
     if (where !== undefined) lines.push(`  where: ${truncateField(where)}`);
     if (who !== undefined) lines.push(`  who: ${truncateField(who.join(", "))}`);
     if (relationship !== undefined) lines.push(`  relationship: ${truncateField(relationship)}`);
   }
   if (item.extras) {
-    for (const [key, value] of Object.entries(unwrap(item.extras))) {
+    for (const [key, value] of Object.entries(item.extras)) {
       if (value === undefined || value === null) continue;
       const rendered = Array.isArray(value)
         ? value.join(", ")
@@ -158,7 +252,7 @@ function renderItem(item: AnnotatedItem, ref: number, tz: string): string {
  */
 export interface RenderedItem {
   ref: number;
-  item: AnnotatedItem;
+  item: ItemView;
   text: string;
 }
 
@@ -189,8 +283,9 @@ export function renderBundle(bundle: Bundle, timezone: string): RenderedBundle {
   for (const bucket of buckets) {
     const items = bundle.items.filter((i) => i.bucket === bucket);
     if (items.length === 0) continue;
-    const rendered = items.map((item) => {
+    const rendered = items.map((annotated) => {
       ref += 1;
+      const item = viewOf(annotated);
       const text = renderItem(item, ref, timezone);
       index.set(ref, { ref, item, text });
       return text;
@@ -310,9 +405,9 @@ function resolveEvidence(items: ExtractedItem[], rendered: RenderedBundle): Brie
       const cited = rendered.index.get(e.ref);
       if (cited && normalizeWhitespace(cited.text).includes(quote)) {
         // Attribution is copied from the resolved item, not read from the model's
-        // output. `unwrap` here is the same sole-unwrap-site allowance renderItem uses
-        // (ADR-0004 §3): the value is untrusted source bytes, so it is defanged on the
-        // way out like every other Brief string.
+        // output. It was unwrapped by `viewOf`, the sole unwrap site (ADR-0004 §3): the
+        // value is untrusted source bytes, so it is defanged on the way out like every
+        // other Brief string.
         //
         // Code-filled attribution is conformed to the Brief contract here rather than
         // asserted against it (#86). A source reports what its backend has — a 60-person
@@ -322,7 +417,7 @@ function resolveEvidence(items: ExtractedItem[], rendered: RenderedBundle): Brie
         // throwing after the model call is already spent: the user pays for the summary
         // and gets an error instead of a Brief, and the failure looks intermittent
         // because it only fires when the model happens to cite the large item.
-        const attribution = cited.item.attribution ? unwrap(cited.item.attribution) : undefined;
+        const attribution = cited.item.attribution;
         evidence.push({
           source: `${cited.item.source}/${cited.item.kind}`,
           // Trusted structural digest (#108) — copied, never unwrapped, never model-read.

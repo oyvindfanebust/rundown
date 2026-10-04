@@ -1,6 +1,7 @@
 import { test, expect, describe } from "bun:test";
 import { untrusted, unwrap } from "../src/trust.ts";
-import type { Bundle } from "../src/domain.ts";
+import type { Bundle, Email } from "../src/domain.ts";
+import { emailRecord, type EmailSpec } from "../src/sources/normalize.ts";
 import { plan, renderBundle, type PlanDeps } from "../src/plan.ts";
 import type { SummarizerOutput } from "../src/brief-contract.ts";
 
@@ -597,7 +598,7 @@ describe("plan — evidence-quote verification", () => {
       const rendered = renderBundle(bundle([first, standing]), "UTC");
       expect(rendered.data).toContain("- [1] [graph/message]"); // standing renders first
       expect(rendered.data).toContain("- [2] [slack/message]");
-      expect(unwrap(rendered.index.get(1)!.item.title)).toBe("Standing item");
+      expect(rendered.index.get(1)!.item.title).toBe("Standing item");
     });
 
     test("renders attribution for the model alongside extras", () => {
@@ -727,5 +728,99 @@ describe("plan — evidence fingerprint (#108)", () => {
     await plan(bundle([{ ...item, fingerprint: "0123456789abcdef" }]), CTX, { summarize });
     // Never rendered to the model either: the digest is not in the bundle data.
     expect(calls[0]!.data).not.toContain("0123456789abcdef");
+  });
+});
+
+// ── Graph mail as typed Email records (#147) ──
+//
+// The Graph source now emits mail as `Email` records. Until the Digester replaces the
+// Planner, the Brief renders and cites them exactly as it did the old `message` items.
+
+describe("plan — Graph mail as Email records (#147)", () => {
+  function mail(over: Partial<EmailSpec> = {}): Email & { bucket: "recent" } {
+    const record = emailRecord({
+      id: "m1",
+      groupId: "conv-1",
+      continuesFromBefore: false,
+      at: "2026-07-09T10:00:00Z",
+      folder: "inbox",
+      subject: "Re: launch",
+      from: { name: "Carol", handle: "carol@x.test", isMe: false },
+      to: [{ name: "Me", handle: "me@x.test", isMe: true }],
+      cc: [],
+      body: "Can you confirm the launch date by Friday?",
+      importance: "high",
+      isRead: false,
+      flagged: false,
+      hasAttachments: false,
+      inferenceClassification: "focused",
+      ...over,
+    });
+    return { ...record, bucket: "recent" };
+  }
+
+  test("renders an inbox message as a graph/message item with its old lines", () => {
+    const rendered = renderText(bundle([mail()]));
+    expect(rendered).toContain("- [1] [graph/message] Thu 2026-07-09T10:00:00Z");
+    for (const line of [
+      "  title: Re: launch",
+      "  where: Inbox",
+      "  who: Carol, Me",
+      "  folder: inbox",
+      "  from: Carol",
+      "  to: Me",
+      "  preview: Can you confirm the launch date by Friday?",
+      "  importance: high",
+      "  unread: true",
+    ]) {
+      expect(rendered).toContain(line);
+    }
+  });
+
+  test("renders sent mail with recipients first and drops no-signal fields", () => {
+    const rendered = renderText(
+      bundle([
+        mail({
+          folder: "sent",
+          from: { name: "Me", handle: "me@x.test", isMe: true },
+          to: [{ name: "Carol", handle: "carol@x.test", isMe: false }],
+          importance: "normal",
+          isRead: true,
+        }),
+      ]),
+    );
+    expect(rendered).toContain("  where: Sent");
+    expect(rendered).toContain("  who: Carol, Me");
+    expect(rendered).not.toContain("importance:");
+    expect(rendered).not.toContain("unread:");
+  });
+
+  test("falls back to the address when a person has no display name, as before", () => {
+    const rendered = renderText(bundle([mail({ from: { handle: "noreply@x.test", isMe: false } })]));
+    expect(rendered).toContain("  from: noreply@x.test");
+    expect(rendered).toContain("  who: noreply@x.test, Me");
+  });
+
+  test("caps an address used as a caption like any other label", () => {
+    const rendered = renderText(bundle([mail({ from: { handle: `${"a".repeat(300)}@x.test`, isMe: false } })]));
+    expect(rendered).toContain(`  from: ${"a".repeat(255)}\n`);
+  });
+
+  test("cites a mail record with the old evidence shape and the record's fingerprint", async () => {
+    const record = mail();
+    const output: SummarizerOutput = {
+      summary: "s",
+      items: [{ kind: "task", summary: "Confirm the date", evidence: [{ ref: 1, quote: "confirm the launch date" }] }],
+    };
+    const brief = await plan(bundle([record]), CTX, fakeSummarizer(output));
+    expect(brief.items[0]!.evidence).toEqual([
+      {
+        source: "graph/message",
+        fingerprint: record.fingerprint,
+        where: "Inbox",
+        who: ["Carol", "Me"],
+        quote: "confirm the launch date",
+      },
+    ]);
   });
 });

@@ -85,11 +85,105 @@ export interface NormalizedItem {
   extras?: Untrusted<Record<string, unknown>>;
 }
 
+// ── Typed records (ADR-0019) ──
+//
+// What a Source emits in place of a NormalizedItem, one record type per thing a
+// backend holds. Free text and ids stay boxed as `Untrusted<T>`. Every unboxed field is
+// a trusted value: a number, instant, boolean, closed enum or digest, parsed by the
+// source and dropped (or defaulted, for a required enum or flag) when the parse fails.
+// Graph mail is the first record type (#147); calendar and Slack follow (#148, #149).
+
+/** An ISO-8601 instant, validated by the source as the normalizer's `instant()` does. */
+export type Instant = string;
+
+/** A 16-hex-char truncated SHA-256 of rundown-chosen inputs. Carries no backend bytes. */
+export type Digest = string;
+
+/**
+ * One person as one source sees them. Per source: Ada on mail and Ada on Slack are two
+ * Persons, never merged.
+ */
+export interface Person {
+  /** Display name. The only part that may leave the binary, and only as a label. */
+  name?: Untrusted<string>;
+  /** Mail address or Slack user id. Never leaves the binary. */
+  handle: Untrusted<string>;
+  /**
+   * Set by the source from the account it knows, never by the model. Graph matches
+   * `handle` against the `/me` address set; Slack compares with its `auth.test` user id.
+   */
+  isMe: boolean;
+}
+
+/** The fields every typed record shares. */
+export interface RecordBase {
+  source: "graph" | "slack";
+  /** Identity of this record: a digest of source, record type and backend id. */
+  fingerprint: Digest;
+  /**
+   * Identity of the group this record belongs to: a digest of the mail `conversationId`,
+   * the Slack channel id or the calendar `seriesMasterId`, domain-separated per type. A
+   * record with no group id is its own group.
+   */
+  entryKey: Digest;
+  /** The record's group started before the window. Set only where it is free to know. */
+  continuesFromBefore: boolean;
+}
+
+/** One mail message from the inbox or the sent folder (Graph). */
+export interface Email extends RecordBase {
+  type: "email";
+  source: "graph";
+  /** `receivedDateTime` in the inbox, `sentDateTime` in sent. */
+  at: Instant;
+  folder: "inbox" | "sent";
+  subject: Untrusted<string>;
+  from: Person;
+  /**
+   * Graph's `sender`, kept only when it differs from `from`: a delegate sending for the
+   * user, or the user sending on behalf of a shared mailbox.
+   */
+  sentBy?: Person;
+  to: Person[];
+  cc: Person[];
+  /** The user wrote it: `from.isMe || sentBy?.isMe`. */
+  byMe: boolean;
+  /** `bodyPreview`. Summarizer input only. */
+  body: Untrusted<string>;
+  importance: "low" | "normal" | "high";
+  isRead: boolean;
+  /** `flag.flagStatus` is `flagged`. */
+  flagged: boolean;
+  hasAttachments: boolean;
+  /** Outlook's Focused/Other sort. Unknown values read as `focused`. */
+  inferenceClassification: "focused" | "other";
+}
+
+/** What a Source emits, discriminated on `type`. Calendar and chat records join it. */
+export type SourceRecord = Email;
+
+/**
+ * What the Aggregator carries while sources move to typed records: a NormalizedItem or
+ * a record. Temporary (#141 slices 5 and 6); the union goes once every source emits
+ * records.
+ */
+export type BundleItem = NormalizedItem | SourceRecord;
+
+/** Whether a bundle item is a typed record rather than a NormalizedItem. */
+export function isRecord(item: BundleItem): item is SourceRecord {
+  return "type" in item;
+}
+
+/** A bundle item's ordering instant: a record's own time, a NormalizedItem's `timestamp`. */
+export function instantOf(item: BundleItem): string {
+  return isRecord(item) ? item.at : item.timestamp;
+}
+
 /** The derived, structural-trusted temporal label on each bundled item (ADR-0003 §4). */
 export type Bucket = "standing" | "recent" | "upcoming";
 
-/** A NormalizedItem plus its derived bucket. */
-export type AnnotatedItem = NormalizedItem & { bucket: Bucket };
+/** A bundle item plus its derived bucket. */
+export type AnnotatedItem = BundleItem & { bucket: Bucket };
 
 /** One entry in the Bundle's provenance manifest — trusted scalars only. */
 export interface SourceManifestEntry {
