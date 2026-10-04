@@ -1,6 +1,6 @@
 # ADR 0004 — Trust-boundary enforcement across multi-source + agent orchestration
 
-**Status:** Accepted
+**Status:** Superseded by [ADR-0022](0022-trust-boundary.md) ([#117](https://github.com/oyvindfanebust/rundown/issues/117))
 
 This ADR owns the full untrusted-data→model enforcement model that
 [ADR-0001](0001-package-rundown-cli-as-compiled-binaries-in-skills.md) §3,

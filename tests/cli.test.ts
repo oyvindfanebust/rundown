@@ -133,36 +133,36 @@ describe("cli", () => {
     });
   });
 
-  describe("brief --window parse", () => {
+  describe("digest --window parse", () => {
     test("a bad --window fails cleanly on stderr before any source runs", () => {
       // parseWindow runs before the pipeline, so this needs no config.
-      const r = run(["brief", "--window", "yesterday"], missing());
+      const r = run(["digest", "--window", "yesterday"], missing());
       expect(r.stderr).toContain("Invalid --window");
       expect(r.stdout).toBe("");
       expect(r.exitCode).toBe(1);
     });
   });
 
-  describe("brief --source", () => {
+  describe("digest --source", () => {
     test("a --source not in the config fails cleanly on stderr before summarizing", () => {
       const path = written(`{"timezone":"UTC","sources":{"graph":{}}}`);
-      const r = run(["brief", "--source", "slack"], path);
+      const r = run(["digest", "--source", "slack"], path);
       expect(r.stderr).toContain(`--source "slack" is not a configured source`);
       expect(r.stdout).toBe("");
       expect(r.exitCode).toBe(1);
     });
   });
 
-  // Flags are parsed per command (issue #30): a brief-only flag on any other
+  // Flags are parsed per command (issue #30): a digest-only flag on any other
   // command is a hard error, not silently ignored. Each command declares only
   // the flags it accepts, so this covers --window and --source on all three.
-  describe("brief-only flags rejected on other commands", () => {
-    const brief_only: Array<[string, string]> = [
+  describe("digest-only flags rejected on other commands", () => {
+    const digest_only: Array<[string, string]> = [
       ["--source", "graph"],
       ["--window", "today"],
     ];
     for (const cmd of ["status", "login", "init"]) {
-      for (const [flag, value] of brief_only) {
+      for (const [flag, value] of digest_only) {
         test(`${cmd} ${flag} fails hard on stderr`, () => {
           const r = run([cmd, flag, value], missing());
           expect(r.stderr).toContain(`rundown ${cmd}: option ${flag} is not valid here`);
@@ -185,7 +185,9 @@ describe("cli", () => {
       // Structural landmarks + one entry per registered source (renderSourceEntry).
       expect(template).toContain(`"timezone"`);
       expect(template).toContain(`"sources"`);
-      expect(template).toContain(`"guidance"`);
+      // guidance was removed (#150): the template no longer offers it.
+      expect(template).not.toContain(`"guidance"`);
+      expect(template).toContain("rundown digest --window today");
       expect(template).toContain(`"graph"`);
       expect(template).toContain(`"slack"`);
       // Linear and Jira are no longer sources (#143).
@@ -196,7 +198,7 @@ describe("cli", () => {
       expect(template).toContain("Default true");
       expect(template).toContain("RUNDOWN_VERSION");
       // The field ships commented out; that the template still loads is asserted
-      // through the subprocess seam below, not by parsing in-process (tests/brief.test.ts
+      // through the subprocess seam below, not by parsing in-process (tests/digest.test.ts
       // mock.module's the registry, and that mock leaks across files).
 
       const second = run(["init"], path);
@@ -320,15 +322,15 @@ describe("cli", () => {
   // would be the only place in the suite that needs one.
 
   describe("persistent update failure", () => {
-    test("a piped brief stays silent, whatever the failure count", () => {
+    test("a piped digest stays silent, whatever the failure count", () => {
       const path = written(`{"sources": {"offline": {}}}`);
       writeFileSync(
         join(dirname(path), "update-state.json"),
         JSON.stringify({ checkedAt: "2026-08-01T00:00:00.000Z", outcome: "failed", reason: "unreachable", consecutiveFailures: 9 }),
       );
-      const r = runOffline(["brief", "--window", "today"], path, { ANTHROPIC_API_KEY: "" });
+      const r = runOffline(["digest", "--window", "today"], path, { ANTHROPIC_API_KEY: "" });
       // Nothing about self-update on either stream: no warning, and nothing in the
-      // Brief contract either (ADR-0011 pins that with a schema test).
+      // digest contract either (ADR-0021 pins that with a schema test).
       expect(r.stderr).not.toContain("self-update");
       expect(r.stdout).not.toContain("self-update");
       expect(r.stdout).not.toContain("update-state");
@@ -372,7 +374,7 @@ describe("cli", () => {
       const path = written(`{"gibberish": 1, "sources": {"graph": {}}}`);
       const r = run(["status"], path);
       expect(r.stdout).toContain(`Unknown config key "gibberish"`);
-      expect(r.stdout).toContain("Known keys: timezone, window, guidance, autoUpdate, sources.");
+      expect(r.stdout).toContain("Known keys: timezone, window, autoUpdate, sources.");
       expect(r.exitCode).toBe(1);
     });
 
@@ -443,8 +445,8 @@ describe("cli", () => {
       expect(r.exitCode).toBe(1);
     });
 
-    test("brief fails on it before any source runs", () => {
-      const r = run(["brief"], written(`{"timezone":"UTC","sources":{"graph":{}},"suppress":[]}`));
+    test("digest fails on it before any source runs", () => {
+      const r = run(["digest"], written(`{"timezone":"UTC","sources":{"graph":{}},"suppress":[]}`));
       expect(r.stderr).toContain(`Config key "suppress" was removed`);
       expect(r.exitCode).not.toBe(0);
     });
@@ -456,18 +458,74 @@ describe("cli", () => {
     });
   });
 
+  // guidance was removed (#150): the digest has no planning step to steer.
+  describe("removed config key: guidance", () => {
+    test("status rejects a config that still has guidance, naming the key and why", () => {
+      const r = run(["status"], written(`{"timezone":"UTC","sources":{"graph":{}},"guidance":"terse"}`));
+      expect(r.stdout).toContain("✗ invalid");
+      expect(r.stdout).toContain(`Config key "guidance" was removed: the digest has no planning step to steer`);
+      expect(r.stdout).not.toContain("Unknown config key");
+      expect(r.exitCode).toBe(1);
+    });
+
+    test("digest fails on it before any source runs", () => {
+      const r = run(["digest"], written(`{"timezone":"UTC","sources":{"graph":{}},"guidance":"terse"}`));
+      expect(r.stderr).toContain(`Config key "guidance" was removed`);
+      expect(r.stdout).toBe("");
+      expect(r.exitCode).toBe(1);
+    });
+  });
+
+  // `rundown digest` replaces `rundown brief` (#150); there is no alias.
+  describe("digest", () => {
+    test("emits one digest JSON object on stdout for an empty window, with no model call", () => {
+      // The offline source reads nothing, so no Summarizer call (and no API key) is needed.
+      const path = written(`{"timezone":"UTC","sources":{"offline":{}}}`);
+      const r = runOffline(["digest", "--window", "2026-07-06..2026-07-12"], path, { ANTHROPIC_API_KEY: "" });
+      expect(r.exitCode).toBe(0);
+      const lines = r.stdout.trimEnd().split("\n");
+      expect(lines).toHaveLength(1);
+      const out = JSON.parse(lines[0]!);
+      expect(out.window).toEqual({ from: "2026-07-06T00:00:00.000Z", to: "2026-07-13T00:00:00.000Z" });
+      expect(out.timezone).toBe("UTC");
+      expect(out.generatedAt).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/);
+      expect(out.counts).toEqual({
+        meetings: { records: 0, entries: 0 },
+        mail: { records: 0, entries: 0 },
+        chat: { records: 0, entries: 0 },
+      });
+      expect(out).toMatchObject({ summary: "", meetings: [], mail: [], chat: [] });
+      expect(out).not.toHaveProperty("envelope");
+      expect(out).not.toHaveProperty("items");
+    });
+
+    test("brief no longer exists: it prints usage and exits non-zero", () => {
+      const r = runOffline(["brief"], written(`{"timezone":"UTC","sources":{"offline":{}}}`));
+      expect(r.stdout).toBe("");
+      expect(r.stderr).toContain("Usage:");
+      expect(r.stderr).toContain("rundown digest");
+      expect(r.stderr).not.toContain("rundown brief");
+      expect(r.exitCode).toBe(1);
+    });
+
+    test("status points at rundown digest when everything is ready", () => {
+      const r = runOffline(["status"], written(`{"timezone":"UTC","sources":{"offline":{}}}`), { ANTHROPIC_API_KEY: "x" });
+      expect(r.stdout).toContain("Next: rundown digest");
+    });
+  });
+
   // Each remaining command routes to its own distinct handler. The deep behaviors
   // (aggregation, auth walks) are covered elsewhere; here we only assert dispatch.
   describe("command routing", () => {
-    test("brief reaches the pipeline and surfaces the missing-config error on stderr", () => {
-      const r = run(["brief"], missing());
+    test("digest reaches the pipeline and surfaces the missing-config error on stderr", () => {
+      const r = run(["digest"], missing());
       expect(r.stderr).toContain("No config");
       expect(r.exitCode).toBe(1);
     });
 
     test("status reaches its own diagnostic renderer (invalid config on stdout)", () => {
       // ConfigError is caught inside cmdStatus and rendered as a diagnostic line,
-      // distinct from the raw fail() path brief/login take.
+      // distinct from the raw fail() path digest/login take.
       const r = run(["status"], missing());
       expect(r.stdout).toContain("✗ invalid");
       expect(r.stdout).toContain("No config");
@@ -642,8 +700,8 @@ describe("cli", () => {
       // valid here" (issue #30), so a clean run proves the flag is declared.
       // A missing config makes every command fail fast at config resolution —
       // which happens AFTER flag parsing, so this still proves the flag parsed.
-      // (brief especially: a valid config would run the real pipeline.)
-      for (const cmd of ["status", "init", "login", "brief"]) {
+      // (digest especially: a valid config would run the real pipeline.)
+      for (const cmd of ["status", "init", "login", "digest"]) {
         const r = run([cmd, "--debug"], missing());
         expect(r.stderr).not.toContain("is not valid here");
       }

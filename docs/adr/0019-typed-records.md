@@ -36,8 +36,8 @@ While sources moved one at a time, the Aggregator carried a temporary `Normalize
 SourceRecord` union. With Slack on records
 ([#149](https://github.com/oyvindfanebust/rundown/issues/149)) every source emits records, so the
 union and `NormalizedItem` are gone: the Aggregator orders records by each one's own instant, and
-the Planner maps a record onto the fields it rendered before, so the Brief keeps its shape. The
-mapping goes with the Planner when the Digester replaces it
+the Planner mapped a record onto the fields it rendered before, so the Brief kept its shape. The
+mapping went with the Planner when the Digester replaced it
 ([#150](https://github.com/oyvindfanebust/rundown/issues/150)).
 
 ### 2. Trust follows type
@@ -113,8 +113,10 @@ interface CalendarEvent extends RecordBase {
 
 `Person` is per source. Ada on mail and Ada on Slack are two Persons; there is no cross-source
 merge. `fingerprint` and `entryKey` are 16-hex-char truncated SHA-256 digests in the ADR-0016
-scheme, domain-separated by record type (`email`, `email-thread`, `event`, `event-series`), so a
-group key never equals a record key and no backend bytes survive into either. A record whose group
+scheme, domain-separated by type: a `fingerprint` under its record type (`email`,
+`calendar-event`, `chat-message`) and an `entryKey` under its group type (`email-thread`,
+`event-series`, `chat-conversation`), so a group key never equals a record key and no backend
+bytes survive into either. A record whose group
 id is missing is its own group.
 
 ### 4. Graph
@@ -167,8 +169,9 @@ Calendar:
 - Sources do no timezone handling, so the date of a local midnight (the window's start, an
   all-day `originalStart`) is read by shifting the instant 13 hours east. That names the right
   day for every zone from UTC−10 to UTC+13.
-- `fingerprint` digests `event`, the old NormalizedItem kind, not the record type
-  `calendar-event`, so calendar fingerprints do not change.
+- `fingerprint` digests the record type `calendar-event`. It digested `event`, the old
+  NormalizedItem kind, until [#150](https://github.com/oyvindfanebust/rundown/issues/150): its
+  stability mattered only for Brief evidence, which is gone.
 
 ### 5. Slack
 
@@ -210,8 +213,9 @@ interface ChatMessage extends RecordBase {
   therefore not on the record, and `continuesFromBefore` is always false, since earlier messages
   are not fetched.
 - `entryKey` digests the channel id under the type `chat-conversation`. `fingerprint` digests
-  channel id and `ts` under `message`, the old NormalizedItem kind, so Slack fingerprints do not
-  change. The permalink is not kept.
+  channel id and `ts` under the record type `chat-message`. It digested `message`, the old
+  NormalizedItem kind, until [#150](https://github.com/oyvindfanebust/rundown/issues/150), for the
+  same reason as calendar. The permalink is not kept.
 
 ### 6. Kept from ADR-0002
 
@@ -221,7 +225,8 @@ interface ChatMessage extends RecordBase {
 - The normalizer (`sources/normalize.ts`) stays the only `trust.ts` importer among sources: it
   brands, truncates and validates records. Its free-text cap
   (`TEXT_MAX`) rises from 200 to 255, so a subject of Outlook's full length survives to the label
-  clamp.
+  clamp. A mail body and a chat message's text keep up to 2,000 chars (`BODY_MAX`), the most the
+  Digester renders per message ([ADR-0021](0021-the-digest.md)).
 
 ## Consequences
 
@@ -230,18 +235,14 @@ interface ChatMessage extends RecordBase {
 - Graph mail fingerprints change once: they now digest the record type `email` instead of the
   `message` kind. Releases are held from this change until the live hostile-input evals land
   ([#141](https://github.com/oyvindfanebust/rundown/issues/141)), so no released Brief carries both.
-- Until the Digester lands, the Planner keeps a mapping from `Email` and `CalendarEvent` to the old
-  item fields. The Brief's mail evidence keeps `source: "graph/message"`, `where`, `who` and
-  `fingerprint`; calendar evidence keeps `source: "graph/event"`, `who` and `fingerprint`.
+- Until the Digester landed, the Planner kept a mapping from each record type to the old item
+  fields, so the Brief and its evidence kept their shape. The mapping went with the Planner in
+  [#150](https://github.com/oyvindfanebust/rundown/issues/150).
 - The Brief prompt changes slightly for calendar: the `url` and `categories` lines go, a `rooms`
   line joins, and the `location` line keeps only what the location says beyond the room names.
   `showAs` and `myResponse` render their parsed values.
 - The Brief prompt changes slightly for mail: the `url` line goes, since records carry no URL, and
   previews keep up to 255 chars instead of 200. The prompt's structure is unchanged.
-- Until the Digester lands, the Planner maps a `ChatMessage` onto the old Slack item fields. The
-  Brief's Slack evidence keeps `source: "slack/message"`, `where`, `who`, `relationship` and
-  `fingerprint`. `relationship` is now derived from the record alone: `authored` when `byMe`, else
-  `mentions` when `mentionsMe`, else `dms` for a DM or group DM.
 - The Brief prompt changes slightly for Slack: the `url` line and the query-family `relationship`
   extra go, the `channel` extra carries the conversation's `entryKey` digest in place of the
   channel id and `channel` in place of `public` or `private`, and an `external` line marks a

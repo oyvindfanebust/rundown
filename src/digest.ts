@@ -1,16 +1,16 @@
-// The composition root for `rundown brief` (ADR-0008 §2): resolve config →
-// aggregate → plan → Brief. Wiring only — no domain logic, no argument parsing,
-// no process I/O (that lives in cli.ts), so it is testable in isolation.
+// The composition root for `rundown digest` (ADR-0008 §2): resolve config → aggregate →
+// digest. Wiring only: no domain logic, no argument parsing, no process I/O (that lives in
+// cli.ts), so it is testable in isolation.
 
 import { resolveConfig } from "./config.ts";
 import type { WindowSelector } from "./temporal.ts";
 import { aggregate } from "./aggregate.ts";
-import { plan } from "./plan.ts";
+import { digest } from "./digester.ts";
+import type { Digest } from "./digest-contract.ts";
 import { descriptors, buildRegistry } from "./sources/registry.ts";
-import type { Brief } from "./domain.ts";
 import { noDebug, type DebugSink } from "./debug.ts";
 
-export interface BuildBriefOptions {
+export interface BuildDigestOptions {
   windowOverride?: WindowSelector;
   /** Per-run `--source` narrowing: run only these configured sources (empty/undefined = all). */
   sourceFilter?: string[];
@@ -25,11 +25,11 @@ export interface BuildBriefOptions {
   onDebug?: DebugSink;
 }
 
-export async function buildBrief(opts: BuildBriefOptions = {}): Promise<Brief> {
+export async function buildDigest(opts: BuildDigestOptions = {}): Promise<Digest> {
   const progress = opts.onProgress ?? (() => {});
   const debug = opts.onDebug ?? noDebug;
-  // The one clock for the whole run: read `now` once here and thread it, so every
-  // stage shares a single instant. Downstream stages have no `= new Date()`.
+  // The run's single clock: read once here. It resolves the window and becomes the digest's
+  // `generatedAt`, so the two can never disagree. Downstream stages have no `new Date()`.
   const now = opts.now ?? new Date();
   const config = await resolveConfig(descriptors, {
     windowOverride: opts.windowOverride,
@@ -42,17 +42,16 @@ export async function buildBrief(opts: BuildBriefOptions = {}): Promise<Brief> {
 
   const keys = config.selection.map((s) => s.sourceKey).join(", ");
   progress(`Pulling ${config.selection.length} source(s) (${keys}) for ${config.windowSpan}…`);
-  const bundle = await aggregate(config.window, config.selection, sources, now, debug);
+  const bundle = await aggregate(config.window, config.selection, sources, debug);
 
-  const total = bundle.sources.reduce((n, s) => n + s.itemCount, 0);
-  if (total === 0) {
-    progress("No items in window — emitting an empty rundown.");
+  if (bundle.records.length === 0) {
+    progress("No records in the window; emitting an empty digest.");
   } else {
-    progress(`Aggregated ${total} item(s); summarizing with Claude (this can take a bit)…`);
+    progress(`Read ${bundle.records.length} record(s); grouping them into digest entries…`);
   }
-  return plan(bundle, {
-    windowIsPast: config.windowIsPast,
-    timezone: config.timezone,
-    guidance: config.guidance,
-  });
+  return digest(
+    bundle,
+    { window: config.window, timezone: config.timezone, generatedAt: now.toISOString() },
+    { onProgress: progress },
+  );
 }

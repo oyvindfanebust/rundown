@@ -1,6 +1,6 @@
 # ADR 0003 — The multi-source aggregation model
 
-**Status:** Accepted
+**Status:** Superseded by [ADR-0020](0020-aggregation-and-digest-entries.md) ([#117](https://github.com/oyvindfanebust/rundown/issues/117))
 
 **Amendment (digest, [#117](https://github.com/oyvindfanebust/rundown/issues/117)).** The Claude
 Code logs source is removed ([#144](https://github.com/oyvindfanebust/rundown/issues/144)), so no

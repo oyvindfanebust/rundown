@@ -1,6 +1,6 @@
 import { test, expect, describe } from "bun:test";
 import { untrusted, unwrap } from "../src/trust.ts";
-import { TEXT_MAX, text, chatMessageRecord, type ChatMessageSpec } from "../src/sources/normalize.ts";
+import { BODY_MAX, TEXT_MAX, text, chatMessageRecord, type ChatMessageSpec } from "../src/sources/normalize.ts";
 
 // The record builders are exercised through each source's tests too; these pin the
 // builder's own invariants with the Slack builder, the one with no source-side parsing.
@@ -42,8 +42,8 @@ describe("record builder", () => {
     expect(chat().byMe).toBe(false);
   });
 
-  test("free text truncates at TEXT_MAX; absent text is empty, an absent handle is empty", () => {
-    expect(unwrap(chat({ text: "x".repeat(500) }).text)).toBe("x".repeat(TEXT_MAX));
+  test("message text truncates at BODY_MAX; absent text is empty, an absent handle is empty", () => {
+    expect(unwrap(chat({ text: "x".repeat(3_000) }).text)).toBe("x".repeat(BODY_MAX));
     expect(unwrap(chat({ text: undefined }).text)).toBe("");
     expect(unwrap(chat({ author: { name: "bot", isMe: false } }).author.handle)).toBe("");
   });

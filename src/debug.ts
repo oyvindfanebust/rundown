@@ -10,7 +10,7 @@
 // opaque (a TypeScript `private` field), so it is not assignable to `string` or
 // `number`. Every field of every event below is a plain scalar, so handing an
 // untrusted value to the sink is a COMPILE ERROR. The only way to raw bytes stays
-// `unwrap()`, whose sole call site is the summarizer-prompt assembly in `plan.ts`
+// `unwrap()`, whose only callers are the Digester and `label()` (ADR-0022)
 // (enforced by `scripts/check-unwrap-sites.sh`); nothing in this module imports it.
 //
 // Two rules keep the union honest as it grows — both close a leak that a naive
@@ -27,7 +27,7 @@
 // The union is CLOSED and source-agnostic: every remote source emits the same
 // `http` event, parameterized by a `source` key, so it does not grow per source.
 // It grows only for a genuinely new KIND of structural signal — and that edit is
-// the boundary review, the same discipline as the sole-unwrap-site rule.
+// the boundary review, the same discipline as the unwrap-site rule.
 
 /**
  * One debug event. Every field is a trusted structural scalar; see the module
@@ -107,7 +107,7 @@ export function formatDebugEvent(e: DebugEvent): string {
  * progress sink this is NOT gated on `stderr.isTTY` (ADR-0015 §4): progress is
  * ambient noise a piped run should not see, but debug is explicitly requested and
  * its main use is capturing signal from a piped or CI run. stdout stays reserved
- * for the Brief (ADR-0006) either way.
+ * for the digest (ADR-0006) either way.
  */
 export function makeDebugSink(enabled: boolean, write: (s: string) => void): DebugSink {
   if (!enabled) return noDebug;

@@ -1,5 +1,5 @@
 // The external surface (ADR-0008 §4): parse args, dispatch the five commands,
-// and own emission (Brief JSON → stdout, errors → stderr, exit codes). No domain
+// and own emission (digest JSON → stdout, errors → stderr, exit codes). No domain
 // logic lives here.
 
 import { parseArgs, type ParseArgsConfig } from "node:util";
@@ -8,7 +8,7 @@ import { existsSync, realpathSync } from "node:fs";
 import { mkdir, writeFile, access } from "node:fs/promises";
 import { constants } from "node:fs";
 import { dirname } from "node:path";
-import { buildBrief } from "./brief.ts";
+import { buildDigest } from "./digest.ts";
 import { configDir, configPath, resolveConfig, ConfigError } from "./config.ts";
 import { parseWindowSelector, WindowError, WINDOW_SPANS, type WindowSelector } from "./temporal.ts";
 import { descriptors, registeredKeys, buildRegistry } from "./sources/registry.ts";
@@ -36,7 +36,7 @@ const VERSION = typeof RUNDOWN_VERSION === "string" ? RUNDOWN_VERSION : "0.0.0-d
  * Build this invocation's debug sink (ADR-0015 §2, §4) and emit the one event
  * every command shares. Debug goes to stderr unconditionally — unlike the
  * TTY-gated progress sink — because its whole purpose is capturing signal from a
- * piped or CI run. stdout stays reserved for the Brief (ADR-0006).
+ * piped or CI run. stdout stays reserved for the digest (ADR-0006).
  *
  * The config-path event is emitted here rather than per command: which file was
  * read, and whether `RUNDOWN_CONFIG` chose it, is the first question every
@@ -89,7 +89,7 @@ function initTemplate(): string {
   // IANA timezone. Window spans + all-day items resolve against it. Omit to use the system tz.
   "timezone": ${JSON.stringify(tz)},
 
-  // Default planning window. Override per run: rundown brief --window today
+  // Default window. Override per run: rundown digest --window today
   // Spans: ${WINDOW_SPANS.join(" | ")}
   "window": "this-week",
 
@@ -103,10 +103,6 @@ function initTemplate(): string {
   "sources": {
 ${sources}
   },
-
-  // Freeform steering for the planner. Trusted — reaches the model as instructions.
-  // Say what to surface first and the tone you want.
-  "guidance": "Surface commitments I've made to others first, then anything time-sensitive or that people are waiting on me for. Keep it terse.",
 }
 `;
 }
@@ -122,7 +118,7 @@ async function cmdInit(): Promise<void> {
   process.stdout.write(
     `Wrote ${path} (annotated template).\n\n` +
       `Next:\n` +
-      `  1. edit the file — set your timezone, guidance, and any source options\n` +
+      `  1. edit the file — set your timezone and any source options\n` +
       `  2. rundown login    (authenticate every configured source)\n` +
       `  3. rundown status   (check what's still missing)\n`,
   );
@@ -186,7 +182,7 @@ async function cmdStatus(debug: DebugSink): Promise<void> {
   if (!keyPresent) out.write(`Next: export ANTHROPIC_API_KEY\n`);
   else if (unauthed.length > 0) out.write(`Next: rundown login   (authenticates ${unauthed.join(", ")})\n`);
   else if (ready < total) out.write(`Next: fix source configuration above, then re-run rundown status\n`);
-  else out.write(`Next: rundown brief\n`);
+  else out.write(`Next: rundown digest\n`);
 }
 
 // ── login: walk every configured-but-unauthenticated source, or ─────────────
@@ -238,11 +234,11 @@ async function cmdLogin(debug: DebugSink, sourceKey?: string): Promise<void> {
   out.write(walked === 0 ? `\nAll configured sources already authenticated.\n` : `\nDone. Next: rundown status\n`);
 }
 
-// ── brief: the composed pipeline; emit one Brief as JSON on stdout ───────────
+// ── digest: the composed pipeline; emit one digest as JSON on stdout ─────────
 
-async function cmdBrief(debug: DebugSink, windowOverride?: WindowSelector, sourceFilter?: string[]): Promise<void> {
+async function cmdDigest(debug: DebugSink, windowOverride?: WindowSelector, sourceFilter?: string[]): Promise<void> {
   // Progress goes to stderr, and only when it's a terminal — a piped/agent run
-  // gets clean silent streams; stdout stays reserved for the Brief JSON (ADR-0006).
+  // gets clean silent streams; stdout stays reserved for the digest JSON (ADR-0006).
   const onProgress = process.stderr.isTTY
     ? (message: string) => process.stderr.write(`${message}\n`)
     : undefined;
@@ -250,15 +246,15 @@ async function cmdBrief(debug: DebugSink, windowOverride?: WindowSelector, sourc
   // A permanently broken updater must not stay invisible to a human. Gated on the
   // same terminal check as progress output, so a piped or agent-driven run stays
   // byte-for-byte silent on both streams and no automated consumer is affected.
-  // Nothing about this reaches the Brief: ADR-0011 pins that contract with a schema
+  // Nothing about this reaches the digest: ADR-0021 pins that contract with a schema
   // test, and it is the untrusted-derived artifact.
   if (process.stderr.isTTY) {
     const warning = persistentFailureWarning(await readUpdateState(fsUpdateStateIO, configDir()));
     if (warning) process.stderr.write(`${warning}\n`);
   }
-  const brief = await buildBrief({ windowOverride, sourceFilter, onProgress, onDebug: debug });
+  const result = await buildDigest({ windowOverride, sourceFilter, onProgress, onDebug: debug });
   // Bun.write awaits the flush, so the JSON is fully emitted before we exit.
-  await Bun.write(Bun.stdout, JSON.stringify(brief) + "\n");
+  await Bun.write(Bun.stdout, JSON.stringify(result) + "\n");
 }
 
 // ── self-update: the internal worker mode, then the gate ─────────────────────
@@ -355,7 +351,7 @@ if (command === "--version" || command === "-v") {
 // the flags it accepts, so a flag a command doesn't own is a hard error rather
 // than silently ignored (issue #30). parseArgs is strict, so it throws on any
 // undeclared flag; parseCommandArgs translates that into a clean fail() naming
-// the command. Only `brief` accepts flags today (--window, --source); the rest
+// the command. Only `digest` accepts flags today (--window, --source); the rest
 // accept none (login still takes its optional <source> positional).
 function parseCommandArgs<const T extends ParseArgsConfig["options"]>(name: string, options: T) {
   try {
@@ -382,10 +378,10 @@ function parseWindow(w: string | undefined): WindowSelector | undefined {
   }
 }
 
-const USAGE = `rundown — a readout of where you stand across your work sources
+const USAGE = `rundown — a readout of your mail, chat and calendar
 
 Usage:
-  rundown brief [--window <span|date|range>] [--source <name>]…   compose and emit the Brief as JSON on stdout
+  rundown digest [--window <span|date|range>] [--source <name>]…  emit the window's digest as JSON on stdout
   rundown login [<source>]                     authenticate every configured source, or just <source>
   rundown status                               per-source configured/authed diagnostic
   rundown init                                 write the annotated config template
@@ -399,7 +395,7 @@ Window:
 Debug:
   --debug on any command (or RUNDOWN_DEBUG=1) writes structural diagnostics to
   stderr: config path, HTTP method/host/path/status, auth outcomes, per-source
-  timings and counts. Never source content. stdout stays the Brief.
+  timings and counts. Never source content. stdout stays the digest.
 
 Source:
   --source narrows this run to a subset of the configured sources; repeat it to
@@ -407,15 +403,15 @@ Source:
 
 try {
   switch (command) {
-    case "brief": {
+    case "digest": {
       // Repeatable --source (`--source graph --source slack`) narrows this run
       // to a subset of the configured sources; absent = the full selection.
-      const { values } = parseCommandArgs("brief", {
+      const { values } = parseCommandArgs("digest", {
         window: { type: "string" },
         source: { type: "string", multiple: true },
         debug: { type: "boolean" },
       });
-      await cmdBrief(startDebug(values.debug), parseWindow(values.window), values.source);
+      await cmdDigest(startDebug(values.debug), parseWindow(values.window), values.source);
       break;
     }
     case "login": {

@@ -7,7 +7,7 @@ import {
   SummarizerRefusal,
   type MessageTransport,
 } from "../src/summarize.ts";
-import { SummarizerOutputSchema } from "../src/brief-contract.ts";
+import { SummarizerOutputSchema } from "../src/digest-contract.ts";
 
 // The transport seam lets us drive summarize()'s retry-by-failure-class engine
 // with scripted responses — no live call, no ANTHROPIC_API_KEY, and every
@@ -76,10 +76,10 @@ describe("summarize retry classes", () => {
   });
 
   test("schema-parse failure recovers on a later attempt", async () => {
-    const good = JSON.stringify({ summary: "ok", items: [] });
+    const good = JSON.stringify({ summary: "ok", entries: [] });
     const { transport, calls } = scripted([textResponse("still warming up"), textResponse(good)]);
-    const out = await summarize<{ summary: string; items: unknown[] }>(INPUT, { transport });
-    expect(out).toEqual({ summary: "ok", items: [] });
+    const out = await summarize<{ summary: string; entries: unknown[] }>(INPUT, { transport });
+    expect(out).toEqual({ summary: "ok", entries: [] });
     expect(calls).toHaveLength(2); // one retry sufficed
   });
 
@@ -93,7 +93,7 @@ describe("summarize retry classes", () => {
 describe("summarize request assembly (ADR-0004 invariants stay inside)", () => {
   test("carries the hardening prompt, the nonce'd untrusted-data delimiter, structured output, and zero tools", async () => {
     // Inject a fixed nonce so this deliberate security-invariant pin stays deterministic.
-    const { transport, calls } = scripted([textResponse(JSON.stringify({ summary: "", items: [] }))]);
+    const { transport, calls } = scripted([textResponse(JSON.stringify({ summary: "", entries: [] }))]);
     await summarize(INPUT, { transport, nonce: () => "pinnednonce" });
 
     const req = calls[0]!;
@@ -127,7 +127,7 @@ describe("summarize delimiter breakout (ADR-0004 §2 Layer-1)", () => {
   const realCloser = `</untrusted-data-${NONCE}>`;
 
   async function userTurnFor(data: string): Promise<string> {
-    const { transport, calls } = scripted([textResponse(JSON.stringify({ summary: "", items: [] }))]);
+    const { transport, calls } = scripted([textResponse(JSON.stringify({ summary: "", entries: [] }))]);
     await summarize({ ...INPUT, data }, { transport, ...fixed });
     return String(calls[0]!.messages[0]!.content);
   }
@@ -159,7 +159,7 @@ describe("summarize delimiter breakout (ADR-0004 §2 Layer-1)", () => {
   });
 
   test("the default nonce is unguessable — a fresh, distinct token per call", async () => {
-    const { transport, calls } = scripted([textResponse(JSON.stringify({ summary: "", items: [] }))]);
+    const { transport, calls } = scripted([textResponse(JSON.stringify({ summary: "", entries: [] }))]);
     await summarize(INPUT, { transport }); // no injected nonce → production generator
     await summarize(INPUT, { transport });
     const opener = (c: unknown) => String(c).slice(0, String(c).indexOf(">") + 1);
@@ -180,7 +180,7 @@ describe("summarize invisible-Unicode stripping (defense-in-depth)", () => {
   const fixed = { nonce: () => NONCE };
 
   async function userTurnFor(data: string): Promise<string> {
-    const { transport, calls } = scripted([textResponse(JSON.stringify({ summary: "", items: [] }))]);
+    const { transport, calls } = scripted([textResponse(JSON.stringify({ summary: "", entries: [] }))]);
     await summarize({ ...INPUT, data }, { transport, ...fixed });
     return String(calls[0]!.messages[0]!.content);
   }
@@ -259,9 +259,9 @@ describe("summarize output validation (the parse seam)", () => {
   const parse = (value: unknown) => SummarizerOutputSchema.parse(value);
 
   test("well-formed JSON that fails the shape validator is retried, then fails hard", async () => {
-    // Valid JSON, wrong shape (summary is a number, items is a string): the API's
+    // Valid JSON, wrong shape (summary is a number, entries is a string): the API's
     // output_config might wave this through, but the injected parse rejects it.
-    const wrongShape = JSON.stringify({ summary: 123, items: "not an array" });
+    const wrongShape = JSON.stringify({ summary: 123, entries: "not an array" });
     const { transport, calls } = scripted([textResponse(wrongShape)]);
     await expect(summarize({ ...INPUT, parse }, { transport })).rejects.toBeInstanceOf(SummarizerError);
     expect(calls).toHaveLength(3); // 1 initial + MAX_SCHEMA_RETRIES(2), same as a JSON.parse failure
@@ -270,24 +270,24 @@ describe("summarize output validation (the parse seam)", () => {
   test("output conforming to the schema is parsed and returned", async () => {
     const conforming = JSON.stringify({
       summary: "ok",
-      items: [{ kind: "task", summary: "reply to Anna", evidence: [] }],
+      entries: [{ id: "e1", summary: "Anna asks for a reply" }],
     });
     const { transport } = scripted([textResponse(conforming)]);
     const out = await summarize({ ...INPUT, parse }, { transport });
     expect(out).toEqual({
       summary: "ok",
-      items: [{ kind: "task", summary: "reply to Anna", evidence: [] }],
+      entries: [{ id: "e1", summary: "Anna asks for a reply" }],
     });
   });
 
   test("a wrong-shape attempt can recover on a later, conforming attempt", async () => {
-    const conforming = JSON.stringify({ summary: "ok", items: [] });
+    const conforming = JSON.stringify({ summary: "ok", entries: [] });
     const { transport, calls } = scripted([
       textResponse(JSON.stringify({ wrong: true })),
       textResponse(conforming),
     ]);
     const out = await summarize({ ...INPUT, parse }, { transport });
-    expect(out).toEqual({ summary: "ok", items: [] });
+    expect(out).toEqual({ summary: "ok", entries: [] });
     expect(calls).toHaveLength(2); // one retry sufficed
   });
 });
@@ -335,11 +335,11 @@ describe("the default transport (real SDK client over a fake HTTP edge)", () => 
   }
 
   test("streams the 64K request and returns the assembled final message", async () => {
-    const out = JSON.stringify({ summary: "ok", items: [] });
+    const out = JSON.stringify({ summary: "ok", entries: [] });
     const { client, bodies } = fakeClient(streamedMessage(out, "end_turn"));
     const result = await summarize(INPUT, { transport: anthropicTransport(client) });
 
-    expect(result).toEqual({ summary: "ok", items: [] });
+    expect(result).toEqual({ summary: "ok", entries: [] });
     expect(bodies).toHaveLength(1);
     expect(bodies[0].stream).toBe(true);
     expect(bodies[0].max_tokens).toBe(64_000);

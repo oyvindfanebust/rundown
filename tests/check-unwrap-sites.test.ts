@@ -1,7 +1,7 @@
-// CI gate for ADR-0004 §3's sole-unwrap-site rule: `scripts/check-unwrap-sites.sh`
-// must fail when `unwrap` is imported or called anywhere under `src/` except its
-// definition (`src/trust.ts`) and its sole legitimate caller (`src/plan.ts`), and
-// must pass on the real tree. Comment prose that merely mentions "unwrap()" (e.g.
+// CI gate for ADR-0022's unwrap-site rule: `scripts/check-unwrap-sites.sh` must fail
+// when `unwrap` is imported or called anywhere under `src/` except its definition
+// (`src/trust.ts`) and its two callers, the Digester (`src/digester.ts`) and `label()`
+// (`src/label.ts`), and must pass on the real tree. Comment prose that merely mentions "unwrap()" (e.g.
 // the "NOT a new unwrap() site" notes in summarize.ts) must not trip it.
 
 import { test, expect } from "bun:test";
@@ -33,13 +33,29 @@ function fixture(files: Record<string, string>): string {
 
 const LEGIT = {
   "trust.ts": `export function unwrap<T>(value: T): T { return value; }\n`,
-  "plan.ts": `import { unwrap } from "./trust.ts";\nexport const x = unwrap("ok");\n`,
+  "digester.ts": `import { unwrap } from "./trust.ts";\nexport const x = unwrap("ok");\n`,
+  "label.ts": `import { unwrap } from "./trust.ts";\nexport const y = unwrap("ok");\n`,
 };
 
-test("passes when unwrap appears only in trust.ts and plan.ts", () => {
+test("passes when unwrap appears only in trust.ts, digester.ts and label.ts", () => {
   const dir = fixture(LEGIT);
   try {
     expect(runCheck(dir).code).toBe(0);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+// The retired Planner is not an allowed site any more: exactly two callers remain.
+test("fails when plan.ts, the retired Planner, calls unwrap()", () => {
+  const dir = fixture({
+    ...LEGIT,
+    "plan.ts": `import { unwrap } from "./trust.ts";\nexport const z = unwrap("old");\n`,
+  });
+  try {
+    const r = runCheck(dir);
+    expect(r.code).not.toBe(0);
+    expect(r.stdout + r.stderr).toMatch(/plan\.ts:\d+/);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
@@ -108,7 +124,7 @@ test("comment lines mentioning unwrap() do not trip the check", () => {
     "summarize.ts": [
       `// \`sealed\` is a pure transform — NOT a new unwrap() site (ADR-0004 §3).`,
       `/* block comment: never call unwrap( here */`,
-      ` * doc-comment line: unwrap() is forbidden outside plan.ts`,
+      ` * doc-comment line: unwrap() is forbidden outside digester.ts and label.ts`,
       `export const ok = 1;`,
       ``,
     ].join("\n"),
@@ -120,7 +136,7 @@ test("comment lines mentioning unwrap() do not trip the check", () => {
   }
 });
 
-test("the real src/ tree passes (sole-unwrap-site invariant holds today)", () => {
+test("the real src/ tree passes (the two-site invariant holds today)", () => {
   const r = runCheck(join(REPO_ROOT, "src"));
   expect(r.code).toBe(0);
 });

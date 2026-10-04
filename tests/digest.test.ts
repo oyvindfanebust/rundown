@@ -10,13 +10,13 @@ const REAL_SUMMARIZE_EXPORTS = { ...realSummarizeModule };
 import { mkdtempSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { resolveSelector, parseWindowSelector } from "../src/temporal.ts";
+import { parseWindowSelector } from "../src/temporal.ts";
 import type { SourceRecord, Window } from "../src/domain.ts";
 import { chatMessageRecord } from "../src/sources/normalize.ts";
 import type { Source, SourceDescriptor } from "../src/sources/source.ts";
 
-// buildBrief is the composition root (ADR-0008 §2): resolve config → build the
-// selected sources → aggregate → plan, threading ONE shared `now`. It wires in
+// buildDigest is the composition root (ADR-0008 §2): resolve config → build the
+// selected sources → aggregate → digest, threading ONE shared `now`. It wires in
 // the module-global registry (ADR-0008 §5: the real one in production), so we
 // mock that module to inject a fake descriptor + buildRegistry, and mock the
 // Summarizer so the items>0 path needs no network. Both mocks are safe to install
@@ -56,7 +56,7 @@ mock.module("../src/sources/registry.ts", () => ({
   registeredKeys: () => ["fake"],
 }));
 
-// Record what the Planner hands the Summarizer; return a fixed, schema-shaped Brief.
+// Record what the Digester hands the Summarizer; summarize the one chat entry.
 let summarizeCalls = 0;
 let lastInstructions = "";
 let lastData = "";
@@ -65,7 +65,7 @@ mock.module("../src/summarize.ts", () => ({
     summarizeCalls++;
     lastInstructions = instructions;
     lastData = data;
-    return { summary: "cross-source synthesis", items: [{ kind: "commitment", summary: "do X", evidence: [] }] };
+    return { summary: "an overview", entries: [{ id: "c1", summary: "the board meeting" }] };
   },
   SummarizerError: class extends Error {},
   SummarizerRefusal: class extends Error {},
@@ -76,7 +76,7 @@ afterAll(() => {
   mock.module("../src/summarize.ts", () => REAL_SUMMARIZE_EXPORTS);
 });
 
-const { buildBrief } = await import("../src/brief.ts");
+const { buildDigest } = await import("../src/digest.ts");
 
 const NOW = new Date("2026-07-08T12:00:00.000Z"); // a Wednesday, mid-day UTC
 
@@ -92,14 +92,14 @@ function item(at: string, text: string): SourceRecord {
   });
 }
 
-describe("buildBrief", () => {
+describe("buildDigest", () => {
   const originalConfig = process.env.RUNDOWN_CONFIG;
   let dir: string | undefined;
 
   // A fixed config behind RUNDOWN_CONFIG (the temp-dir trick shared with
   // config.test.ts), so the run goes through resolveConfig's real load path.
   function writeConfig(json: string): void {
-    dir = mkdtempSync(join(tmpdir(), "rundown-brief-"));
+    dir = mkdtempSync(join(tmpdir(), "rundown-digest-"));
     writeFileSync(join(dir, "config.json"), json);
     process.env.RUNDOWN_CONFIG = join(dir, "config.json");
   }
@@ -116,63 +116,66 @@ describe("buildBrief", () => {
     lastData = "";
   });
 
-  test("empty window: short-circuits the Summarizer and takes the empty progress branch", async () => {
+  test("empty window: short-circuits the Summarizer and says so in progress", async () => {
     writeConfig(`{"timezone":"UTC","window":"this-week","sources":{"fake":{}}}`);
     currentItems = [];
     const progress: string[] = [];
 
-    const brief = await buildBrief({ now: NOW, onProgress: (m) => progress.push(m) });
+    const result = await buildDigest({ now: NOW, onProgress: (m) => progress.push(m) });
 
-    expect(brief.summary).toBe("");
-    expect(brief.items).toEqual([]);
-    expect(summarizeCalls).toBe(0); // no model call on an empty bundle (ADR-0005 §8)
-    expect(progress.some((p) => p.includes("Pulling 1 source(s) (fake) for this-week"))).toBe(true);
-    expect(progress.some((p) => p.includes("No items in window"))).toBe(true);
-    expect(progress.some((p) => p.includes("Aggregated"))).toBe(false);
+    expect(result.summary).toBe("");
+    expect([...result.meetings, ...result.mail, ...result.chat]).toEqual([]);
+    expect(summarizeCalls).toBe(0);
+    expect(progress).toEqual([
+      "Pulling 1 source(s) (fake) for this-week…",
+      "No records in the window; emitting an empty digest.",
+    ]);
   });
 
-  test("threads one shared `now`: the resolved window reaches the source and the envelope", async () => {
+  test("one clock: the same `now` resolves the window the source reads and becomes generatedAt", async () => {
     writeConfig(`{"timezone":"UTC","window":"this-week","sources":{"fake":{}}}`);
     currentItems = [];
 
-    const brief = await buildBrief({ now: NOW });
+    const result = await buildDigest({ now: NOW });
 
-    const expected = resolveSelector({ kind: "span", span: "this-week" }, "UTC", NOW);
+    // this-week around Wed 2026-07-08 in UTC: Monday 2026-07-06 to the next Monday.
+    const expected = { from: "2026-07-06T00:00:00.000Z", to: "2026-07-13T00:00:00.000Z" };
     expect(lastReadWindow).toEqual(expected);
-    expect(brief.envelope.window).toEqual(expected);
+    expect(result.window).toEqual(expected);
+    expect(result.generatedAt).toBe("2026-07-08T12:00:00.000Z");
+    expect(result.timezone).toBe("UTC");
   });
 
-  test("items in window: takes the summarizing branch and wires plan → the Brief", async () => {
+  test("records in the window: wires aggregate → digest → summaries, with entry progress", async () => {
     writeConfig(`{"timezone":"UTC","window":"this-week","sources":{"fake":{}}}`);
     currentItems = [item("2026-07-07T09:00:00Z", "Board meeting")];
     const progress: string[] = [];
 
-    const brief = await buildBrief({ now: NOW, onProgress: (m) => progress.push(m) });
+    const result = await buildDigest({ now: NOW, onProgress: (m) => progress.push(m) });
 
     expect(summarizeCalls).toBe(1);
-    expect(progress.some((p) => p.includes("Aggregated 1 item(s)"))).toBe(true);
-    expect(progress.some((p) => p.includes("No items"))).toBe(false);
-    expect(brief.summary).toBe("cross-source synthesis");
-    expect(brief.items[0]!.kind).toBe("commitment");
-    expect(brief.envelope.sources).toEqual([{ source: "fake", itemCount: 1 }]);
-    // The rendered (unwrapped) bundle is what reaches the Summarizer.
-    expect(lastData).toContain("title: Board meeting");
+    expect(progress).toEqual([
+      "Pulling 1 source(s) (fake) for this-week…",
+      "Read 1 record(s); grouping them into digest entries…",
+      "Summarizing 1 entries with Claude (this can take a bit)…",
+    ]);
+    expect(result.summary).toBe("an overview");
+    expect(result.counts.chat).toEqual({ records: 1, entries: 1 });
+    expect(result.chat[0]).toMatchObject({ kind: "channel", channel: "general", summary: "the board meeting" });
+    // The unwrapped body reaches the Summarizer; generatedAt reaches its instructions.
+    expect(lastData).toContain("Board meeting");
+    expect(lastInstructions).toContain("Generated at: Wed 2026-07-08T12:00:00Z");
   });
 
-  test("--window override threads through: a past window selects the review task, guidance is appended", async () => {
-    writeConfig(`{"timezone":"UTC","sources":{"fake":{}},"guidance":"keep it terse"}`);
+  test("--window override threads through to the window and leaves generatedAt on the clock", async () => {
+    writeConfig(`{"timezone":"UTC","sources":{"fake":{}}}`);
     currentItems = [item("2026-06-10T09:00:00Z", "June retro")];
 
-    const brief = await buildBrief({
-      now: NOW,
-      windowOverride: parseWindowSelector("2026-06-01..2026-06-30"),
-    });
+    const result = await buildDigest({ now: NOW, windowOverride: parseWindowSelector("2026-06-01..2026-06-30") });
 
-    // A wholly-past override makes config.windowIsPast true → the retrospective task.
-    expect(lastInstructions).toContain("look-back");
-    expect(lastInstructions).toContain("retrospective");
-    // Trusted guidance from config is threaded through plan into the instructions.
-    expect(lastInstructions).toContain("keep it terse");
-    expect(brief.envelope.sources).toEqual([{ source: "fake", itemCount: 1 }]);
+    expect(lastReadWindow).toEqual({ from: "2026-06-01T00:00:00.000Z", to: "2026-07-01T00:00:00.000Z" });
+    expect(result.generatedAt).toBe("2026-07-08T12:00:00.000Z");
+    // One overview prompt for every window: no look-back or planning variant.
+    expect(lastInstructions).not.toMatch(/look-back|retrospective|plan my week/i);
   });
 });

@@ -5,8 +5,8 @@
 // is backend garbage and fails hard here (ADR-0007 §6) rather than sliding through as a
 // trusted string. No I/O. It is the sole trust.ts importer among sources and the only
 // way a Source constructs a record. Domain judgment (parsing enums and flags, group
-// membership) stays at call sites. Never unwrapped here (sole unwrap site is plan.ts;
-// CLAUDE.md).
+// membership) stays at call sites. Never unwrapped here (the read sites are the
+// Digester and label(); ADR-0022).
 
 import { createHash } from "node:crypto";
 import type { Attendee, CalendarEvent, ChatMessage, Conversation, Email, Person } from "../domain.ts";
@@ -19,13 +19,19 @@ import { untrusted, untrustedOpt } from "../trust.ts";
 export const TEXT_MAX = 255;
 
 /**
+ * Max length for a message body or chat text. The Digester renders each message up to
+ * 2,000 chars for the Summarizer (ADR-0021), so a body keeps that much.
+ */
+export const BODY_MAX = 2_000;
+
+/**
  * The free-text marker (grilled design): truncate to {@link TEXT_MAX},
  * and let absence collapse — `""`/`null`/`undefined` → `undefined`, so compaction
  * can treat presence as signal.
  */
-export function text(v: string | null | undefined): string | undefined {
+export function text(v: string | null | undefined, max = TEXT_MAX): string | undefined {
   if (v === null || v === undefined || v === "") return undefined;
-  return v.slice(0, TEXT_MAX);
+  return v.slice(0, max);
 }
 
 /**
@@ -47,8 +53,8 @@ const ISO_INSTANT = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(:\d{2}(\.\d+)?)?(Z|[+-]\d{2}
  * reach the normalizer as *verbatim backend strings* (Graph
  * `receivedDateTime`, a Slack `ts`-derived instant, …), yet they
  * are typed **trusted** and so bypass the `Untrusted<T>` unwrap tripwire. Left
- * unchecked they could carry NaN — silently mislabelling a bucket downstream
- * (ADR-0003 §4) — or arbitrary backend bytes with no type-level warning. A
+ * unchecked they could carry NaN, which would misorder or misfilter records
+ * downstream (ADR-0020), or arbitrary backend bytes with no type-level warning. A
  * shape check against {@link ISO_INSTANT} plus a `Date.parse` round-trip (for
  * semantic validity, e.g. rejecting month 13) constrains them to real
  * ISO-8601 instants here, the one place every source funnels through, making
@@ -68,14 +74,11 @@ function instant(v: string, field: string, source: string): string {
 }
 
 /**
- * Stable identity for cross-window dedup (#108): a truncated SHA-256 of
- * `source + kind + raw backend id`. A one-way digest of the untrusted id, computed
- * here before branding, so the value that reaches the Brief is a trusted structural
- * scalar carrying no backend bytes — the raw id itself never leaves the sealed
- * pipeline, and evidence resolution copies the fingerprint without a new unwrap
- * site. 16 hex chars (64 bits) is collision-safe at this scale. Deliberately keyed
- * on identity only, never `timestamp`: a rescheduled or updated item must still
- * dedup against its earlier appearance.
+ * Stable identity: a truncated SHA-256 of `source + type + raw backend id`. A one-way
+ * digest of the untrusted id, computed here before branding, so the value is a trusted
+ * scalar carrying no backend bytes. 16 hex chars (64 bits) is collision-safe at this
+ * scale. Keyed on identity only, never time: a rescheduled item keeps its digest. The
+ * group digests (`entryKey`) become the digest's entry ids (ADR-0020).
  */
 function fingerprintOf(source: string, kind: string, rawId: string): string {
   return createHash("sha256").update(`${source}\n${kind}\n${rawId}`).digest("hex").slice(0, 16);
@@ -154,7 +157,7 @@ export function emailRecord(spec: EmailSpec): Email {
     to: spec.to.map(person),
     cc: spec.cc.map(person),
     byMe: from.isMe || sentBy?.isMe === true,
-    body: untrusted(text(spec.body) ?? ""),
+    body: untrusted(text(spec.body, BODY_MAX) ?? ""),
     importance: spec.importance,
     isRead: spec.isRead,
     flagged: spec.flagged,
@@ -201,9 +204,7 @@ export function chatMessageRecord(spec: ChatMessageSpec): ChatMessage {
   return {
     type: "chat-message",
     source,
-    // The record type keeps the old NormalizedItem kind `message`, so a Slack message
-    // keeps the fingerprint it had before records.
-    fingerprint: fingerprintOf(source, "message", `${spec.channelId}:${spec.ts}`),
+    fingerprint: fingerprintOf(source, "chat-message", `${spec.channelId}:${spec.ts}`),
     // Domain-separated from the record digest, so a conversation key never equals a message key.
     entryKey: fingerprintOf(source, "chat-conversation", spec.channelId),
     // Earlier messages in a conversation are not fetched, so it is never known to be free.
@@ -213,7 +214,7 @@ export function chatMessageRecord(spec: ChatMessageSpec): ChatMessage {
     author,
     byMe: author.isMe,
     mentionsMe: spec.mentionsMe,
-    text: untrusted(text(spec.text) ?? ""),
+    text: untrusted(text(spec.text, BODY_MAX) ?? ""),
   };
 }
 
@@ -280,9 +281,7 @@ export function calendarEventRecord(spec: CalendarEventSpec): CalendarEvent {
   const record: CalendarEvent = {
     type: "calendar-event",
     source,
-    // Digests the old NormalizedItem kind `event`, not the record type, so an event keeps
-    // the fingerprint it had before records.
-    fingerprint: fingerprintOf(source, "event", rawId),
+    fingerprint: fingerprintOf(source, "calendar-event", rawId),
     // Domain-separated from the record digest, so a series key never equals an event key.
     entryKey: fingerprintOf(source, "event-series", spec.groupId || rawId),
     continuesFromBefore: spec.continuesFromBefore,

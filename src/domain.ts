@@ -4,7 +4,6 @@
 // primitive, not a domain noun.
 
 import type { Untrusted } from "./trust.ts";
-import type { BriefItem } from "./brief-contract.ts";
 
 /** An absolute time window: two ISO-8601 instants. `to` is exclusive. */
 export interface Window {
@@ -23,7 +22,7 @@ export interface Window {
 export type Instant = string;
 
 /** A 16-hex-char truncated SHA-256 of rundown-chosen inputs. Carries no backend bytes. */
-export type Digest = string;
+export type Hash = string;
 
 /**
  * One person as one source sees them. Per source: Ada on mail and Ada on Slack are two
@@ -45,13 +44,13 @@ export interface Person {
 export interface RecordBase {
   source: "graph" | "slack";
   /** Identity of this record: a digest of source, record type and backend id. */
-  fingerprint: Digest;
+  fingerprint: Hash;
   /**
    * Identity of the group this record belongs to: a digest of the mail `conversationId`,
    * the Slack channel id or the calendar `seriesMasterId`, domain-separated per type. A
    * record with no group id is its own group.
    */
-  entryKey: Digest;
+  entryKey: Hash;
   /** The record's group started before the window. Set only where it is free to know. */
   continuesFromBefore: boolean;
 }
@@ -184,12 +183,6 @@ export function instantOf(item: SourceRecord): string {
   }
 }
 
-/** The derived, structural-trusted temporal label on each bundled item (ADR-0003 §4). */
-export type Bucket = "standing" | "recent" | "upcoming";
-
-/** A record plus its derived bucket. */
-export type AnnotatedItem = SourceRecord & { bucket: Bucket };
-
 /** One entry in the Bundle's provenance manifest — trusted scalars only. */
 export interface SourceManifestEntry {
   source: string;
@@ -197,38 +190,13 @@ export interface SourceManifestEntry {
 }
 
 /**
- * The single normalized structure the Aggregator hands toward the Summarizer
- * (ADR-0003 §3). Wholly untrusted (it carries record text); flows only
- * Aggregator → Summarizer as a sealed in-process value, never to the agent.
+ * What the Aggregator hands the Digester (ADR-0020): the window's typed records, merged,
+ * filtered to the window and ordered by each record's own instant, plus the per-source
+ * manifest. Wholly untrusted (it carries record text); it flows only Aggregator → Digester
+ * as a sealed in-process value, never to the agent.
  */
 export interface Bundle {
   window: Window;
   sources: SourceManifestEntry[];
-  items: AnnotatedItem[];
-}
-
-// ── Brief (the Planner's output; ADR-0005 §2–4) ──
-
-// The Brief's output contract — `ExtractedKind`, `Evidence`, `ExtractedItem`, and
-// the `SummarizerOutput` pair — is defined once in brief-contract.ts (a Zod source
-// of truth; ADR-0011); import it from there directly. `Brief` itself stays here —
-// it wraps the summarizer's output in the trusted envelope, so it composes the
-// contract's `BriefItem` (post-resolution) with the domain's Window/manifest.
-
-/**
- * The Planner's output: a trusted envelope around an untrusted-derived core
- * (ADR-0005 §2). The Summarizer emits only `{summary, items}`; the Planner
- * attaches the `envelope` by copying the Bundle's trusted scalars plus the run's
- * timezone. `timezone` is the IANA zone bundle timestamps were rendered in for the
- * Summarizer — the zone the model's `when` phrasing is anchored to — so a consumer
- * never has to guess what clock a Brief speaks (#106).
- */
-export interface Brief {
-  envelope: {
-    window: Window;
-    sources: SourceManifestEntry[];
-    timezone: string;
-  };
-  summary: string;
-  items: BriefItem[];
+  records: SourceRecord[];
 }

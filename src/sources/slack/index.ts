@@ -6,7 +6,7 @@
 // tool-less source (§3). The source emits per-message records with the trusted facts
 // code can know (who wrote it, whether it is the user's, which conversation it belongs
 // to) and hands every backend string to the record builder, which brands it Untrusted.
-// Nothing is unwrapped here (the sole unwrap site is plan.ts; CLAUDE.md).
+// Nothing is unwrapped here (the read sites are the Digester and label(); ADR-0022).
 //
 // Testability seam: every request flows through one injected `SlackRequest`
 // (method, params) → parsed body, exactly the shape the real token-bearing caller

@@ -1,7 +1,8 @@
 // Config resolution (ADR-0007): the thin composition-root step that loads and
 // validates ~/.config/rundown/config.json (JSONC), then delegates window
 // resolution to temporal.ts, producing the values handed to the
-// Aggregator/Planner. Not a component — no module boundary of its own (ADR-0008 §2).
+// Aggregator and Digester. Not a component: it has no module boundary of its own
+// (ADR-0008 §2).
 
 import { readFile } from "node:fs/promises";
 import { existsSync } from "node:fs";
@@ -21,10 +22,7 @@ export interface ResolvedConfig {
   /** Display label for the resolved window: a span name, or an explicit range literal. */
   windowSpan: string;
   window: Window;
-  /** Whether the whole window lies in the past — the neutral fact the Planner maps to review-vs-plan. */
-  windowIsPast: boolean;
   selection: Selection[];
-  guidance?: string;
 }
 
 /** A user-facing, fail-hard config error (ADR-0007 §6). */
@@ -147,7 +145,7 @@ function validateOption(sourceKey: string, name: string, spec: OptionSpec, value
  * misspelled key that loads silently would leave the user believing a setting is
  * in effect when it is not.
  */
-const TOP_LEVEL_KEYS = ["timezone", "window", "guidance", "autoUpdate", "sources"] as const;
+const TOP_LEVEL_KEYS = ["timezone", "window", "autoUpdate", "sources"] as const;
 
 /**
  * Keys rundown once read and has since dropped, each with the one line on why. A
@@ -160,6 +158,10 @@ const REMOVED_KEYS: readonly { key: string; why: string }[] = [
     key: "suppress",
     why: "suppression rules were dropped with the move to a full digest; the consumer skips what it does not want.",
   },
+  {
+    key: "guidance",
+    why: "the digest has no planning step to steer; ask your question in the session that reads the digest.",
+  },
 ];
 
 /** Parse + validate raw config text (strict fail-hard) against the injected descriptor map. Returns the checked config. */
@@ -167,7 +169,6 @@ export function parseConfig(text: string, descriptors: Descriptors): {
   timezone?: string;
   window?: WindowSpan;
   selection: Selection[];
-  guidance?: string;
   autoUpdate?: boolean;
 } {
   let raw: unknown;
@@ -213,13 +214,6 @@ export function parseConfig(text: string, descriptors: Descriptors): {
       );
     }
     window = obj.window as WindowSpan;
-  }
-
-  // guidance
-  let guidance: string | undefined;
-  if (obj.guidance !== undefined) {
-    if (typeof obj.guidance !== "string") throw new ConfigError(`"guidance" must be a string.`);
-    guidance = obj.guidance;
   }
 
   // autoUpdate — the durable off-switch for background self-update (ADR-0001 §5).
@@ -270,7 +264,7 @@ export function parseConfig(text: string, descriptors: Descriptors): {
     selection.push({ sourceKey: key, options });
   }
 
-  return { timezone, window, selection, guidance, autoUpdate };
+  return { timezone, window, selection, autoUpdate };
 }
 
 // ── Load + resolve ─────────────────────────────────────────────────────────────
@@ -327,14 +321,5 @@ export async function resolveConfig(descriptors: Descriptors, opts: ResolveOptio
   const selector: WindowSelector = opts.windowOverride ?? { kind: "span", span: parsed.window ?? "this-week" };
   const window = resolveSelector(selector, timezone, now);
   const windowSpan = selector.kind === "span" ? selector.span : selector.label;
-  // Reconcile `now` against the resolved window once, here — so the Planner never needs a clock.
-  const windowIsPast = Date.parse(window.to) <= now.getTime();
-  return {
-    timezone,
-    windowSpan,
-    window,
-    windowIsPast,
-    selection,
-    guidance: parsed.guidance,
-  };
+  return { timezone, windowSpan, window, selection };
 }

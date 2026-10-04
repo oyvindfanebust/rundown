@@ -1,4 +1,4 @@
-// The `Untrusted<T>` box and the single unwrap primitive (ADR-0004 §3), hardened
+// The `Untrusted<T>` box and the single unwrap primitive (ADR-0022), hardened
 // as a real runtime box so accidental leaks redact instead of leaking.
 //
 // Every untrusted field a Source emits (record text, names, handles, labels)
@@ -10,8 +10,9 @@
 // type; no other object can structurally impersonate one). So the only way to
 // obtain the raw bytes through the type system is an explicit `unwrap()`, and
 // the call sites of `unwrap()` ARE the leak-path audit: a short, greppable
-// list of every place untrusted data legitimately flows. The sole legitimate
-// unwrap site is the summarizer-prompt assembly in `plan.ts`.
+// list of every place untrusted data legitimately flows. The two legitimate
+// unwrap sites are the Digester (`digester.ts`), for Summarizer input and grouping,
+// and `label()` (`label.ts`), for labels (ADR-0022).
 //
 // The box is a defense-in-depth layer UNDERNEATH the type-level guarantee: any
 // path the typechecker can't see (a `catch (e)` stringifying an item,

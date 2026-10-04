@@ -9,7 +9,7 @@
 import { test, expect } from "bun:test";
 import { inspect } from "node:util";
 import { untrusted, unwrap, untrustedOpt } from "../src/trust.ts";
-import type { AnnotatedItem } from "../src/domain.ts";
+import type { ChatMessage } from "../src/domain.ts";
 import { chatMessageRecord } from "../src/sources/normalize.ts";
 
 test("unwrap returns the original value", () => {
@@ -88,9 +88,8 @@ test("untrustedOpt(undefined) is undefined; untrustedOpt(x) boxes x", () => {
 
 // ── 4. an AnnotatedItem-shaped object graph leaks no untrusted bytes ──
 
-test("JSON.stringify of an AnnotatedItem-shaped graph leaks no text, name or handle bytes", () => {
-  const item: AnnotatedItem = {
-    ...chatMessageRecord({
+test("JSON.stringify of a record graph leaks no text, name or handle bytes", () => {
+  const item: ChatMessage = chatMessageRecord({
       channelId: "C-secret-id-123",
       ts: "1783414800.000100",
       at: "2026-07-08T09:00:00Z",
@@ -98,9 +97,7 @@ test("JSON.stringify of an AnnotatedItem-shaped graph leaks no text, name or han
       author: { name: "SECRET AUTHOR", handle: "U-SECRET-HANDLE", isMe: false },
       mentionsMe: false,
       text: "SECRET MESSAGE TEXT https://secret.example/leak",
-    }),
-    bucket: "recent",
-  };
+    });
 
   const s = JSON.stringify(item);
   expect(s).not.toContain("secret-id-123");
@@ -112,5 +109,4 @@ test("JSON.stringify of an AnnotatedItem-shaped graph leaks no text, name or han
   // Trusted structural fields still come through untouched.
   expect(s).toContain("slack");
   expect(s).toContain("chat-message");
-  expect(s).toContain("recent");
 });

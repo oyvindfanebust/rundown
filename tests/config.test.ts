@@ -181,7 +181,7 @@ describe("parseConfig", () => {
 
 // resolveConfig is the untested wiring around temporal.ts's tested fortress: it
 // picks the selector (--window override vs config default vs this-week fallback),
-// derives the windowSpan display label, and reconciles `now` into windowIsPast.
+// and derives the windowSpan display label.
 describe("resolveConfig", () => {
   const originalConfig = process.env.RUNDOWN_CONFIG;
   let dir: string | undefined;
@@ -227,25 +227,6 @@ describe("resolveConfig", () => {
     expect(cfg.windowSpan).toBe("2026-07-06..2026-07-12");
   });
 
-  test("windowIsPast flips exactly at the boundary instant (to <= now)", async () => {
-    writeConfig(`{"timezone":"UTC","sources":{"graph":{}}}`);
-    // A single-day window: inclusive 2026-07-10 → exclusive `to` at 2026-07-11T00:00Z.
-    const windowOverride = parseWindowSelector("2026-07-10");
-
-    const atBoundary = await resolveConfig(descriptors, {
-      now: new Date("2026-07-11T00:00:00.000Z"),
-      windowOverride,
-    });
-    expect(atBoundary.window.to).toBe("2026-07-11T00:00:00.000Z");
-    expect(atBoundary.windowIsPast).toBe(true); // to <= now → the window has closed
-
-    const justBefore = await resolveConfig(descriptors, {
-      now: new Date("2026-07-10T23:59:59.999Z"),
-      windowOverride,
-    });
-    expect(justBefore.windowIsPast).toBe(false); // to > now → still open by 1ms
-  });
-
   // --source narrows the configured selection for one run; it can only subset what
   // config selects, never reach past config to the registry.
   describe("--source narrowing", () => {
@@ -287,7 +268,7 @@ describe("resolveConfig", () => {
   });
 });
 
-describe("removed config keys (#145)", () => {
+describe("removed config keys (#145, #150)", () => {
   const src = `"sources": {"graph": {}}`;
 
   test("a config with suppress fails with the removed-key error naming it", () => {
@@ -311,6 +292,25 @@ describe("removed config keys (#145)", () => {
   test("the removed-key error wins over an unknown key listed before it", () => {
     expect(() => parseConfig(`{"nonsense": 1, "suppress": [], ${src}}`, descriptors)).toThrow(
       /"suppress" was removed/,
+    );
+  });
+
+  test("a config with guidance fails with the removed-key error naming it and saying why", () => {
+    let message = "";
+    try {
+      parseConfig(`{"guidance": "keep it terse", ${src}}`, descriptors);
+    } catch (e) {
+      expect(e).toBeInstanceOf(ConfigError);
+      message = (e as Error).message;
+    }
+    expect(message).toMatch(/^Config key "guidance" was removed: the digest has no planning step to steer/);
+    expect(message).toMatch(/Delete it from config\.json\.$/);
+    expect(message).not.toMatch(/Unknown config key|did you mean|Known keys/);
+  });
+
+  test("guidance is no longer a known key", () => {
+    expect(() => parseConfig(`{"guidanc": "x", ${src}}`, descriptors)).toThrow(
+      "Known keys: timezone, window, autoUpdate, sources.",
     );
   });
 

@@ -1,12 +1,11 @@
 import { test, expect, describe } from "bun:test";
-import { aggregate, bucketOf, AggregateError } from "../src/aggregate.ts";
+import { aggregate, inWindow } from "../src/aggregate.ts";
 import type { ChatMessage, Window } from "../src/domain.ts";
 import { calendarEventRecord, chatMessageRecord, emailRecord } from "../src/sources/normalize.ts";
 import type { Source, Sources } from "../src/sources/source.ts";
 import type { DebugEvent } from "../src/debug.ts";
 
 const window: Window = { from: "2026-07-06T00:00:00.000Z", to: "2026-07-13T00:00:00.000Z" };
-const now = new Date("2026-07-08T12:00:00Z");
 
 /** A Slack message record at `at`; `ts` keeps each fixture's fingerprint distinct. */
 function item(at: string, ts = at): ChatMessage {
@@ -36,49 +35,52 @@ function sourcesOf(...list: Source[]): Sources {
   return Object.fromEntries(list.map((s) => [s.key, s]));
 }
 
-describe("bucketOf", () => {
-  test("classifies before-window / in-window / after-now", () => {
-    expect(bucketOf(item("2026-07-01T00:00:00Z"), window, now)).toBe("standing");
-    expect(bucketOf(item("2026-07-07T00:00:00Z"), window, now)).toBe("recent");
-    expect(bucketOf(item("2026-07-10T00:00:00Z"), window, now)).toBe("upcoming");
+describe("inWindow", () => {
+  const event = (isAllDay: boolean, start: string, end: string) =>
+    calendarEventRecord({
+      id: start,
+      continuesFromBefore: false,
+      isAllDay,
+      start,
+      end,
+      title: "e",
+      organizer: { isMe: false },
+      isOrganizer: false,
+      attendees: [],
+      rooms: [],
+      myResponse: "none",
+      showAs: "busy",
+      isCancelled: false,
+      isOnlineMeeting: false,
+      recurring: false,
+    });
+
+  test("a message counts by its own time, from inclusive and to exclusive", () => {
+    expect(inWindow(item("2026-07-05T23:59:59Z"), window)).toBe(false);
+    expect(inWindow(item("2026-07-06T00:00:00Z"), window)).toBe(true);
+    expect(inWindow(item("2026-07-12T23:59:59Z"), window)).toBe(true);
+    expect(inWindow(item("2026-07-13T00:00:00Z"), window)).toBe(false);
   });
 
-  // Once the normalizer rejects garbage, an unparseable timestamp reaching
-  // bucketOf is a bug. Fail hard (ADR-0007 §6) instead of the old silent `recent`
-  // fallback, which mislabelled rather than surfaced the error.
-  test("buckets a calendar event by its start, an all-day one by its start date", () => {
-    const event = (isAllDay: boolean, start: string, end: string) =>
-      calendarEventRecord({
-        id: start,
-        continuesFromBefore: false,
-        isAllDay,
-        start,
-        end,
-        title: "e",
-        organizer: { isMe: false },
-        isOrganizer: false,
-        attendees: [],
-        rooms: [],
-        myResponse: "none",
-        showAs: "busy",
-        isCancelled: false,
-        isOnlineMeeting: false,
-        recurring: false,
-      });
-    expect(bucketOf(event(true, "2026-07-03", "2026-07-07"), window, now)).toBe("standing");
-    expect(bucketOf(event(true, "2026-07-08", "2026-07-09"), window, now)).toBe("recent");
-    expect(bucketOf(event(false, "2026-07-09T09:00:00Z", "2026-07-09T10:00:00Z"), window, now)).toBe("upcoming");
+  test("a timed event counts when it overlaps the window", () => {
+    expect(inWindow(event(false, "2026-07-05T23:00:00Z", "2026-07-06T01:00:00Z"), window)).toBe(true);
+    expect(inWindow(event(false, "2026-07-05T22:00:00Z", "2026-07-05T23:00:00Z"), window)).toBe(false);
+    expect(inWindow(event(false, "2026-07-13T00:00:00Z", "2026-07-13T01:00:00Z"), window)).toBe(false);
   });
 
-  test("throws on a NaN timestamp instead of silently returning recent", () => {
-    // A record that bypassed the builder's instant check.
+  test("an all-day event is kept as the source returned it", () => {
+    expect(inWindow(event(true, "2026-07-05", "2026-07-06"), window)).toBe(true);
+  });
+
+  test("throws on an unparseable instant", () => {
+    // A record that bypassed the builder's instant check is a bug, not data.
     const bad = { ...item("2026-07-07T00:00:00Z"), at: "not-a-date" };
-    expect(() => bucketOf(bad, window, now)).toThrow();
+    expect(() => inWindow(bad, window)).toThrow(/unparseable/);
   });
 });
 
 describe("aggregate", () => {
-  test("merges, buckets, and sorts chronologically", async () => {
+  test("merges, filters to the window, and sorts chronologically", async () => {
     const fake: Source = {
       key: "fake",
       label: "Fake",
@@ -92,12 +94,16 @@ describe("aggregate", () => {
         ];
       },
     };
-    const bundle = await aggregate(window, [{ sourceKey: "fake", options: {} }], sourcesOf(fake), now);
-    expect(bundle.items.map((i) => i.bucket)).toEqual(["standing", "recent", "upcoming"]);
+    const bundle = await aggregate(window, [{ sourceKey: "fake", options: {} }], sourcesOf(fake));
+    // The record before the window is dropped; the manifest counts what the source read.
+    expect(bundle.records.map((r) => (r.type === "chat-message" ? r.at : ""))).toEqual([
+      "2026-07-07T00:00:00Z",
+      "2026-07-10T00:00:00Z",
+    ]);
     expect(bundle.sources).toEqual([{ source: "fake", itemCount: 3 }]);
   });
 
-  test("carries every record type, ordered and bucketed by its own time", async () => {
+  test("carries every record type, ordered by its own time", async () => {
     const mail = (id: string, at: string) =>
       emailRecord({
         id,
@@ -128,9 +134,8 @@ describe("aggregate", () => {
         ];
       },
     };
-    const bundle = await aggregate(window, [{ sourceKey: "graph", options: {} }], sourcesOf(fake), now);
-    expect(bundle.items.map((i) => i.type)).toEqual(["email", "chat-message", "email"]);
-    expect(bundle.items.map((i) => i.bucket)).toEqual(["recent", "recent", "upcoming"]);
+    const bundle = await aggregate(window, [{ sourceKey: "graph", options: {} }], sourcesOf(fake));
+    expect(bundle.records.map((r) => r.type)).toEqual(["email", "chat-message", "email"]);
     expect(bundle.sources).toEqual([{ source: "graph", itemCount: 3 }]);
   });
 
@@ -158,9 +163,8 @@ describe("aggregate", () => {
       window,
       [{ sourceKey: "slack", options: {} }, { sourceKey: "graph", options: {} }],
       sourcesOf(slack, graph),
-      now,
     );
-    expect(bundle.items.map((i) => i.source)).toEqual(["graph", "slack"]);
+    expect(bundle.records.map((i) => i.source)).toEqual(["graph", "slack"]);
   });
 
   test("pre-flight throws on not-authenticated", async () => {
@@ -171,7 +175,7 @@ describe("aggregate", () => {
       async read() { return []; },
       async status() { return { state: "not-authenticated" }; },
     };
-    expect(aggregate(window, [{ sourceKey: "fake", options: {} }], sourcesOf(fake), now)).rejects.toThrow(
+    expect(aggregate(window, [{ sourceKey: "fake", options: {} }], sourcesOf(fake))).rejects.toThrow(
       /not authenticated.*rundown login/,
     );
   });
@@ -184,7 +188,7 @@ describe("aggregate", () => {
       async read() { return []; },
       async status() { return { state: "not-configured", detail: "set FOO" }; },
     };
-    expect(aggregate(window, [{ sourceKey: "fake", options: {} }], sourcesOf(fake), now)).rejects.toThrow(
+    expect(aggregate(window, [{ sourceKey: "fake", options: {} }], sourcesOf(fake))).rejects.toThrow(
       /not configured — set FOO.*rundown status/,
     );
   });
@@ -197,8 +201,8 @@ describe("aggregate", () => {
       status: ready,
       async read() { return [item("2026-07-07T00:00:00Z")]; },
     };
-    const bundle = await aggregate(window, [{ sourceKey: "fake", options: {} }], sourcesOf(fake), now);
-    expect(bundle.items).toHaveLength(1);
+    const bundle = await aggregate(window, [{ sourceKey: "fake", options: {} }], sourcesOf(fake));
+    expect(bundle.records).toHaveLength(1);
   });
 
   test("fails hard when a read errors — no partial bundle", async () => {
@@ -209,7 +213,6 @@ describe("aggregate", () => {
         window,
         [{ sourceKey: "good", options: {} }, { sourceKey: "bad", options: {} }],
         sourcesOf(good, bad),
-        now,
       ),
     ).rejects.toThrow("boom");
   });
@@ -233,7 +236,6 @@ describe("aggregate debug events (ADR-0015)", () => {
         { sourceKey: "b", options: {} },
       ],
       sourcesOf(a, b),
-      now,
       (e) => events.push(e),
     );
     const runs = events.filter((e) => e.kind === "source-run");
@@ -245,6 +247,6 @@ describe("aggregate debug events (ADR-0015)", () => {
 
   test("defaults to the no-op sink when none is passed", async () => {
     const a: Source = { key: "a", label: "A", login, status: ready, read: async () => [] };
-    await expect(aggregate(window, [{ sourceKey: "a", options: {} }], sourcesOf(a), now)).resolves.toBeDefined();
+    await expect(aggregate(window, [{ sourceKey: "a", options: {} }], sourcesOf(a))).resolves.toBeDefined();
   });
 });

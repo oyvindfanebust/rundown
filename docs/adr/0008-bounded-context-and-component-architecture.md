@@ -5,7 +5,15 @@
 **Amendment (digest, [#117](https://github.com/oyvindfanebust/rundown/issues/117)).** Every source
 now logs in interactively ([#144](https://github.com/oyvindfanebust/rundown/issues/144), ADR-0002
 amended), so §5's descriptor no longer carries an interactive flag. Its static fields are the
-key, label and option schema.
+key, label and option schema. With the digest
+([#150](https://github.com/oyvindfanebust/rundown/issues/150)), §2's four components are Sources
+`read(window) → Record[]` ([ADR-0019](0019-typed-records.md)), Aggregator
+`aggregate(window, selection) → Bundle` ([ADR-0020](0020-aggregation-and-digest-entries.md)),
+Summarizer, and Digester `digest(bundle, { window, timezone, generatedAt }, { summarize }) →
+Digest` ([ADR-0021](0021-the-digest.md)) in `src/digester.ts`. The Planner and `src/plan.ts` are
+gone. The composition root is `buildDigest` in `src/digest.ts`, for the `digest` command that
+replaces `brief`; config resolution no longer hands on `guidance`. References below to the
+Planner, the Brief and `brief` describe removed code.
 
 This ADR assembles the decisions made across [ADR-0001](0001-package-rundown-cli-as-compiled-binaries-in-skills.md)–[ADR-0007](0007-config-personalization-layer.md)
 into one coherent architecture: it fixes the vocabulary, how the components sit in `src/`, and the
