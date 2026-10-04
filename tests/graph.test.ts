@@ -2,6 +2,7 @@ import { test, expect, describe, afterEach } from "bun:test";
 import { untrusted, unwrap } from "../src/trust.ts";
 import type { CalendarEvent, Email, SourceRecord } from "../src/domain.ts";
 import type { Source } from "../src/sources/source.ts";
+import type { DebugEvent } from "../src/debug.ts";
 import { GraphSource, GRAPH_OPTIONS, type GraphAuth, type FetchJson, type GraphDeps } from "../src/sources/graph/index.ts";
 
 const WINDOW = { from: "2026-07-06T00:00:00.000Z", to: "2026-07-13T00:00:00.000Z" };
@@ -985,5 +986,136 @@ describe("GraphSource.read grouping ids", () => {
     const folderUrls = urls.filter((u) => u.includes("/mailFolders/"));
     expect(folderUrls).toHaveLength(2);
     expect(folderUrls.every((u) => u.includes("conversationId"))).toBe(true);
+  });
+});
+
+// ── read(): throttled and unavailable responses are retried (#141) ─────────────
+// Retries live in graphGet, below the fetchJson seam, so the route map here is at
+// the HTTP level over a mocked global fetch: each Graph path answers a queue of
+// statuses, the last one repeating. The sleep is injected, so no test waits.
+
+describe("GraphSource.read retries", () => {
+  const realFetch = globalThis.fetch;
+  afterEach(() => {
+    globalThis.fetch = realFetch;
+  });
+
+  interface Reply {
+    status: number;
+    retryAfter?: string;
+  }
+
+  /** Mock fetch over Graph paths; `/me` gets `me`, every other path an empty page. */
+  function mockGraph(me: Reply[]): string[] {
+    const paths: string[] = [];
+    let meCalls = 0;
+    globalThis.fetch = (async (url: string) => {
+      const path = new URL(url).pathname;
+      paths.push(path);
+      const isMe = path.endsWith("/me");
+      const reply = isMe ? me[Math.min(meCalls++, me.length - 1)]! : { status: 200 };
+      const headers = new Headers();
+      if (reply.retryAfter !== undefined) headers.set("Retry-After", reply.retryAfter);
+      const body = isMe ? { mail: "me@example.com" } : { value: [] };
+      return { ok: reply.status >= 200 && reply.status < 300, status: reply.status, headers, json: async () => body };
+    }) as unknown as typeof fetch;
+    return paths;
+  }
+
+  const meCalls = (paths: string[]) => paths.filter((p) => p.endsWith("/me")).length;
+
+  function retryingSource() {
+    const waits: number[] = [];
+    const events: DebugEvent[] = [];
+    const src = new GraphSource(
+      { kinds: ["event"] },
+      {
+        auth: fakeAuth(),
+        sleep: async (ms) => {
+          waits.push(ms);
+        },
+        debug: (e) => events.push(e),
+      },
+    );
+    return { src, waits, events };
+  }
+
+  async function readError(src: GraphSource): Promise<Error> {
+    try {
+      await src.read(WINDOW);
+    } catch (e) {
+      return e as Error;
+    }
+    throw new Error("expected read() to throw");
+  }
+
+  test("a 429 then a 200 succeeds after the Retry-After wait", async () => {
+    const paths = mockGraph([{ status: 429, retryAfter: "7" }, { status: 200 }]);
+    const { src, waits, events } = retryingSource();
+    await expect(src.read(WINDOW)).resolves.toEqual([]);
+    expect(waits).toEqual([7000]);
+    expect(meCalls(paths)).toBe(2);
+    // One http event per attempt, so the retried 429 shows as the two lines it was.
+    const meStatuses = events
+      .filter((e): e is Extract<DebugEvent, { kind: "http" }> => e.kind === "http")
+      .filter((e) => e.pathShape.endsWith("/me"))
+      .map((e) => e.status);
+    expect(meStatuses).toEqual([429, 200]);
+  });
+
+  test("a 503 without Retry-After is retried after a bounded fallback wait", async () => {
+    const paths = mockGraph([{ status: 503 }, { status: 503 }, { status: 200 }]);
+    const { src, waits } = retryingSource();
+    await expect(src.read(WINDOW)).resolves.toEqual([]);
+    expect(waits).toEqual([1000, 2000]);
+    expect(meCalls(paths)).toBe(3);
+  });
+
+  test("a 504 is retried", async () => {
+    mockGraph([{ status: 504 }, { status: 200 }]);
+    const { src, waits } = retryingSource();
+    await expect(src.read(WINDOW)).resolves.toEqual([]);
+    expect(waits).toHaveLength(1);
+  });
+
+  test("a 404 is not retried", async () => {
+    const paths = mockGraph([{ status: 404 }, { status: 200 }]);
+    const { src, waits } = retryingSource();
+    expect((await readError(src)).message).toBe("Graph request failed: 404");
+    expect(waits).toEqual([]);
+    expect(meCalls(paths)).toBe(1);
+  });
+
+  test("a 429 that outlasts three retries fails naming the status", async () => {
+    const paths = mockGraph([{ status: 429, retryAfter: "2" }]);
+    const { src, waits } = retryingSource();
+    expect((await readError(src)).message).toBe("Graph request failed: 429");
+    expect(waits).toEqual([2000, 2000, 2000]);
+    expect(meCalls(paths)).toBe(4);
+  });
+
+  test("a Retry-After HTTP-date waits until that time", async () => {
+    // An HTTP-date has whole seconds, so the date is rounded up and the wait lands in (29s, 31s].
+    const at = new Date(Math.ceil(Date.now() / 1000) * 1000 + 30_000);
+    mockGraph([{ status: 429, retryAfter: at.toUTCString() }, { status: 200 }]);
+    const { src, waits } = retryingSource();
+    await src.read(WINDOW);
+    expect(waits).toHaveLength(1);
+    expect(waits[0]!).toBeGreaterThan(29_000);
+    expect(waits[0]!).toBeLessThanOrEqual(31_000);
+  });
+
+  test("a single wait is capped at 60 seconds", async () => {
+    mockGraph([{ status: 429, retryAfter: "3600" }, { status: 200 }]);
+    const { src, waits } = retryingSource();
+    await src.read(WINDOW);
+    expect(waits).toEqual([60_000]);
+  });
+
+  test("a Retry-After that is neither seconds nor a date falls back to the backoff", async () => {
+    mockGraph([{ status: 429, retryAfter: "-5" }, { status: 429, retryAfter: "soon" }, { status: 200 }]);
+    const { src, waits } = retryingSource();
+    await src.read(WINDOW);
+    expect(waits).toEqual([1000, 2000]);
   });
 });

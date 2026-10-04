@@ -47,30 +47,71 @@ export interface GraphDeps {
   auth?: GraphAuth;
   /** Structural diagnostics sink (ADR-0015); defaults to the no-op. */
   debug?: DebugSink;
+  /** The wait between retried requests (default: a real timer); injected so tests do not wait. */
+  sleep?: (ms: number) => Promise<void>;
+}
+
+const realSleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
+
+/**
+ * The statuses Graph answers when the request is fine but the service will not
+ * serve it now: throttling (429) and an unavailable or timed-out backend (503,
+ * 504). Outlook allows four concurrent requests per mailbox, and one run makes up
+ * to three, so two runs at once are throttled.
+ */
+const RETRYABLE = new Set([429, 503, 504]);
+
+/** Retries after the first attempt, per request. */
+const MAX_RETRIES = 3;
+
+/** The longest single wait, whatever `Retry-After` asks for. */
+const MAX_WAIT_MS = 60_000;
+
+/**
+ * How long to wait before retry number `attempt + 1`: the `Retry-After` header as
+ * delta-seconds or an HTTP-date, else 1s, 2s, 4s; never more than {@link MAX_WAIT_MS}.
+ * The header is a trusted scalar parsed to a number and never echoed anywhere.
+ */
+function retryDelayMs(retryAfter: string | null, attempt: number): number {
+  const fallback = 1000 * 2 ** attempt;
+  let ms = fallback;
+  const value = retryAfter?.trim() ?? "";
+  if (/^\d+$/.test(value)) ms = Number(value) * 1000;
+  else if (/[a-z]/i.test(value) && Number.isFinite(Date.parse(value))) ms = Math.max(0, Date.parse(value) - Date.now());
+  return Math.min(ms, MAX_WAIT_MS);
 }
 
 /**
  * The default `fetchJson`: a real bearer GET that throws on a non-2xx Graph
- * response. A factory rather than a bare function so it can close over the debug
- * sink and emit one `http` event per request (ADR-0015 §6) — host and path shape
- * only, never the populated URL, which carries `$filter`/`$select` query content.
+ * response. A 429, 503 or 504 is retried up to three times after the wait
+ * {@link retryDelayMs} picks; one that outlasts the retries throws its status like
+ * any other failure. A factory rather than a bare function so it can close over the
+ * debug sink and the sleep, and emit one `http` event per attempt (ADR-0015 §6).
+ * The event carries the host and path shape only, never the populated URL, which
+ * carries `$filter`/`$select` query content.
  */
-function graphGet(debug: DebugSink = noDebug): FetchJson {
+function graphGet(debug: DebugSink = noDebug, sleep = realSleep): FetchJson {
   return async (token: string, url: string): Promise<any> => {
-    // IdType="ImmutableId" (ADR-0018): backend ids survive folder moves, so a mail
-    // item's fingerprint is durable across inbox → archive.
-    const r = await fetch(url, {
-      headers: {
-        Authorization: `Bearer ${token}`,
-        Prefer: 'outlook.timezone="UTC", IdType="ImmutableId"',
-      },
-    });
     const u = new URL(url);
-    debug({ kind: "http", source: "graph", method: "GET", host: u.host, pathShape: u.pathname, status: r.status });
-    // Scrub the backend response body: only the HTTP status crosses into the thrown
-    // message (ADR-0004 §5). The shared statusOnlyError owns that rule (sources/errors.ts).
-    if (!r.ok) throw statusOnlyError("Graph", r);
-    return r.json();
+    for (let attempt = 0; ; attempt++) {
+      // IdType="ImmutableId" (ADR-0018): backend ids survive folder moves, so a mail
+      // item's fingerprint is durable across inbox → archive.
+      const r = await fetch(url, {
+        headers: {
+          Authorization: `Bearer ${token}`,
+          Prefer: 'outlook.timezone="UTC", IdType="ImmutableId"',
+        },
+      });
+      debug({ kind: "http", source: "graph", method: "GET", host: u.host, pathShape: u.pathname, status: r.status });
+      if (RETRYABLE.has(r.status) && attempt < MAX_RETRIES) {
+        await sleep(retryDelayMs(r.headers.get("retry-after"), attempt));
+        continue;
+      }
+      // Scrub the backend response body: only the HTTP status crosses into the thrown
+      // message (ADR-0004 §5). The shared statusOnlyError owns that rule (sources/errors.ts).
+      if (!r.ok) throw statusOnlyError("Graph", r);
+      return r.json();
+    }
   };
 }
 
@@ -429,7 +470,7 @@ export class GraphSource implements Source {
   constructor(options: Record<string, unknown> = {}, deps: GraphDeps = {}) {
     this.config = options;
     this.debug = deps.debug ?? noDebug;
-    this.fetchJson = deps.fetchJson ?? graphGet(this.debug);
+    this.fetchJson = deps.fetchJson ?? graphGet(this.debug, deps.sleep);
     this.auth = deps.auth ?? { azureConfig, signedInAccount, getToken, login: graphLogin };
   }
 

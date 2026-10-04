@@ -19,6 +19,15 @@ is now typed `Email` records ([#147](https://github.com/oyvindfanebust/rundown/i
   identifies an entry by a digest of its group id instead. Meanwhile a mail record's `fingerprint`
   digests the record type `email` rather than the `message` kind, so Brief mail fingerprints change
   from this change; releases are held until the digest ships, so no consumer sees it.
+- `graphGet`, the request function §1 adds the header to, now retries a 429, 503 or 504 up to
+  three times ([#141](https://github.com/oyvindfanebust/rundown/issues/141)). One run makes up to
+  three concurrent requests to the mailbox (`/me`, Inbox, SentItems) and Outlook allows four, so
+  two runs at once were throttled and failed. The wait is the `Retry-After` header, as whole
+  seconds or an HTTP-date, else 1, 2 and 4 seconds, and never more than 60 seconds. Each attempt
+  emits its own `http` debug event, as Slack's `slackApi` does, and no new event kind is added
+  ([ADR-0015](0015-debug-logging.md)). A response that outlasts the retries fails as any other
+  non-2xx does, with only its status (`Graph request failed: 429`, ADR-0004 §5). Slack keeps its
+  own 429-only policy (ADR-0014); the two transports share the status-only error, not the retry.
 
 This ADR switches the Graph source to immutable backend ids and gives mail items thread
 identity (#111), the follow-up [ADR-0016](0016-evidence-fingerprint.md) recorded. It changes
