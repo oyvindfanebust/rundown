@@ -2,6 +2,20 @@
 
 **Status:** Accepted
 
+**Amendment (digest, [#117](https://github.com/oyvindfanebust/rundown/issues/117)).** The Brief contract is gone with the Planner ([#150](https://github.com/oyvindfanebust/rundown/issues/150)). The
+decision stands for its successor: the digest contract is one Zod source of truth in
+`src/digest-contract.ts` ([ADR-0021](0021-the-digest.md) §2), from which the TypeScript types, the
+runtime parse and the JSON Schemas for the digest and the Summarizer's output are derived. The
+generic schema generation and the integer-bounds handling carry over. Two things change. Content
+decisions belong to ADR-0021, not to the retired [ADR-0005](0005-planning-layer.md). Each field's
+trust class (trusted, label, model) is Zod metadata on the field; it derives the JSON Schema
+descriptions, and a field without a class fails at module load
+([ADR-0021](0021-the-digest.md) §3, [ADR-0022](0022-trust-boundary.md) §1). The `kind` enum,
+`ExtractedItem`, `Evidence`, `KIND_DESCRIPTIONS` and the parallel Brief parse are removed. The
+live check named in Decision 1's amendment is now the hostile-input evals of
+[ADR-0023](0023-hostile-input-evals.md), which supersedes ADR-0012. The unwrap sites are the
+Digester and `label()` (ADR-0022 §3), not `plan.ts`.
+
 An implementation refactor of the Brief output contract fixed by [ADR-0005](0005-planning-layer.md)
 §2–4. It changes where the contract is defined, not what the contract is: the Brief shape, the four
 `kind`s, the `evidence` structure, and the trust boundary are all unchanged. It records the decision

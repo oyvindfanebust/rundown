@@ -2,10 +2,11 @@
 
 > Give me the rundown.
 
-A readout of where you stand across your work sources: what you've committed to, what's coming
-up, and what you've been working on. `rundown` reads your work systems, has a sandboxed Claude
-call summarize them, and prints a structured Brief as JSON on stdout. A coding agent installs the
-`rundown` skill and drives it on demand; landing and rendering the Brief are the agent's job.
+A readout of your mail, chat and calendar over a window. `rundown` reads your work systems, groups
+what it finds into one entry per meeting, mail thread and chat conversation, has a sandboxed Claude
+call summarize them, and prints the result as a digest in JSON on stdout. Nothing is curated out,
+ranked or turned into tasks. A coding agent installs the `rundown` skill, drives it on demand and
+answers your question from the digest; planning, landing and rendering are the agent's job.
 
 Today `rundown` reads two sources: Microsoft Graph (calendar and mail) and Slack (messages you were
 part of).
@@ -13,19 +14,20 @@ part of).
 ## The trust boundary
 
 This is the design decision the rest of the project hangs on. Untrusted source content — meeting
-titles, email and message bodies, issue titles from any backend, anywhere an external party can
+titles, email and message bodies, names from any backend, anywhere an external party can
 hide instructions — meets a model only in the sandboxed, tool-less Summarizer. And no command
 emits raw source data: the whole read → aggregate → summarize pipeline runs sealed inside the
 `rundown` binary, and the only thing that ever crosses the CLI surface is the post-summarizer
-Brief.
+digest.
 
 That gives you two guarantees:
 
 - Injection is inert and confined. The Summarizer has no tools, so a hidden instruction has
-  nothing to act with, and the structured output frames any leaked text as a quoted, attributed
-  snippet rather than a command.
-- A tool-capable agent never sees raw content. It sees only the reduced Brief, which it is
-  instructed to treat as data, and there is no raw-fetch command for it to reach for.
+  nothing to act with. Every string in the digest is either a short model summary or a label
+  (a subject, title, name or channel) that code copied from the source, defanged and clamped.
+  Bodies, addresses, handles, backend ids and URLs never leave the binary.
+- A tool-capable agent never sees raw content. It sees only the digest, which it is instructed to
+  treat as data, and there is no raw-fetch command for it to reach for.
 
 The full enforcement model — structural, in-code (`Untrusted<T>`), and behavioral — is in
 [`AGENTS.md`](AGENTS.md).
@@ -35,10 +37,13 @@ The full enforcement model — structural, in-code (`Untrusted<T>`), and behavio
 `rundown` is one bounded context with a single external surface, the CLI. Inside are four
 components (see [`CONTEXT.md`](CONTEXT.md)):
 
-- **Sources** — read-only adapters, one per backend/auth boundary (Graph, Slack).
-- **Aggregator** — pulls the selected sources concurrently into one normalized, bucketed Bundle.
-- **Summarizer** — the tool-less Anthropic call; the only place untrusted content meets a model.
-- **Planner** — turns the Bundle into a plan-my-week Brief.
+- **Sources**: read-only adapters, one per backend/auth boundary (Graph, Slack), each returning
+  typed records.
+- **Aggregator**: pulls the selected sources concurrently into one Bundle of typed records in the
+  window.
+- **Summarizer**: the tool-less Anthropic call; the only place untrusted content meets a model.
+- **Digester**: groups the records into digest entries, makes one Summarizer call for the window,
+  and builds the digest.
 
 ## Install
 
@@ -84,7 +89,7 @@ Installing the binary doesn't make a source ready to run. Getting a source live 
 - **Phase 2 — per user.** Each user runs `rundown login` once.
 
 Secrets are read from the environment and never live in the config file. The config carries only
-what feeds the binary (timezone, sources, guidance), so it is safe to copy or commit.
+what feeds the binary (timezone, window, sources), so it is safe to copy or commit.
 
 ### Phase 1: Microsoft Graph (Azure)
 
@@ -131,7 +136,7 @@ token. `rundown` reads only what your own account can see, via `search.messages`
 Five commands make up the whole surface:
 
 ```
-rundown brief [--window <span|date|range>]   compose the pipeline; emit one Brief as JSON on stdout
+rundown digest [--window <span|date|range>]  compose the pipeline; emit one digest as JSON on stdout
 rundown login [<source>]                     interactively authenticate configured sources
 rundown status                               per-source configured/authed diagnostic + next step
 rundown init                                 write the annotated config template (if absent)
@@ -142,13 +147,13 @@ Onboarding runs them in order:
 
 ```sh
 rundown init      # writes ~/.config/rundown/config.json (annotated JSONC, zero secrets)
-# edit the config — timezone, source selection, planning guidance
+# edit the config: timezone, source selection, source options
 rundown login     # opens a browser for Microsoft sign-in (once; tokens refresh silently)
-rundown status    # poll until it prints `Next: rundown brief`
+rundown status    # poll until it prints `Next: rundown digest`
 ```
 
 `rundown status` prints one readiness phrase per source plus an `N of M ready` line and a single
-`Next:` line telling you what remains; when it says `Next: rundown brief`, you're done. It also
+`Next:` line telling you what remains; when it says `Next: rundown digest`, you're done. It also
 reports whether the Summarizer's `ANTHROPIC_API_KEY` is present:
 
 ```sh
@@ -159,34 +164,37 @@ export ANTHROPIC_API_KEY=...   # the Summarizer credential, read from the env li
 what it did. Pass an optional source name — `rundown login graph` — to authenticate just one.
 
 The config file `~/.config/rundown/config.json` (override the path with `RUNDOWN_CONFIG`) owns
-only `timezone`, `window`, `sources` (selection = presence; the one mandatory field), freeform
-`guidance` for the planner. No secrets, ever.
+only `timezone`, `window`, `autoUpdate` and `sources` (selection = presence; the one mandatory
+field). No secrets, ever.
 
-Suppression rules are gone. A config that still has a `suppress` key fails with an error naming
-it; delete the key.
+The `guidance` and `suppress` keys were removed. A config that still has either fails with an error
+naming the key; delete it.
 
 ## Usage
 
 ```sh
-rundown brief                                  # this week's rundown as JSON on stdout
-rundown brief --window today                   # a symbolic span
-rundown brief --window 2026-07-14              # a single calendar day
-rundown brief --window 2026-07-06..2026-07-12  # an explicit, end-inclusive range
+rundown digest                                  # this week's digest as JSON on stdout
+rundown digest --window today                   # a symbolic span
+rundown digest --window 2026-07-14              # a single calendar day
+rundown digest --window 2026-07-06..2026-07-12  # an explicit, end-inclusive range
 ```
 
 `--window` accepts a symbolic span (`today` | `this-week` | `next-week` | `last-week`), a single
 `YYYY-MM-DD` date, or an explicit end-inclusive date range. Spans are the recommended form and the
 only form the config file's `window` accepts; explicit dates are for one-off invocations.
 
-stdout is either a valid Brief or empty; errors and refusals go to stderr with a non-zero exit.
-An empty window emits an empty Brief and exits 0.
+stdout is either a valid digest or empty; errors and refusals go to stderr with a non-zero exit.
+An empty window emits an empty digest and exits 0. A window too large for one Summarizer call fails
+with a message asking for a shorter window.
 
 ## Using it from a coding agent
 
 `rundown` is published as a single-skill collection. A coding agent installs the `rundown` skill
 (`SKILL.md` + `references/onboarding.md`) and drives the CLI: the skill carries the treat-as-data
-trust contract and the rendering guidance, while the CLI is installed separately. The skill walks
-the agent through onboarding and renders each Brief; where the output lands is the agent's call.
+trust contract, a reference for every digest field and its trust class, and how to drive the CLI,
+while the CLI is installed separately. The skill walks the agent through onboarding; the agent then
+answers the user's question from the digest rather than reproducing it, and decides where any
+output lands.
 
 ## Development
 
@@ -196,8 +204,9 @@ bun test              # unit tests for every component
 scripts/e2e.sh        # end-to-end acceptance against live Graph (needs BYO credentials + login)
 ```
 
-The typecheck is not optional: the `Untrusted<T>` sole-unwrap-site guarantee is enforced at
-typecheck time, so a green `tsc` run is part of the trust boundary.
+The typecheck is not optional: the `Untrusted<T>` two-unwrap-site guarantee is enforced at
+typecheck time, so a green `tsc` run is part of the trust boundary. `scripts/check-unwrap-sites.sh`
+checks that only the Digester and `label()` call `unwrap()`.
 
 Design record: [`CONTEXT.md`](CONTEXT.md) (the domain glossary) and [`docs/adr/`](docs/adr/) (the
 decision record).

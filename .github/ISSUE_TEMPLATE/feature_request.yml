@@ -33,7 +33,8 @@ body:
     attributes:
       value: |
         **Trust-boundary note:** `rundown`'s one non-negotiable rule is that untrusted work-source
-        content (meeting titles, email/message bodies, issue titles, ...) meets a model only in the
+        content (meeting titles, email/message bodies, names, ...) meets a model only in the
         sandboxed, tool-less Summarizer. Any proposal that would add tools to the Summarizer, add an
-        `unwrap()` site outside `src/plan.ts`, or add a command that emits raw source data will be
-        rejected regardless of how valuable the feature is. See `CONTRIBUTING.md` for the full rule.
+        `unwrap()` site outside `src/digester.ts` and `src/label.ts`, or add a command that emits
+        raw source data will be rejected regardless of how valuable the feature is. See
+        `CONTRIBUTING.md` for the full rule.

@@ -2,6 +2,13 @@
 
 **Status:** Accepted
 
+**Amendment (digest, [#117](https://github.com/oyvindfanebust/rundown/issues/117)).** `rundown brief --window` is now `rundown digest --window`
+([#150](https://github.com/oyvindfanebust/rundown/issues/150)); the window syntax is unchanged. §5's second point is void: `windowIsPast` and the
+review-versus-plan prompt switch are removed with the Planner. The run's single clock is
+`generatedAt`, read once in the composition root and given to the Summarizer, whose one prompt
+describes what happened before it and what is scheduled after it, so a wholly past explicit window
+needs no special case ([ADR-0021](0021-the-digest.md) §1, §4).
+
 Extends the window surface fixed by [ADR-0007](0007-config-personalization-layer.md) §2/§5: a run may
 scope its window to arbitrary calendar dates, not just the four symbolic spans.
 

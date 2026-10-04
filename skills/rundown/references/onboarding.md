@@ -23,10 +23,11 @@ and self-update are ADR-0001. To work in the repo instead, run from source with 
 ## Setup flow
 
 1. **`rundown init`** — writes `~/.config/rundown/config.json`, an annotated template listing
-   every registered source. A zero-edit config already works for `brief`.
-2. **Edit the config** for the human — set `timezone`, keep or adjust `sources`, and write
-   `guidance` from what they tell you they care about (e.g. "surface board- and Legal-related
-   items first; terse"). The config carries no secrets.
+   every registered source. A zero-edit config already works for `digest`.
+2. **Edit the config** for the human: set `timezone`, and keep or adjust `sources` and their
+   options (Graph's `kinds`, Slack's `relationships`). There is no `guidance` key; what the human
+   cares about shapes how you answer from the digest, not the config. The config carries no
+   secrets.
 3. **The human does the manual steps** — hand them this checklist, keeping only the sources they
    enabled in step 2:
    - Export `ANTHROPIC_API_KEY` (the Summarizer's key) — only if `rundown status` reports it
@@ -43,7 +44,7 @@ and self-update are ADR-0001. To work in the repo instead, run from source with 
 
    Every secret above lives only in the environment, never in `config.json`.
 4. **Poll `rundown status`** until it converges — it prints `N of M ready` and a single `Next:`
-   line saying what remains. When it says `Next: rundown brief`, onboarding is done.
+   line saying what remains. When it says `Next: rundown digest`, onboarding is done.
 
 ## Notes
 

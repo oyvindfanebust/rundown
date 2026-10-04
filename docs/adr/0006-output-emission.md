@@ -2,6 +2,18 @@
 
 **Status:** Accepted
 
+**Amendment (digest, [#117](https://github.com/oyvindfanebust/rundown/issues/117)).** `rundown digest` emits a digest in place of the Brief
+([#150](https://github.com/oyvindfanebust/rundown/issues/150), [ADR-0021](0021-the-digest.md)). The decision stands with the nouns changed:
+stdout carries one digest JSON object per run, there is no `--format` switch and there are no
+sinks, stdout is either a valid digest or empty, and an empty bundle emits an empty digest with
+exit 0. The Planner and [ADR-0005](0005-planning-layer.md) are retired; the Digester builds the
+digest, and the consuming agent still owns presentation and landing. The crossing to the agent is
+governed by [ADR-0022](0022-trust-boundary.md), which supersedes ADR-0004: stdout carries trusted
+values, labels and model output, never bodies, addresses, handles, backend ids or URLs, and no
+evidence quotes. The skill no longer carries rendering guidance ([ADR-0009](0009-skills-collection.md),
+amended); the agent answers the user's question from the digest. References below to the Brief,
+the Planner and `brief` describe removed code.
+
 Builds on the Planner and Summarizer components ([ADR-0005](0005-planning-layer.md) — the Brief is
 structured content, the agent owns presentation) and the trust boundary
 ([ADR-0004](0004-trust-boundary-enforcement.md) — the brief crossing to the agent is the accepted

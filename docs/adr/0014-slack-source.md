@@ -6,8 +6,9 @@
 are struck ([#142](https://github.com/oyvindfanebust/rundown/issues/142)).
 
 - §2: buckets retire with the digest ([#138](https://github.com/oyvindfanebust/rundown/issues/138)),
-  so this ADR no longer assigns Slack messages a bucket. Until the digest replaces the Brief, the
-  Aggregator still buckets each message by its timestamp under ADR-0003.
+  so this ADR no longer assigns Slack messages a bucket. Since the digest
+  ([#150](https://github.com/oyvindfanebust/rundown/issues/150)) the Aggregator only filters each
+  message to the window by its timestamp ([ADR-0020](0020-aggregation-and-digest-entries.md)).
 - §5: the `threads` option is removed, with the `*:history` scopes, the `conversations.replies`
   reconstruction, the reply cap and all `thread_ts` handling, including the `threadTs` extra in §4.
   A config that still sets `threads` fails as an unknown option. `login()` requests the base scopes

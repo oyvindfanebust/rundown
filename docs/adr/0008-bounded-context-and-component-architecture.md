@@ -12,8 +12,27 @@ key, label and option schema. With the digest
 Summarizer, and Digester `digest(bundle, { window, timezone, generatedAt }, { summarize }) →
 Digest` ([ADR-0021](0021-the-digest.md)) in `src/digester.ts`. The Planner and `src/plan.ts` are
 gone. The composition root is `buildDigest` in `src/digest.ts`, for the `digest` command that
-replaces `brief`; config resolution no longer hands on `guidance`. References below to the
-Planner, the Brief and `brief` describe removed code.
+replaces `brief`; config resolution no longer hands on `guidance`.
+
+- §1 and §2: the output is a single digest as JSON on stdout. The Aggregator merges, filters to
+  the window and sorts, with no buckets ([ADR-0020](0020-aggregation-and-digest-entries.md)).
+  Config resolution hands the selection, window and timezone on; the root reads `generatedAt`
+  once.
+- §3: the vocabulary below the component level is typed record, `Person`, `Bundle`, digest,
+  digest entry, trusted value, label, `generatedAt`, `Untrusted<T>`, untrusted-derived and trust
+  boundary. `NormalizedItem`, `bucket`, `Brief`, `ExtractedItem` and `planning-guidance` are
+  retired.
+- §4: the layout replaces `brief.ts`, `brief-contract.ts` and `plan.ts` with `digest.ts` (the
+  composition root), `digest-contract.ts` (the digest's Zod contract with each field's trust
+  class), `digester.ts` (the Digester) and `label.ts` (`label()`). `domain.ts` holds the typed
+  records, `Person` and the `Bundle`. `config.ts` resolves `{ selection, window, windowSpan,
+  timezone }`. The unwrap sites are `digester.ts` and `label.ts`
+  ([ADR-0022](0022-trust-boundary.md) §3).
+- §6 and §7: the five commands are `digest`, `login`, `status`, `init` and `--version`, and the
+  untrusted hop is sealed inside `digest`. The trust references to ADR-0004 now read as
+  [ADR-0022](0022-trust-boundary.md), which supersedes it.
+
+References below to the Planner, the Brief and `brief` describe removed code.
 
 This ADR assembles the decisions made across [ADR-0001](0001-package-rundown-cli-as-compiled-binaries-in-skills.md)–[ADR-0007](0007-config-personalization-layer.md)
 into one coherent architecture: it fixes the vocabulary, how the components sit in `src/`, and the
