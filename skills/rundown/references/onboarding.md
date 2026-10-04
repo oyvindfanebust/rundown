@@ -35,9 +35,8 @@ and self-update are ADR-0001. To work in the repo instead, run from source with 
      `User.Read`); note its tenant ID and client ID, and export them as `AZURE_TENANT_ID` and
      `AZURE_CLIENT_ID`. Graph then authenticates through `rundown login`.
    - Slack: create an app at api.slack.com/apps, add `http://localhost:53912` as a redirect URL,
-     add the user token scopes `search:read` and `users:read` (the `threads` config option also
-     needs the `*:history` family), and export the app's credentials as `SLACK_CLIENT_ID` and
-     `SLACK_CLIENT_SECRET`. Slack then authenticates through `rundown login`.
+     add the user token scopes `search:read` and `users:read`, and export the app's credentials as
+     `SLACK_CLIENT_ID` and `SLACK_CLIENT_SECRET`. Slack then authenticates through `rundown login`.
    - Linear: create a read-only personal API key in Linear → Settings → Security & access →
      Personal API keys, and export it as `LINEAR_API_KEY`. Linear is not part of `login` — the key
      alone is the credential; `rundown status` verifies it with a live call and tells you if it is

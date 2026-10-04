@@ -354,6 +354,14 @@ describe("cli", () => {
       expect(r.exitCode).toBe(1);
     });
 
+    test("the removed Slack threads option is an unknown option", () => {
+      const path = written(`{"sources": {"slack": {"threads": true}}}`);
+      const r = run(["status"], path);
+      expect(r.stdout).toContain("✗ invalid");
+      expect(r.stdout).toContain(`Unknown option "threads" for source "slack"`);
+      expect(r.exitCode).toBe(1);
+    });
+
     test("an unknown top-level key with no near miss still names the key and the known keys", () => {
       const path = written(`{"gibberish": 1, "sources": {"graph": {}}}`);
       const r = run(["status"], path);

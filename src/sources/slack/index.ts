@@ -1,22 +1,21 @@
 // The Slack Source (ADR-0014): read-only messages the authenticated user
 // participated in, via `search.messages` under a per-user `xoxp-` token, emitting
-// kind:"message" NormalizedItems — one message = one item (§1). Slack is
-// retrospective, so items land in `recent`/`standing`, never `upcoming` (§2).
+// kind:"message" NormalizedItems — one message = one item (§1). A message is a
+// past event, so the Aggregator buckets it `recent`/`standing`, never `upcoming`.
 //
 // A theme (what a thread or DM was about) is a summarization act, forbidden to a
 // tool-less source (§3); the source emits dumb per-message items plus the grouping
-// keys (`channel`, `threadTs`, `author`, `relationship`) the Summarizer clusters
-// on. Message bodies are the archetypal injection vector, so the body rides the
-// item title through the normalizer's `text()` marker as ordinary Untrusted
-// content — every backend field is branded at this boundary, and nothing is
-// unwrapped here (the sole unwrap site is plan.ts; CLAUDE.md).
+// keys (`channel`, `author`, `relationship`) the Summarizer clusters on. Message
+// bodies are the archetypal injection vector, so the body rides the item title
+// through the normalizer's `text()` marker as ordinary Untrusted content — every
+// backend field is branded at this boundary, and nothing is unwrapped here (the
+// sole unwrap site is plan.ts; CLAUDE.md).
 //
 // Testability seam: every request flows through one injected `SlackRequest`
 // (method, params) → parsed body, exactly the shape the real token-bearing caller
 // has; auth presence rides `appConfig` + `cachedAuth`. Pagination on
-// `response_metadata.next_cursor`, the search-query construction, the
-// window-precise ts filter, and the thread reconstruction all stay inside the
-// module, tested through `read()`.
+// `response_metadata.next_cursor`, the search-query construction and the
+// window-precise ts filter all stay inside the module, tested through `read()`.
 
 import type { NormalizedItem, Window } from "../../domain.ts";
 import { normalizer } from "../normalize.ts";
@@ -33,8 +32,7 @@ import {
 } from "./auth.ts";
 
 const KEY = "slack";
-const PAGE_SIZE = 100; // search.messages / conversations.replies max per page
-const MAX_THREAD_REPLIES = 200; // runaway-thread cap (ADR-0014 §5): a huge thread must not flood the brief.
+const PAGE_SIZE = 100; // search.messages max per page
 
 // The source's one normalizer — the only way this module makes a NormalizedItem.
 const normalize = normalizer(KEY, { untitled: "(no message text)" });
@@ -52,11 +50,6 @@ export const SLACK_OPTIONS: OptionSchema = {
     description:
       'Which relationships to pull. Options: "authored", "mentions", "dms". Omit for "authored" + "mentions" (dms opt-in).',
   },
-  threads: {
-    type: "boolean",
-    description:
-      "Reconstruct full threads around matched messages (needs a re-login for *:history scopes). Omit for off.",
-  },
 };
 
 /** The thin transport this source needs: one Slack Web API call returning the parsed body. */
@@ -71,7 +64,7 @@ export interface SlackDeps {
   /** Transport factory bound to a token (default: the real `slackApi` caller). */
   transport?: (token: string) => SlackRequest;
   /** Interactive login (default: the real OAuth flow). */
-  login?: (threads: boolean) => Promise<string>;
+  login?: () => Promise<string>;
   /** Structural diagnostics sink (ADR-0015); defaults to the no-op. */
   debug?: DebugSink;
 }
@@ -93,13 +86,6 @@ interface SlackMatch {
   ts?: string;
   text?: string;
   permalink?: string;
-  thread_ts?: string;
-}
-interface SlackReply {
-  user?: string;
-  ts?: string;
-  text?: string;
-  thread_ts?: string;
 }
 
 /** Channel type ∈ public/private/dm/group_dm, derived from the is_* flags (ADR-0014 §4). */
@@ -244,7 +230,7 @@ export class SlackSource implements Source {
   private readonly appConfig: () => SlackAppConfig | null;
   private readonly cachedAuth: () => Promise<CachedAuth | null>;
   private readonly transport: (token: string) => SlackRequest;
-  private readonly loginFn: (threads: boolean) => Promise<string>;
+  private readonly loginFn: () => Promise<string>;
   private readonly debug: DebugSink;
 
   constructor(options: Record<string, unknown> = {}, deps: SlackDeps = {}) {
@@ -258,13 +244,8 @@ export class SlackSource implements Source {
     this.loginFn = deps.login ?? slackLogin;
   }
 
-  private threadsEnabled(): boolean {
-    return this.config.threads === true;
-  }
-
   login(): Promise<string> {
-    // The requested user_scope depends on the `threads` option (ADR-0014 §5).
-    return this.loginFn(this.threadsEnabled());
+    return this.loginFn();
   }
 
   // Interactive auth: a live auth.test reports the four states (ADR-0014 §6),
@@ -321,8 +302,6 @@ export class SlackSource implements Source {
     // Union across relationships, dedup by message identity; first-seen relationship wins.
     const byId = new Map<string, NormalizedItem>();
     const authors = new AuthorCache(request);
-    // Distinct (channel, threadTs) among the hits, for the opt-in thread pass (§5).
-    const threads = new Map<string, { channelId: string; channel: SlackChannel; threadTs: string; relationship: Relationship }>();
 
     for (const relationship of relationships) {
       const matches = await this.searchAll(request, buildQuery(relationship, auth.userId, window));
@@ -335,32 +314,6 @@ export class SlackSource implements Source {
         const id = messageId(channelId, ts);
         if (byId.has(id)) continue; // first-seen relationship wins
         byId.set(id, await normalizeMatch(m, channelId, instant, relationship, authors, auth.userId));
-        if (this.threadsEnabled() && m.thread_ts) {
-          const key = messageId(channelId, m.thread_ts);
-          if (!threads.has(key)) {
-            threads.set(key, { channelId, channel: m.channel ?? {}, threadTs: m.thread_ts, relationship });
-          }
-        }
-      }
-    }
-
-    if (this.threadsEnabled()) {
-      // Reconstruct each matched thread in full (§5). Replies are not window-filtered
-      // — a thread is a unit, so its whole conversation is emitted for the summarizer
-      // to cluster; the Aggregator still buckets each reply by its own timestamp.
-      for (const { channelId, channel, threadTs, relationship } of threads.values()) {
-        const replies = await this.repliesAll(request, channelId, threadTs);
-        for (const reply of replies) {
-          const ts = reply.ts;
-          if (!ts) continue;
-          const id = messageId(channelId, ts);
-          if (byId.has(id)) continue; // deduped against what search already returned
-          const instant = tsToInstant(ts);
-          byId.set(
-            id,
-            await normalizeReply(reply, channelId, channel, threadTs, instant, relationship, authors, auth.userId),
-          );
-        }
       }
     }
 
@@ -380,21 +333,6 @@ export class SlackSource implements Source {
       cursor = body.response_metadata?.next_cursor || undefined;
     } while (cursor);
     return out;
-  }
-
-  /** Paginate `conversations.replies`, bounded by {@link MAX_THREAD_REPLIES} (§5 runaway cap). */
-  private async repliesAll(request: SlackRequest, channelId: string, threadTs: string): Promise<SlackReply[]> {
-    const out: SlackReply[] = [];
-    let cursor: string | undefined;
-    do {
-      const params: Record<string, string> = { channel: channelId, ts: threadTs, limit: String(PAGE_SIZE) };
-      if (cursor) params.cursor = cursor;
-      const body = await request("conversations.replies", params);
-      if (!body?.ok) throw statusOnlyError("Slack", body); // scrubbed
-      out.push(...(body.messages ?? []));
-      cursor = body.has_more ? body.response_metadata?.next_cursor || undefined : undefined;
-    } while (cursor && out.length < MAX_THREAD_REPLIES);
-    return out.slice(0, MAX_THREAD_REPLIES);
   }
 }
 
@@ -511,7 +449,6 @@ async function normalizeMatch(
       // when unresolvable — better an absent label than the author standing in for it.
       channel: { id: channelId, name: m.channel?.name, type },
       counterpart,
-      threadTs: m.thread_ts,
       author,
       // Whether the user wrote it. The source is anchored on the user's own
       // participation, so most messages are theirs; without this the summarizer reads
@@ -519,46 +456,6 @@ async function normalizeMatch(
       fromMe,
       // The query family that surfaced the item, for the Summarizer to cluster on. The
       // attribution's relationship is derived per message instead, so it can differ.
-      relationship,
-    },
-  });
-}
-
-/** Map one reconstructed thread reply — same shape as a match, minus search-only fields (§5). */
-async function normalizeReply(
-  reply: SlackReply,
-  channelId: string,
-  channel: SlackChannel,
-  threadTs: string,
-  instant: string,
-  relationship: Relationship,
-  authors: AuthorCache,
-  selfId: string,
-): Promise<NormalizedItem> {
-  const type = channelType(channel);
-  const counterpart = await dmCounterpart(channel, type, authors);
-  const author = await authors.resolve(reply.user, undefined);
-  const fromMe = reply.user === selfId;
-  return normalize({
-    kind: "message",
-    timestamp: instant,
-    id: messageId(channelId, reply.ts!),
-    title: await readableText(reply.text, authors),
-    // conversations.replies carries no permalink; a reconstructed reply has no url.
-    attribution: slackAttribution({
-      channelName: channel.name,
-      type,
-      counterpart,
-      author,
-      fromMe,
-      queryRelationship: relationship,
-    }),
-    extras: {
-      channel: { id: channelId, name: channel.name, type },
-      counterpart,
-      threadTs,
-      author,
-      fromMe,
       relationship,
     },
   });

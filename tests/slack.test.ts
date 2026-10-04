@@ -39,8 +39,6 @@ interface Store {
   search?: Partial<Record<"authored" | "mentions" | "dms", any[]>>;
   /** users.info bodies keyed by user id. */
   users?: Record<string, any>;
-  /** conversations.replies message lists keyed by `${channel}:${threadTs}`. */
-  replies?: Record<string, any[]>;
 }
 
 /** A single-page fake transport dispatching over the Slack Web API methods. */
@@ -52,9 +50,6 @@ function fakeTransport(store: Store): (token: string) => SlackRequest {
       return { ok: true, messages: { matches }, response_metadata: {} };
     }
     if (method === "users.info") return store.users?.[params.user!] ?? { ok: true, user: { name: params.user } };
-    if (method === "conversations.replies") {
-      return { ok: true, messages: store.replies?.[`${params.channel}:${params.ts}`] ?? [] };
-    }
     return { ok: false };
   };
 }
@@ -76,12 +71,12 @@ function byId(items: NormalizedItem[], id: string): NormalizedItem | undefined {
 // ── declared surface ─────────────────────────────────────────────────────────
 
 describe("SlackSource surface", () => {
-  test("key, label, has interactive login, two options", () => {
+  test("key, label, has interactive login, one option", () => {
     const s: Source = source({});
     expect(s.key).toBe("slack");
     expect(s.label).toBe("Slack");
     expect(typeof s.login).toBe("function"); // presence = interactive-auth declaration
-    expect(Object.keys(SLACK_OPTIONS).sort()).toEqual(["relationships", "threads"]);
+    expect(Object.keys(SLACK_OPTIONS).sort()).toEqual(["relationships"]);
   });
 });
 
@@ -142,7 +137,7 @@ describe("SlackSource.read mapping", () => {
     expect(item.source).toBe("slack"); // trusted structural
     expect(item.kind).toBe("message");
     expect(item.timestamp).toBe(tsToInstant(ts));
-    expect(item.end).toBeUndefined(); // Slack messages have no interval end (§2)
+    expect(item.end).toBeUndefined(); // Slack messages have no interval end (§4)
     expect(item.id).toEqual(untrusted(`C1:${ts}`));
     expect(item.title).toEqual(untrusted("Hello team")); // the body IS the content line (§4)
     expect(item.url).toEqual(untrusted("https://acme.slack.com/archives/C1/p123"));
@@ -155,18 +150,15 @@ describe("SlackSource.read mapping", () => {
     );
   });
 
-  test("derives channel type from the is_* flags and carries threadTs", async () => {
+  test("derives channel type from the is_* flags", async () => {
     const ts = tsFor("2026-07-08T09:00:00Z");
     const s = source({
       search: {
-        authored: [
-          match({ ts, channel: { id: "D1", is_im: true }, thread_ts: tsFor("2026-07-08T08:00:00Z") }),
-        ],
+        authored: [match({ ts, channel: { id: "D1", is_im: true } })],
       },
     });
     const extras = unwrap((await s.read(WINDOW)).find((i) => unwrap(i.id).startsWith("D1"))!.extras!) as any;
     expect(extras.channel.type).toBe("dm");
-    expect(extras.threadTs).toBe(tsFor("2026-07-08T08:00:00Z"));
   });
 
   test("group_dm and private channel types", async () => {
@@ -384,34 +376,6 @@ describe("SlackSource.read attribution relationship", () => {
     expect(extrasOf(received).relationship).toBe("dms");
   });
 
-  test("a thread reply the user wrote reads authored though the thread surfaced under mentions", async () => {
-    const rootTs = tsFor("2026-07-08T11:00:00Z");
-    const mineTs = tsFor("2026-07-08T11:45:00Z");
-    const s = source(
-      {
-        search: { mentions: [match({ user: "U2", thread_ts: rootTs })] },
-        users: {
-          U1: { ok: true, user: { name: "me" } },
-          U2: { ok: true, user: { name: "alice" } },
-        },
-        replies: {
-          [`C1:${rootTs}`]: [
-            { user: "U2", ts: rootTs, text: "root", thread_ts: rootTs },
-            { user: "U1", ts: mineTs, text: "my reply", thread_ts: rootTs },
-          ],
-        },
-      },
-      { relationships: ["mentions"], threads: true },
-    );
-    const items = await s.read(WINDOW);
-    const mine = byId(items, `C1:${mineTs}`)!;
-    const root = byId(items, `C1:${rootTs}`)!;
-    expect(attributionOf(mine).relationship).toBe("authored");
-    expect(attributionOf(root).relationship).toBe("mentions");
-    expect(extrasOf(mine).relationship).toBe("mentions"); // still the surfacing query
-    expect(extrasOf(root).relationship).toBe("mentions");
-  });
-
   test("a channel message the user wrote reads authored rather than the query's mentions", async () => {
     // A message can mention the user and be written by them — self-mentions and
     // follow-ups both do it. The label follows the message, not the search.
@@ -489,23 +453,6 @@ describe("SlackSource.read message text tokens", () => {
     expect(await titleOf("docs <https://example.test/x|the spec> and <https://example.test/y>")).toBe(
       "docs the spec and https://example.test/y",
     );
-  });
-
-  test("resolves mentions in reconstructed thread replies too", async () => {
-    const rootTs = tsFor("2026-07-08T11:00:00Z");
-    const s = source(
-      {
-        search: { authored: [match({ ts: tsFor("2026-07-08T11:30:00Z"), thread_ts: rootTs })] },
-        users: {
-          U2: { ok: true, user: { name: "alice" } },
-          U9: { ok: true, user: { profile: { real_name: "Bent Hansen" } } },
-        },
-        replies: { [`C1:${rootTs}`]: [{ user: "U9", ts: rootTs, text: "cc <@U9>", thread_ts: rootTs }] },
-      },
-      { threads: true },
-    );
-    const items = await s.read(WINDOW);
-    expect(unwrap(items.find((i) => unwrap(i.id) === `C1:${rootTs}`)!.title)).toBe("cc @Bent Hansen");
   });
 });
 
@@ -605,58 +552,6 @@ describe("SlackSource.read pagination", () => {
   });
 });
 
-// ── read(): the threads option (§5) ─────────────────────────────────────────────
-
-describe("SlackSource.read threads", () => {
-  test("off by default: conversations.replies is never called", async () => {
-    let repliesCalled = false;
-    const s = source({}, {}, {
-      transport: () => async (method, params = {}) => {
-        if (method === "auth.test") return { ok: true, user: "Me" };
-        if (method === "users.info") return { ok: true, user: { name: "x" } };
-        if (method === "conversations.replies") {
-          repliesCalled = true;
-          return { ok: true, messages: [] };
-        }
-        if (method === "search.messages")
-          return { ok: true, messages: { matches: [match({ thread_ts: tsFor("2026-07-08T11:00:00Z") })] }, response_metadata: {} };
-        return { ok: true };
-      },
-    });
-    await s.read(WINDOW);
-    expect(repliesCalled).toBe(false);
-  });
-
-  test("on: reconstructs the thread, deduped against search, replies carry no url", async () => {
-    const rootTs = tsFor("2026-07-08T11:00:00Z");
-    const hitTs = tsFor("2026-07-08T11:30:00Z");
-    const newTs = tsFor("2026-07-08T11:45:00Z");
-    const s = source(
-      {
-        search: { authored: [match({ ts: hitTs, thread_ts: rootTs })] },
-        users: { U2: { ok: true, user: { name: "alice" } }, U3: { ok: true, user: { name: "carol" } } },
-        replies: {
-          [`C1:${rootTs}`]: [
-            { user: "U2", ts: rootTs, text: "root", thread_ts: rootTs },
-            { user: "U2", ts: hitTs, text: "the hit", thread_ts: rootTs }, // already returned by search → dedup
-            { user: "U3", ts: newTs, text: "a reply", thread_ts: rootTs },
-          ],
-        },
-      },
-      { threads: true },
-    );
-    const items = await s.read(WINDOW);
-    // matched hit + root + new reply = 3, hit not double-counted
-    expect(items.map((i) => unwrap(i.id).split(":")[1]).sort()).toEqual([rootTs, hitTs, newTs].sort());
-    const rootItem = byId(items, `C1:${rootTs}`)!;
-    expect(rootItem.url).toBeUndefined(); // reconstructed replies have no permalink
-    const extras = unwrap(rootItem.extras!) as any;
-    expect(extras.relationship).toBe("authored"); // carried from the surfacing hit
-    expect(extras.threadTs).toBe(rootTs);
-    expect(extras.channel).toEqual({ id: "C1", name: "general", type: "public" });
-  });
-});
-
 // ── read(): auth guards ─────────────────────────────────────────────────────────
 
 describe("SlackSource.read auth guards", () => {
@@ -668,18 +563,6 @@ describe("SlackSource.read auth guards", () => {
   test("throws when there is no cached token", async () => {
     const s = source({}, {}, { cachedAuth: async () => null });
     await expect(s.read(WINDOW)).rejects.toThrow(/not authenticated|rundown login/i);
-  });
-
-  test("login() passes the threads option through to the OAuth scope request", async () => {
-    let requestedThreads: boolean | undefined;
-    const s = source({}, { threads: true }, {
-      login: async (threads) => {
-        requestedThreads = threads;
-        return "Me";
-      },
-    });
-    expect(await s.login()).toBe("Me");
-    expect(requestedThreads).toBe(true);
   });
 });
 
@@ -764,7 +647,6 @@ describe("slack http debug events", () => {
                   match({
                     text: SECRET_TEXT,
                     ts: HIT_TS,
-                    thread_ts: HIT_TS,
                     channel: { id: "C1", name: "secret-channel", is_channel: true },
                   }),
                 ],
@@ -773,9 +655,7 @@ describe("slack http debug events", () => {
             }
           : method === "users.info"
             ? { ok: true, user: { profile: { real_name: "Alice Anderson" } } }
-            : method === "conversations.replies"
-              ? { ok: true, messages: [{ user: "U2", ts: HIT_TS, text: SECRET_TEXT, thread_ts: HIT_TS }] }
-              : { ok: true, user: "Me" };
+            : { ok: true, user: "Me" };
       return { ok: true, status: 200, headers: new Headers(), json: async () => body };
     }) as unknown as typeof fetch;
     return urls;
@@ -794,14 +674,13 @@ describe("slack http debug events", () => {
 
   test("one http event per request, distinguished by path shape", async () => {
     mockSlack();
-    const { src, events } = realTransportSource({ relationships: ["authored"], threads: true });
+    const { src, events } = realTransportSource({ relationships: ["authored"] });
     await src.read(WINDOW);
     const http = events.filter((e) => e.kind === "http");
     expect(http.every((e) => e.source === "slack" && e.method === "POST" && e.host === "slack.com")).toBe(true);
-    // search.messages, the AuthorCache's users.info, and the thread pass are three
-    // distinct request shapes; the path shape is what tells them apart.
+    // search.messages and the AuthorCache's users.info are two distinct request
+    // shapes; the path shape is what tells them apart.
     expect([...new Set(http.map((e) => (e as { pathShape: string }).pathShape))].sort()).toEqual([
-      "/api/conversations.replies",
       "/api/search.messages",
       "/api/users.info",
     ]);
@@ -823,7 +702,7 @@ describe("slack http debug events", () => {
 
   test("no message text, channel name, display name, or query reaches the sink", async () => {
     const urls = mockSlack();
-    const { src, events } = realTransportSource({ relationships: ["authored"], threads: true });
+    const { src, events } = realTransportSource({ relationships: ["authored"] });
     await src.read(WINDOW);
     const serialized = JSON.stringify(events);
     expect(serialized).not.toContain("IGNORE PREVIOUS");

@@ -168,9 +168,7 @@ Slack uses `rundown login`, like Graph. Register one app once for the whole work
 1. At [api.slack.com/apps](https://api.slack.com/apps), create an app in your workspace.
 2. Under **OAuth & Permissions**, add a **redirect URL** of `http://localhost:53912` — the loopback
    address `rundown login` listens on.
-3. Under **User Token Scopes** (not bot scopes), add `search:read` and `users:read`. The optional
-   `threads` config option needs the `*:history` family (`channels:history`, `groups:history`,
-   `im:history`, `mpim:history`) as well — adding it later is a re-login, not an admin re-approval.
+3. Under **User Token Scopes** (not bot scopes), add `search:read` and `users:read`.
 4. From **Basic Information**, note the **Client ID** and **Client Secret**, and export them:
 
    ```sh

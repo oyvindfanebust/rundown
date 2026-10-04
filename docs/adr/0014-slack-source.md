@@ -2,6 +2,21 @@
 
 **Status:** Accepted
 
+**Amendment (digest, [#117](https://github.com/oyvindfanebust/rundown/issues/117)).** §2 and §5
+are struck ([#142](https://github.com/oyvindfanebust/rundown/issues/142)).
+
+- §2: buckets retire with the digest ([#138](https://github.com/oyvindfanebust/rundown/issues/138)),
+  so this ADR no longer assigns Slack messages a bucket. Until the digest replaces the Brief, the
+  Aggregator still buckets each message by its timestamp under ADR-0003.
+- §5: the `threads` option is removed, with the `*:history` scopes, the `conversations.replies`
+  reconstruction, the reply cap and all `thread_ts` handling, including the `threadTs` extra in §4.
+  A config that still sets `threads` fails as an unknown option. `login()` requests the base scopes
+  `search:read` and `users:read` only, so the scope ceiling in §6 is unchanged and no re-login is
+  needed.
+
+References to §5 and to `threads` elsewhere in this ADR, including the third amendment's reply
+path, describe the removed option.
+
 This ADR fixes the design of the Slack source: a read-only adapter under `src/sources/slack/` that
 follows the Source pattern in [ADR-0002](0002-source-abstraction.md), brands all backend content
 `Untrusted<T>` at the normalizer per [ADR-0004](0004-trust-boundary-enforcement.md), and receives
