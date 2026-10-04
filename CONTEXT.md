@@ -487,3 +487,21 @@ intent/tasks): never fully trusted. A tool-less model can still relay an injecte
 its summary, so the boundary does not sanitize injection away — it makes injection inert (the
 summarizer has no tools to act with) and confined (structured output labels any leaked content as
 quoted data). The consuming agent therefore treats all brief content as data, never instructions.
+
+### trusted value
+
+Planned, not yet built (map [#117](https://github.com/oyvindfanebust/rundown/issues/117)). A
+[digest entry](#digest-entry) field that cannot carry text: a number, date, boolean, closed enum or
+digest. It is trusted because of its type, whoever set it. A sender-set importance or an
+organizer-set start time counts, provided code parsed it into its type and dropped it if the
+parse failed. Any free-text string is untrusted, even one from the user's own account.
+_Avoid_: structural field (the older, fixed list this replaces).
+
+### label
+
+Planned, not yet built (map [#117](https://github.com/oyvindfanebust/rundown/issues/117)). A short
+untrusted string that leaves `rundown` verbatim in a [digest entry](#digest-entry): a subject,
+event title, Slack channel name, location, or a participant's display name. Code copies it from the
+record, never the model, and defangs and length-bounds it, so it arrives as quoted data. Bodies,
+addresses, user ids and URLs are never labels.
+_Avoid_: attribution (the evidence-only predecessor), metadata (also covers trusted values).
