@@ -3,31 +3,39 @@
 Throwaway, for [Sketch the typed records and a sample digest for one week](https://github.com/oyvindfanebust/rundown/issues/122) on the map [Typed records and a full digest in place of generic summaries](https://github.com/oyvindfanebust/rundown/issues/117). Nothing in `src/` imports it. Delete it once the spec is written.
 
 - `records.ts`: `Person`, `Email`, `ChatMessage`, `CalendarEvent`, the `SourceRecord` union.
-- `output.ts`: the output: envelope, plan items, digest entries.
+- `output.ts`: the output, and `FIELD_TRUST`, the trust class of every field.
 - `sample-week.ts`: one synthetic week, typed against `output.ts`. `bun prototypes/typed-records-digest/emit.ts` writes `sample-week.json`.
+- `real-week.ts` + `real-week.html`: pulls one real week from Graph, maps it to the output (no model parts) and writes an HTML page comparing each entry with its raw Graph objects. `OUT_DIR=<dir outside the repo> bun prototypes/typed-records-digest/real-week.ts [from] [to]`. The output holds real mail: never commit or publish it.
 - Typecheck: `bunx tsc --noEmit -p prototypes/typed-records-digest`.
 
-## Choices to react to
+## Output, second take
 
-**Records**
+Decided in review on the ticket:
 
-1. **`byMe` on every message record.** `Email.byMe = from.isMe || sentBy?.isMe`; `ChatMessage.byMe = author.isMe`. Entry `lastFromMe` and `fromMe` read it the same way for both.
-2. **`Email.sentBy` stays, only when Graph's `sender` differs from `from`.** It is what makes mail sent as a shared mailbox count as yours. It never leaves the binary.
-3. **`Person.handle`** (address or Slack user id) replaces `NormalizedItem.sender`. Boxed, never out; used for `isMe`, dedup within an entry, and suppression.
-4. **`relationship` goes.** `byMe`, `mentionsMe` and the conversation kind say the same thing as `authored` / `mentions` / `dms`, as trusted values instead of a string.
-5. **Slack private vs public is dropped.** Kind is `dm | group_dm | channel` plus `isExternal`, as ticket #121 listed.
-6. **`moved`** is derived by the source from Graph's `originalStart`. That needs `type,originalStart` added to `$select`.
+1. **Flat entries, written to be read.** One object per meeting, mail thread or chat conversation. No `meta`/`labels` split.
+2. **Trust lives in the schema.** `FIELD_TRUST` classes every field as `trusted`, `label` or `model`; it is typed `Record<keyof Entry, Trust>`, so a field without a class fails to compile. The real contract carries the class in each Zod field's description (ADR-0011).
+3. **No cross-references.** What needs your attention is `attention` (kind, summary, when) on the entry it is about. The separate plan list and its `entries: [fingerprint]` pointers are gone; the skill builds the plan view by filtering.
+4. **Rooms are not attendees.** `rooms` comes from Graph `resource` attendees plus attendees whose address is one of the event's `locations[]`. `location` stays only when it says more than the room names.
 
-**Output**
+Follows from those:
 
-7. **The user is never named.** `labels.people` lists everyone but the user; `meta.others` is the count before the `WHO_MAX` clamp; `lastFrom` is absent when `lastFromMe`. No label ever has to carry the user's own name.
-8. **Digest grouped by type** (`calendar`, `mail`, `chat`), not one mixed list. Each type has its own `meta`, and the skill renders them as separate sections anyway.
-9. **Calendar entries have no summary** (optional). Without a body the model can only restate the title. Goes to [Decide how the Summarizer produces a summary per digest entry](https://github.com/oyvindfanebust/rundown/issues/123).
-10. **`bucket` (standing/recent/upcoming) goes.** Every entry has instants; the consumer compares them to the window. A calendar occurrence after "now" is upcoming by its `start`.
-11. **All-day occurrences use `YYYY-MM-DD`** instead of UTC midnight plus `dateOnly`.
-12. **Plan items cite `entries: [fingerprint]`**, with no evidence quotes. Placeholder for [Decide how plan items cite digest entries](https://github.com/oyvindfanebust/rundown/issues/124).
-13. **Envelope `counts`** per source and type (records, entries) replace `sources[].itemCount`.
+5. **Presence is signal.** False, zero, default and empty fields are left out: no `cancelled: false`, `importance: "normal"`, `showAs: "busy"`, `fromYou: 0`.
+6. **"You" fields.** `youOrganize`, `yourResponse`, `fromYou`, `lastFromYou`, `mentionsYou`. Your own name never appears; `lastFrom` is absent when `lastFromYou`.
+7. **Clamped lists say how much is left.** `attendees`/`people` hold at most 8 names; `moreAttendees`/`morePeople` count the rest.
+8. **One-offs are flat, series list occurrences.** A one-off has `start`/`end`; a series has `recurring: true` and `occurrences`. A series carries its most common `yourResponse`; an occurrence repeats it only when it differs, and a moved one carries `movedFrom`.
+9. **Top level is flat too.** `window`, `timezone`, `counts`, `summary`, then `meetings`, `mail`, `chat`. The envelope wrapper is gone.
 
-**Size.** The 12-entry sample is about 8 KB of JSON. A real week is about 165 entries, so roughly 100 KB, around 25K tokens for the skill to read. That bears on the skill's rendering guidance, which is still fog on the map.
+Still open:
 
-**The hostile mail** (`d0c37a5e2b91f846`) shows a subject label after defanging: the URL scheme is `hxxps://`, and the summary describes the thread without relaying the link.
+- **Multi-entry attention.** An attention item sits on one entry. The sample's architecture review mentions the DM and the channel in its summary instead of pointing at them. Fine for the plan view; it means the Summarizer picks the primary entry.
+- **Meeting summaries** stay optional ([Decide how the Summarizer produces a summary per digest entry](https://github.com/oyvindfanebust/rundown/issues/123)).
+
+**Size.** The real week (23 meetings, 108 mail threads, no summaries) is 43 KB, against 218 KB of raw Graph.
+
+## Records
+
+- **`byMe` on every message record**: `Email.byMe = from.isMe || sentBy?.isMe`; `ChatMessage.byMe = author.isMe`.
+- **`Email.sentBy`** only when Graph's `sender` differs from `from` (delegate, send-as a shared mailbox).
+- **`Person.handle`** (address or Slack user id) replaces `NormalizedItem.sender`. Boxed, never out.
+- **`relationship` goes**: `byMe`, `mentionsMe` and the conversation kind say the same thing.
+- **`CalendarEvent.rooms`** split from `attendees`; **`originalStart`** kept on moved exceptions. Needs `type,originalStart,locations,isOrganizer,isOnlineMeeting` in `$select`.

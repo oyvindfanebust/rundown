@@ -49,7 +49,7 @@ pre { margin: 0; background: var(--code-bg); border: 1px solid var(--line); bord
   <div class="stats" id="stats"></div>
 </header>
 <nav><div class="in">
-  <button data-tab="calendar" aria-pressed="true">Calendar</button>
+  <button data-tab="meetings" aria-pressed="true">Meetings</button>
   <button data-tab="mail" aria-pressed="false">Mail</button>
   <button data-tab="output" aria-pressed="false">output.json</button>
   <button data-tab="raw" aria-pressed="false">graph-raw.json</button>
@@ -63,29 +63,29 @@ const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&l
 const json = (v) => esc(JSON.stringify(v, null, 2));
 const kb = (v) => (JSON.stringify(v).length / 1024).toFixed(1) + " KB";
 
-const w = D.output.envelope.window;
-$("#sub").textContent = `${w.from} → ${w.to} · ${D.output.envelope.timezone} · local only, contains real mail and calendar data`;
-const cal = D.pairs.calendar, mail = D.pairs.mail;
+const w = D.output.window;
+$("#sub").textContent = `${w.from} → ${w.to} · ${D.output.timezone} · local only, contains real mail and calendar data`;
+const cal = D.pairs.meetings, mail = D.pairs.mail;
 $("#stats").innerHTML = [
-  ["calendar records", D.raw.calendarView.length], ["calendar entries", cal.length],
+  ["calendar records", D.raw.calendarView.length], ["meetings", cal.length],
   ["mail records", D.raw.inbox.length + D.raw.sent.length], ["mail threads", mail.length],
-  ["entries with rooms", cal.filter((p) => p.entry.labels.rooms).length],
+  ["meetings with rooms", cal.filter((p) => p.entry.rooms).length],
   ["output.json", kb(D.output)], ["raw Graph", kb(D.raw)],
-  ["/me proxyAddresses returned", D.meSummary.proxyAddressesReturned ? "yes" : "no"],
+  ["/me proxyAddresses returned", D.proxyAddressesReturned ? "yes" : "no"],
 ].map(([k, v]) => `<div class="stat">${esc(k)}: <b>${esc(v)}</b></div>`).join("");
 
 function head(p) {
   const e = p.entry;
-  if (e.type === "calendar") {
-    const o = e.meta.occurrences;
-    return `<span class="t">${esc(e.labels.title)}</span>
-      <span class="tag">${e.meta.recurring ? `series · ${o.length}` : "one-off"}</span>
-      ${e.labels.rooms ? `<span class="tag">room: ${esc(e.labels.rooms.join(", "))}</span>` : ""}
-      <span class="m">${esc(o[0].start)} · ${e.meta.others} others</span>`;
+  if (e.type === "meeting") {
+    const start = e.occurrences ? e.occurrences[0].start : e.start;
+    return `<span class="t">${esc(e.title)}</span>
+      <span class="tag">${e.recurring ? `series · ${e.occurrences.length}` : "one-off"}</span>
+      ${e.rooms ? `<span class="tag">room: ${esc(e.rooms.join(", "))}</span>` : ""}
+      <span class="m">${esc(start)} · ${(e.attendees?.length ?? 0) + (e.moreAttendees ?? 0)} attendees</span>`;
   }
-  return `<span class="t">${esc(e.labels.subject)}</span>
-    <span class="tag">${e.meta.messages} msg${e.meta.lastFromMe ? " · you last" : ""}</span>
-    <span class="m">${esc(e.meta.lastAt)} · ${esc(e.labels.lastFrom ?? "")}</span>`;
+  return `<span class="t">${esc(e.subject)}</span>
+    <span class="tag">${e.messages} msg${e.lastFromYou ? " · you last" : ""}</span>
+    <span class="m">${esc(e.lastAt)} · ${esc(e.lastFrom ?? "")}</span>`;
 }
 
 function entries(list) {
@@ -98,12 +98,12 @@ function entries(list) {
     </div></details>`).join("");
 }
 
-let tab = "calendar";
+let tab = "meetings";
 function render() {
   document.querySelectorAll("nav button").forEach((b) => b.setAttribute("aria-pressed", String(b.dataset.tab === tab)));
-  $("#q").style.visibility = tab === "calendar" || tab === "mail" ? "visible" : "hidden";
+  $("#q").style.visibility = tab === "meetings" || tab === "mail" ? "visible" : "hidden";
   $("#main").innerHTML =
-    tab === "calendar" ? entries(cal) :
+    tab === "meetings" ? entries(cal) :
     tab === "mail" ? entries(mail) :
     `<div class="full"><pre>${json(tab === "output" ? D.output : D.raw)}</pre></div>`;
 }

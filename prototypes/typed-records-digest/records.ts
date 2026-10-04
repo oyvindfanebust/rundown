@@ -151,8 +151,14 @@ export interface CalendarEvent extends RecordBase {
   location?: Untrusted<string>;
   organizer: Person;
   isOrganizer: boolean;
-  /** Resources (rooms) filtered out, as today. */
+  /** People only. Rooms are split out into `rooms`. */
   attendees: Attendee[];
+  /**
+   * Meeting rooms: attendees Graph types `resource`, plus any attendee whose address is
+   * one of the event's `locations[]` (a room typed into the To line arrives as an
+   * ordinary `required` attendee). Display names only.
+   */
+  rooms: Untrusted<string>[];
   myResponse: Response;
   showAs: ShowAs;
   isCancelled: boolean;
@@ -160,8 +166,8 @@ export interface CalendarEvent extends RecordBase {
   isOnlineMeeting: boolean;
   /** Part of a series: Graph `type` is `occurrence` or `exception`. */
   recurring: boolean;
-  /** An exception whose `start` differs from Graph's `originalStart`. Derived by code. */
-  moved: boolean;
+  /** Graph's `originalStart`, kept only on an exception whose `start` differs from it (moved). */
+  originalStart?: Instant;
 }
 
 /** What a Source emits and the Aggregator groups. Discriminated on `type`. */

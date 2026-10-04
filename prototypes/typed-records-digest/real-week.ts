@@ -10,7 +10,7 @@ import { createHash } from "node:crypto";
 import { mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { getToken } from "../../src/sources/graph/auth.ts";
-import type { CalendarEntry, MailEntry, Occurrence } from "./output.ts";
+import type { Meeting, MailThread, Occurrence, Output, YourResponse, ShowAs } from "./output.ts";
 
 const TZ = "Europe/Oslo";
 const FROM = process.argv[2] ?? "2026-09-27T22:00:00Z"; // Mon 28 Sep 00:00 Oslo
@@ -106,12 +106,12 @@ function zoned(iso: string): string {
   return `${parts.year}-${parts.month}-${parts.day}T${parts.hour}:${parts.minute}:${parts.second}${sign}${hh}:${mm}`;
 }
 
-const rank = { low: 0, normal: 1, high: 2 } as const;
 
-// ── Mail → entries ──
+// ── Mail → threads ──
 
 type Raw = Record<string, any>;
 interface MailRec { raw: Raw; folder: "inbox" | "sent"; at: string; byMe: boolean }
+interface Pair<E> { entry: E; raw: Raw[] }
 
 const mailRecs: MailRec[] = [
   ...inbox.map((raw): MailRec => ({ raw, folder: "inbox", at: raw.receivedDateTime, byMe: false })),
@@ -124,70 +124,77 @@ for (const r of mailRecs) {
 const threads = new Map<string, MailRec[]>();
 for (const r of mailRecs) {
   const key = r.raw.conversationId ?? r.raw.id;
-  // Sent mail also lands in Inbox when you mail yourself: dedup by id within a thread.
+  // Mail to yourself lands in both folders: dedup by id within a thread.
   const list = threads.get(key) ?? [];
   if (!list.some((x) => x.raw.id === r.raw.id)) list.push(r);
   threads.set(key, list);
 }
 
-interface Pair<E> { entry: E; raw: Raw[] }
+/** Collects people other than the user, deduped by address, in insertion order. */
+function peopleList() {
+  const seen = new Set<string>();
+  const names: string[] = [];
+  return {
+    names,
+    add(ea?: { name?: string; address?: string }, skip?: Set<string>) {
+      const addr = ea?.address?.toLowerCase();
+      if (!addr || isMe(addr) || seen.has(addr) || skip?.has(addr)) return;
+      seen.add(addr);
+      names.push(ea?.name || addr.split("@")[0]!);
+    },
+  };
+}
 
-const mailEntries: Pair<MailEntry>[] = [...threads.entries()].map(([convId, recs]) => {
+/** `people` clamped to WHO_MAX plus the overflow count, both omitted when empty. */
+function clampPeople(names: string[], key: "people" | "attendees", moreKey: "morePeople" | "moreAttendees") {
+  return {
+    ...(names.length ? { [key]: names.slice(0, WHO_MAX).map((n) => label(n)!) } : {}),
+    ...(names.length > WHO_MAX ? { [moreKey]: names.length - WHO_MAX } : {}),
+  };
+}
+
+const mailEntries: Pair<MailThread>[] = [...threads.entries()].map(([convId, recs]) => {
   recs.sort((a, b) => a.at.localeCompare(b.at));
   const last = recs[recs.length - 1]!;
-  // People other than the user: last sender first, then other senders newest first, then recipients.
-  const seen = new Set<string>();
-  const people: string[] = [];
-  const add = (ea?: { name?: string; address?: string }) => {
-    const addr = ea?.address?.toLowerCase();
-    if (!addr || isMe(addr) || seen.has(addr)) return;
-    seen.add(addr);
-    people.push(ea?.name || addr.split("@")[0]!);
-  };
-  for (const r of [...recs].reverse()) add(r.raw.from?.emailAddress);
+  const people = peopleList();
+  for (const r of [...recs].reverse()) people.add(r.raw.from?.emailAddress);
   for (const r of [...recs].reverse())
-    for (const p of [...(r.raw.toRecipients ?? []), ...(r.raw.ccRecipients ?? [])]) add(p.emailAddress);
+    for (const p of [...(r.raw.toRecipients ?? []), ...(r.raw.ccRecipients ?? [])]) people.add(p.emailAddress);
+  const fromYou = recs.filter((r) => r.byMe).length;
+  const unread = recs.filter((r) => r.folder === "inbox" && r.raw.isRead === false).length;
+  const imp = new Set(recs.map((r) => r.raw.importance));
+  const importance = imp.has("high") ? "high" : imp.size === 1 && imp.has("low") ? "low" : undefined;
   const continues = recs.some((r) => {
     const idx = r.raw.conversationIndex as string | undefined;
     return !!idx && Buffer.from(idx, "base64").length > 22;
   });
-  const importance = recs.reduce<"low" | "normal" | "high">(
-    (m, r) => (rank[r.raw.importance as keyof typeof rank] > rank[m] ? r.raw.importance : m),
-    "low",
-  );
-  const lastFrom = last.byMe ? undefined : label(last.raw.from?.emailAddress?.name ?? last.raw.from?.emailAddress?.address);
-  const entry: MailEntry = {
-    type: "mail-thread",
-    fingerprint: digest(`graph\nmessage-series\n${convId}`),
-    meta: {
-      messages: recs.length,
-      fromMe: recs.filter((r) => r.byMe).length,
-      firstAt: zoned(recs[0]!.at),
-      lastAt: zoned(last.at),
-      lastFromMe: last.byMe,
-      continuesFromBefore: continues,
-      others: people.length,
-      unread: recs.filter((r) => r.folder === "inbox" && r.raw.isRead === false).length,
-      importance,
-      flagged: recs.some((r) => r.raw.flag?.flagStatus === "flagged"),
-      hasAttachments: recs.some((r) => r.raw.hasAttachments === true),
-    },
-    labels: {
-      subject: label(last.raw.subject) ?? "(no subject)",
-      ...(lastFrom ? { lastFrom } : {}),
-      people: people.slice(0, WHO_MAX).map((p) => label(p)!),
-    },
+  const entry = {
+    id: digest(`graph\nmessage-series\n${convId}`),
+    type: "mail",
+    subject: label(last.raw.subject) ?? "(no subject)",
+    messages: recs.length,
+    ...(fromYou ? { fromYou } : {}),
+    firstAt: zoned(recs[0]!.at),
+    lastAt: zoned(last.at),
+    ...(last.byMe
+      ? { lastFromYou: true }
+      : { lastFrom: label(last.raw.from?.emailAddress?.name ?? last.raw.from?.emailAddress?.address) ?? "(unknown)" }),
+    ...clampPeople(people.names, "people", "morePeople"),
+    ...(unread ? { unread } : {}),
+    ...(importance ? { importance } : {}),
+    ...(recs.some((r) => r.raw.flag?.flagStatus === "flagged") ? { flagged: true } : {}),
+    ...(recs.some((r) => r.raw.hasAttachments === true) ? { attachments: true } : {}),
+    ...(continues ? { continuesFromBefore: true } : {}),
     summary: "(not generated: summaries are #123)",
-  };
+  } as MailThread;
   return { entry, raw: recs.map((r) => ({ _folder: r.folder, ...r.raw })) };
 });
-mailEntries.sort((a, b) => b.entry.meta.lastAt.localeCompare(a.entry.meta.lastAt));
+mailEntries.sort((a, b) => b.entry.lastAt.localeCompare(a.entry.lastAt));
 
-// ── Calendar → entries ──
+// ── Calendar → meetings ──
 //
 // Rooms are split from people (the user's call on #122): an attendee is a room when Graph
-// types it `resource`, or when its address is one of the event's `locations[]`. Rooms go
-// to `labels.rooms`, never to `people` or `others`.
+// types it `resource`, or when its address is one of the event's `locations[]`.
 
 const series = new Map<string, Raw[]>();
 for (const e of events) {
@@ -196,101 +203,112 @@ for (const e of events) {
 }
 
 const day = (dt?: { dateTime?: string }) => (dt?.dateTime ?? "").slice(0, 10);
-const inst = (dt?: { dateTime?: string }) => zoned((dt?.dateTime ?? "").replace(/\.\d+$/, ""));
+const utc = (dt?: { dateTime?: string }) => `${(dt?.dateTime ?? "").replace(/\.\d+$/, "")}Z`;
+const response = (r?: string): YourResponse | undefined =>
+  r === "accepted" ? "accepted" : r === "tentativelyAccepted" ? "tentative" : r === "declined" ? "declined"
+    : r === "notResponded" ? "notResponded" : undefined; // "organizer" and "none" say nothing
+const showAs = (s?: string): ShowAs | undefined =>
+  s === "free" || s === "tentative" || s === "oof" || s === "workingElsewhere" ? s : undefined;
 
-// Extended entry type: the prototype's CalendarEntry plus the room split proposed here.
-type CalendarEntryWithRooms = CalendarEntry & { labels: CalendarEntry["labels"] & { rooms?: string[] } };
-
-const calendarEntries: Pair<CalendarEntryWithRooms>[] = [...series.entries()].map(([key, occ]) => {
+const meetingEntries: Pair<Meeting>[] = [...series.entries()].map(([key, occ]) => {
+  occ.sort((a, b) => utc(a.start).localeCompare(utc(b.start)));
   const first = occ[0]!;
   const recurring = !!first.seriesMasterId;
+  const allDay = first.isAllDay === true;
+  const at = (dt: any) => (allDay ? day(dt) : zoned(utc(dt)));
+
   const roomAddrs = new Set<string>();
-  const rooms: string[] = [];
   for (const e of occ) {
     for (const l of e.locations ?? []) {
       const a = (l.locationEmailAddress ?? l.locationUri)?.toLowerCase();
-      if (a && a.includes("@")) roomAddrs.add(a);
+      if (a?.includes("@")) roomAddrs.add(a);
     }
-    for (const a of e.attendees ?? []) {
+    for (const a of e.attendees ?? [])
       if (a.type === "resource" && a.emailAddress?.address) roomAddrs.add(a.emailAddress.address.toLowerCase());
-    }
   }
-  const seen = new Set<string>();
-  const people: string[] = [];
-  const organizerAddr = first.organizer?.emailAddress?.address?.toLowerCase();
-  const orgIsMe = first.isOrganizer === true || isMe(organizerAddr);
+  const rooms: string[] = [];
+  const roomSeen = new Set<string>();
+  const people = peopleList();
+  const youOrganize = first.isOrganizer === true || isMe(first.organizer?.emailAddress?.address);
   for (const e of occ) {
     for (const a of [{ emailAddress: e.organizer?.emailAddress }, ...(e.attendees ?? [])]) {
       const addr = a.emailAddress?.address?.toLowerCase();
-      if (!addr || seen.has(addr)) continue;
-      seen.add(addr);
-      if (roomAddrs.has(addr)) {
-        rooms.push(a.emailAddress?.name || addr.split("@")[0]!);
+      if (addr && roomAddrs.has(addr)) {
+        if (!roomSeen.has(addr)) { roomSeen.add(addr); rooms.push(a.emailAddress?.name || addr.split("@")[0]!); }
         continue;
       }
-      if (isMe(addr)) continue;
-      people.push(a.emailAddress?.name || addr.split("@")[0]!);
+      people.add(a.emailAddress, roomAddrs);
     }
   }
-  const occurrences: Occurrence[] = occ.map((e) => ({
-    start: e.isAllDay ? day(e.start) : inst(e.start),
-    end: e.isAllDay ? day(e.end) : inst(e.end),
-    myResponse: e.responseStatus?.response ?? "none",
-    showAs: e.showAs ?? "unknown",
-    cancelled: e.isCancelled === true,
-    moved: e.type === "exception" && !!e.originalStart &&
-      Date.parse(e.originalStart) !== Date.parse(`${(e.start?.dateTime ?? "").replace(/\.\d+$/, "")}Z`),
-  }));
-  const location = label(first.location?.displayName);
-  const entry: CalendarEntryWithRooms = {
-    type: "calendar",
-    fingerprint: digest(`graph\n${recurring ? "event-series" : "event"}\n${key}`),
-    meta: {
-      recurring,
-      isAllDay: first.isAllDay === true,
-      isOrganizer: orgIsMe,
-      isOnlineMeeting: first.isOnlineMeeting === true,
-      continuesFromBefore: occ.some((e) => Date.parse(`${(e.start?.dateTime ?? "").replace(/\.\d+$/, "")}Z`) < Date.parse(FROM)),
-      others: people.length,
-      occurrences,
-    },
-    labels: {
-      title: label(first.subject) ?? "(no subject)",
-      ...(location ? { location } : {}),
-      ...(rooms.length ? { rooms: rooms.map((r) => label(r)!) } : {}),
-      ...(!orgIsMe && first.organizer?.emailAddress?.name ? { organizer: label(first.organizer.emailAddress.name)! } : {}),
-      people: people.slice(0, WHO_MAX).map((p) => label(p)!),
-    },
+  // Location text that only names the rooms adds nothing.
+  const loc = first.location?.displayName as string | undefined;
+  const locParts = (loc ?? "").split(";").map((s) => s.trim().toLowerCase()).filter(Boolean);
+  const location = locParts.length && !locParts.every((p) => rooms.some((r) => r.toLowerCase() === p)) ? label(loc) : undefined;
+
+  // The series' response is the most common one; an occurrence repeats it only when it differs.
+  const responses = occ.map((e) => response(e.responseStatus?.response));
+  const tally = new Map<string, number>();
+  for (const r of responses) if (r) tally.set(r, (tally.get(r) ?? 0) + 1);
+  const yourResponse = youOrganize ? undefined : ([...tally.entries()].sort((a, b) => b[1] - a[1])[0]?.[0] as YourResponse | undefined);
+
+  const base = {
+    id: digest(`graph\n${recurring ? "event-series" : "event"}\n${key}`),
+    type: "meeting",
+    title: label(first.subject) ?? "(no subject)",
+    ...(allDay ? { allDay: true } : {}),
+    ...(rooms.length ? { rooms: rooms.map((r) => label(r)!) } : {}),
+    ...(location ? { location } : {}),
+    ...(first.isOnlineMeeting ? { online: true } : {}),
+    ...(youOrganize ? { youOrganize: true } : first.organizer?.emailAddress?.name ? { organizer: label(first.organizer.emailAddress.name)! } : {}),
+    ...(yourResponse ? { yourResponse } : {}),
+    ...(showAs(first.showAs) ? { showAs: showAs(first.showAs) } : {}),
+    ...clampPeople(people.names, "attendees", "moreAttendees"),
+    ...(Date.parse(utc(first.start)) < Date.parse(FROM) ? { continuesFromBefore: true } : {}),
   };
+  const entry = recurring
+    ? ({
+        ...base,
+        recurring: true,
+        occurrences: occ.map((e, i): Occurrence => {
+          const moved = e.type === "exception" && e.originalStart && Date.parse(e.originalStart) !== Date.parse(utc(e.start));
+          return {
+            start: at(e.start),
+            end: at(e.end),
+            ...(e.isCancelled ? { cancelled: true } : {}),
+            ...(moved ? { movedFrom: zoned(e.originalStart) } : {}),
+            ...(!youOrganize && responses[i] && responses[i] !== yourResponse ? { yourResponse: responses[i] } : {}),
+          };
+        }),
+      } as Meeting)
+    : ({
+        ...base,
+        start: at(first.start),
+        end: at(first.end),
+        ...(first.isCancelled ? { cancelled: true } : {}),
+      } as Meeting);
   return { entry, raw: occ };
 });
-calendarEntries.sort((a, b) => a.entry.meta.occurrences[0]!.start.localeCompare(b.entry.meta.occurrences[0]!.start));
+const startOf = (m: Meeting) => ("occurrences" in m ? m.occurrences[0]!.start : m.start);
+meetingEntries.sort((a, b) => startOf(a.entry).localeCompare(startOf(b.entry)));
 
 // ── Output ──
 
-const output = {
-  envelope: {
-    window: { from: zoned(FROM), to: zoned(TO) },
-    timezone: TZ,
-    counts: [
-      { source: "graph", type: "calendar", records: events.length, entries: calendarEntries.length },
-      { source: "graph", type: "mail", records: mailRecs.length, entries: mailEntries.length },
-    ],
+const output: Output = {
+  window: { from: zoned(FROM), to: zoned(TO) },
+  timezone: TZ,
+  counts: {
+    meetings: { records: events.length, entries: meetingEntries.length },
+    mail: { records: mailRecs.length, entries: mailEntries.length },
+    chat: { records: 0, entries: 0 },
   },
   summary: "(not generated: needs the Summarizer)",
-  plan: [],
-  digest: {
-    calendar: calendarEntries.map((p) => p.entry),
-    mail: mailEntries.map((p) => p.entry),
-    chat: [],
-  },
+  meetings: meetingEntries.map((p) => p.entry),
+  mail: mailEntries.map((p) => p.entry),
+  chat: [],
 };
 
 const raw = { me, calendarView: events, inbox, sent };
-const pairs = {
-  calendar: calendarEntries,
-  mail: mailEntries,
-};
+const pairs = { meetings: meetingEntries, mail: mailEntries };
 
 await mkdir(OUT_DIR, { recursive: true });
 await writeFile(join(OUT_DIR, "output.json"), JSON.stringify(output, null, 2));
@@ -298,17 +316,15 @@ await writeFile(join(OUT_DIR, "graph-raw.json"), JSON.stringify(raw, null, 2));
 
 const page = (await Bun.file(new URL("./real-week.html", import.meta.url)).text()).replace(
   "/*DATA*/null",
-  JSON.stringify({ output, raw, pairs, meSummary: {
-    proxyAddressesReturned: Array.isArray(me.proxyAddresses) && me.proxyAddresses.length > 0,
-  } }).replace(/</g, "\\u003c"),
+  JSON.stringify({ output, raw, pairs, proxyAddressesReturned: Array.isArray(me.proxyAddresses) && me.proxyAddresses.length > 0 })
+    .replace(/</g, "\\u003c"),
 );
 await writeFile(join(OUT_DIR, "real-week.html"), page);
 
 const bytes = (v: unknown) => JSON.stringify(v).length;
 console.log(JSON.stringify({
   events: events.length, inbox: inbox.length, sent: sent.length,
-  calendarEntries: calendarEntries.length, mailEntries: mailEntries.length,
-  roomsFound: calendarEntries.filter((p) => p.entry.labels.rooms).length,
+  meetings: meetingEntries.length, mailThreads: mailEntries.length,
+  meetingsWithRooms: meetingEntries.filter((p) => p.entry.rooms).length,
   outputBytes: bytes(output), rawBytes: bytes(raw),
-  proxyAddressesReturned: Array.isArray(me.proxyAddresses) && me.proxyAddresses.length > 0,
 }));
