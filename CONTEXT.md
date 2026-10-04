@@ -343,6 +343,27 @@ unit is the same whatever the window's length. An entry is summarized, never pla
 extracts no commitments, tasks or waiting items from it; planning is the consumer's job.
 _Avoid_: digest item (collides with [ExtractedItem](#extracteditem)), message, event (those are records).
 
+### digest
+
+Planned, not yet built (map [#117](https://github.com/oyvindfanebust/rundown/issues/117)). What
+`rundown` emits for a window, in place of the [Brief](#brief): every
+[digest entry](#digest-entry) in the window, each with its [trusted values](#trusted-value),
+[labels](#label) and a short model-written summary, plus one overview summary of the window.
+It is a readout of the user's mail, chat and calendar, not a plan: nothing is curated out,
+ranked or turned into tasks. Emitted by `rundown digest`.
+_Avoid_: Brief (the curated, planned predecessor), report.
+
+### Digester
+
+Planned, not yet built (map [#117](https://github.com/oyvindfanebust/rundown/issues/117)). The
+component that turns a [Bundle](#bundle) into a [digest](#digest), in place of the
+[Planner](#planner). It groups the Bundle's records into [digest entries](#digest-entry), makes
+the one [Summarizer](#summarizer) call for the window, and copies trusted values and labels into
+each entry by code. Grouping reads untrusted content (mail threads merge on sender and subject), so
+it lives here, beside the only place untrusted bytes are unwrapped, and the
+[Aggregator](#aggregator) stays content-blind.
+_Avoid_: digest producer, Planner (it plans nothing).
+
 ### Emission
 
 The composition-root step where the [Brief](#brief) leaves `rundown`. `rundown brief` serializes
