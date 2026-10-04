@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.13.1](https://github.com/oyvindfanebust/rundown/compare/v0.13.0...v0.13.1) (2026-10-04)
+
+
+### Bug Fixes
+
+* **cli:** let --debug reach the update gate's events ([#156](https://github.com/oyvindfanebust/rundown/issues/156)) ([72452c4](https://github.com/oyvindfanebust/rundown/commit/72452c40be8225af9f39f35556ed01f4aaf387ed)), closes [#105](https://github.com/oyvindfanebust/rundown/issues/105)
+
 ## [0.13.0](https://github.com/oyvindfanebust/rundown/compare/v0.12.0...v0.13.0) (2026-10-04)
 
 
