@@ -22,6 +22,7 @@ import {
 import {
   DigestSchema,
   ENTRY_SUMMARY_MAX,
+  ENTRY_SUMMARY_TARGET,
   NAMES_MAX,
   OVERVIEW_MAX,
   OVERVIEW_TARGET,
@@ -88,9 +89,10 @@ function instructionsFor(ctx: DigestContext): string {
   const kinds = (Object.values(RUN_ID) as Array<{ prefix: string; noun: string }>)
     .map(({ prefix, noun }) => `[${prefix}…] ${noun}`)
     .join(", ");
-  // The entry cap and the overview target come from the contract, so the prompt and the parse
-  // cannot drift (ADR-0011). The instructions never state OVERVIEW_MAX: the model aims at a stated
-  // count, and the cap sits well above the target so a busy window still parses (ADR-0021).
+  // The prompt and the parse read the same contract constants (ADR-0011). The instructions never
+  // state OVERVIEW_MAX or ENTRY_SUMMARY_MAX: the model aims at a stated count, the overview cap
+  // sits well above its target so a busy window still parses, and an entry summary over its cap
+  // is clamped rather than failing the call (ADR-0021).
   return `You are summarizing one window of the user's mail, chat and calendar.
 The data holds one block per entry under an opaque id in brackets: ${kinds}.
 Messages inside a block are listed oldest first.
@@ -105,8 +107,8 @@ Return:
   before the generated-at time and what is scheduled after it. Report; do not judge what is
   still open, and do not tell the user what to do.
 - "entries": one {"id", "summary"} for every mail thread and chat conversation, with the
-  bracketed id copied exactly (without the brackets). Each summary is at most
-  ${ENTRY_SUMMARY_MAX} characters and says what the thread or conversation is about and where it stands. Do not
+  bracketed id copied exactly (without the brackets). Each summary is
+  1–2 sentences, about ${ENTRY_SUMMARY_TARGET} characters, and says what the thread or conversation is about and where it stands. Do not
   return entries for meetings; they are context for the overview only.
 Write plain text: no links, no URLs, no markdown.`;
 }
@@ -544,7 +546,8 @@ export async function digest(bundle: Bundle, ctx: DigestContext, deps: DigesterD
     const target = byRunId.get(id);
     if (target === undefined || target.kind === "meeting" || summarized.has(id)) continue;
     summarized.add(id);
-    // Defang can lengthen text, so the cap is applied again after it.
+    // The parse accepts a summary over the digest cap, and defang can lengthen text, so the cap
+    // is applied here, after defang.
     target.entry.summary = clamp(defang(stripInvisible(summary)), ENTRY_SUMMARY_MAX);
   }
   const unsummarized = mail.length + chat.length - summarized.size;

@@ -339,7 +339,7 @@ describe("injection corpus: 6. oversized payloads", () => {
 
   const OUTPUTS: Array<[label: string, output: unknown]> = [
     ["a 2,001-char overview", { summary: "x".repeat(2_001), entries: [{ id: "e1", summary: "ok" }] }],
-    ["a 301-char entry summary", { summary: "ok", entries: [{ id: "e1", summary: "x".repeat(301) }] }],
+    ["a 1,001-char entry summary", { summary: "ok", entries: [{ id: "e1", summary: "x".repeat(1_001) }] }],
   ];
 
   test.each(OUTPUTS)("%s fails the output parse after 3 attempts", async (_label, output) => {
@@ -353,6 +353,12 @@ describe("injection corpus: 6. oversized payloads", () => {
     expect(calls).toHaveLength(1);
     expect(result.summary).toHaveLength(2_000);
     expect(result.mail[0]!.summary).toHaveLength(300);
+  });
+
+  test("a 600-char entry summary is clamped to 300 in one call, not retried", async () => {
+    const { result, calls } = await pipeline([mail()], { summary: "ok", entries: [{ id: "e1", summary: "s".repeat(600) }] });
+    expect(calls).toHaveLength(1);
+    expect(result.mail[0]!.summary).toBe(`${"s".repeat(299)}…`);
   });
 });
 

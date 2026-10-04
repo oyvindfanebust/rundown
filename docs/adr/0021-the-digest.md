@@ -137,12 +137,18 @@ input, joins the model's output, and copies every trusted value and label into t
   timezone and one overview prompt for every window: describe what happened before `generatedAt`
   and what is scheduled after it, and do not judge what is still open. `REVIEW_TASK` and
   `PLAN_TASK` go. The model returns `{ summary, entries: [{ id, summary }] }`, with the overview at
-  most 2,000 chars and each entry summary at most 300; a longer one fails the parse.
+  most 2,000 chars and each entry summary at most 1,000; a longer one fails the parse.
 - **Overview target and cap.** The instructions ask for an overview of 3–5 sentences, about 800
   chars (`OVERVIEW_TARGET`), and never state the 2,000 cap (`OVERVIEW_MAX`); the cap reaches the
   model only as the output schema's `maxLength`. The cap was 800, the same length the prompt
   stated, and live runs on busy single days returned overviews of 891 and 972 chars, failed the
   parse three times and produced no digest. It was raised to 2,000 with the target kept at 800.
+- **Entry summary target and cap.** The instructions ask for an entry summary of 1–2 sentences,
+  about 180 chars (`ENTRY_SUMMARY_TARGET`), and never state the 300 cap (`ENTRY_SUMMARY_MAX`). The
+  output parse accepts up to 1,000 chars (`ENTRY_SUMMARY_PARSE_MAX`), a sanity bound; the Digester
+  clamps a longer summary to 300 with a trailing "…", so the digest keeps its 300 cap. The parse
+  used to enforce 300, which the prompt also stated, so one summary over it failed all three
+  attempts and the run. Live summaries measure a p99 of 221 chars and a maximum of 263.
 - **The id join.** Code joins entry summaries on the opaque id. Unknown ids, ids of a meeting and
   duplicates (the first wins) are dropped. A mail or chat entry left without a summary is counted
   in `unsummarized` and keeps its code-filled fields. Neither case triggers a retry: a missing

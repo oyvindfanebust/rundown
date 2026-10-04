@@ -54,8 +54,12 @@ function container<T extends z.ZodType>(schema: T, description: string): T {
 export const OVERVIEW_MAX = 2000;
 /** Overview length the prompt asks for; well under `OVERVIEW_MAX` so a busy window still parses. */
 export const OVERVIEW_TARGET = 800;
-/** Longest mail or chat entry summary. */
+/** Longest mail or chat entry summary in the digest; the Digester clamps a longer one to it. */
 export const ENTRY_SUMMARY_MAX = 300;
+/** Entry summary length the prompt asks for; well under `ENTRY_SUMMARY_MAX`. */
+export const ENTRY_SUMMARY_TARGET = 180;
+/** Longest entry summary the Summarizer output parse accepts: a sanity bound, not the digest cap. */
+export const ENTRY_SUMMARY_PARSE_MAX = 1000;
 /** Most names a `people` or `attendees` list carries; the rest are counted. */
 export const NAMES_MAX = 8;
 
@@ -371,14 +375,19 @@ export const DIGEST_JSON_SCHEMA: Record<string, unknown> = jsonSchemaOf(DigestSc
  * The Summarizer's output: the overview and one summary per mail or chat entry, keyed by the
  * opaque per-run id the Digester rendered. Not strict: extra keys are stripped by the parse
  * rather than failing it, so the model cannot set any other field and a stray key costs no
- * retry. A summary over its cap does fail the parse.
+ * retry. An overview over `OVERVIEW_MAX` or an entry summary over `ENTRY_SUMMARY_PARSE_MAX` fails
+ * the parse; an entry summary between `ENTRY_SUMMARY_MAX` and that bound parses, and the Digester
+ * clamps it.
  */
 export const SummarizerOutputSchema = z.object({
   summary: model(z.string().max(OVERVIEW_MAX), `The overview, at most ${OVERVIEW_MAX} chars.`),
   entries: z.array(
     z.object({
       id: trusted(z.string(), "The bracketed entry id from the data, copied exactly."),
-      summary: model(z.string().max(ENTRY_SUMMARY_MAX), `The entry summary, at most ${ENTRY_SUMMARY_MAX} chars.`),
+      summary: model(
+        z.string().max(ENTRY_SUMMARY_PARSE_MAX),
+        `The entry summary, 1–2 sentences, about ${ENTRY_SUMMARY_TARGET} chars.`,
+      ),
     }),
   ),
 });

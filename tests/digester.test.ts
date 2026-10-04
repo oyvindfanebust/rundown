@@ -415,10 +415,6 @@ describe("digest — the id join", () => {
     expect(result).not.toHaveProperty("lastFromYou");
   });
 
-  test("a summary over 300 chars fails the parse", async () => {
-    await expect(run([mail()], () => ({ summary: "o", entries: [{ id: "e1", summary: "s".repeat(301) }] }))).rejects.toThrow();
-  });
-
   test("summaries and the overview are defanged", async () => {
     const { result } = await run([mail()], () => ({
       summary: "See ![x](https://evil.example/a) now",
@@ -475,6 +471,25 @@ describe("digest — overview length", () => {
     expect(instructions).toContain("3–5 sentences, about 800 characters");
     expect(instructions).not.toContain("2000");
     expect(instructions).not.toContain("2,000");
+  });
+});
+
+describe("digest — entry summary length", () => {
+  test("a 600-char entry summary is emitted clamped to 300 with a trailing ellipsis", async () => {
+    const { result } = await run([mail()], () => ({ summary: "o", entries: [{ id: "e1", summary: "s".repeat(600) }] }));
+    expect(result.mail[0]!.summary).toBe(`${"s".repeat(299)}…`);
+  });
+
+  test("an entry summary over 1,000 chars fails the parse", async () => {
+    const attempt = run([mail()], () => ({ summary: "o", entries: [{ id: "e1", summary: "s".repeat(1_001) }] }));
+    await expect(attempt).rejects.toThrow(/too_big[\s\S]*summary/);
+  });
+
+  test("the instruction region asks for 1–2 sentences, about 180 characters, and never states the 300 cap", async () => {
+    const { calls } = await run([mail()]);
+    const { instructions } = calls[0]!;
+    expect(instructions).toContain("1–2 sentences, about 180 characters");
+    expect(instructions).not.toContain("300");
   });
 });
 

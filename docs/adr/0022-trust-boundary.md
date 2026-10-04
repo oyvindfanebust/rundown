@@ -35,8 +35,8 @@ Every digest field has exactly one class, recorded as Zod metadata in the contra
   a room or a location. Unfabricated, not trusted. It is stripped of smuggled codepoints, defanged,
   collapsed to one line and clamped with a trailing "…": 255 chars for subjects and titles, 120
   for names, channels, rooms and locations. An empty label is absent.
-- **model output:** the overview and the entry summaries. Defanged and length-bounded by the
-  schema (2,000 and 300).
+- **model output:** the overview and the entry summaries. Defanged, clamped with a trailing "…"
+  and length-bounded by the digest schema (2,000 and 300).
 
 ### 2. Never out
 

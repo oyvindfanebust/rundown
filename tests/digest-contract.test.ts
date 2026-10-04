@@ -206,10 +206,10 @@ describe("SummarizerOutputSchema.parse", () => {
     expect(() => SummarizerOutputSchema.parse({ ...base(), summary: "a".repeat(2_000) })).not.toThrow();
   });
 
-  test("an entry summary over 300 chars fails; at 300 it passes", () => {
+  test("an entry summary over 1,000 chars fails; at 1,000 it passes", () => {
     const at = (n: number) => ({ ...base(), entries: [{ id: "m1", summary: "a".repeat(n) }] });
-    expect(() => SummarizerOutputSchema.parse(at(301))).toThrow();
-    expect(() => SummarizerOutputSchema.parse(at(300))).not.toThrow();
+    expect(() => SummarizerOutputSchema.parse(at(1_001))).toThrow();
+    expect(() => SummarizerOutputSchema.parse(at(1_000))).not.toThrow();
   });
 });
 
@@ -258,6 +258,13 @@ describe("DigestSchema", () => {
   test("an overview over 2,000 chars fails; at 2,000 it passes", () => {
     expect(parses({ ...emptyDigest(), summary: "a".repeat(2_001) })).toBe(false);
     expect(parses({ ...emptyDigest(), summary: "a".repeat(2_000) })).toBe(true);
+  });
+
+  test("a mail or chat entry summary over 300 chars fails; at 300 it passes", () => {
+    expect(parses({ ...emptyDigest(), mail: [{ ...mailThread(), summary: "a".repeat(301) }] })).toBe(false);
+    expect(parses({ ...emptyDigest(), mail: [{ ...mailThread(), summary: "a".repeat(300) }] })).toBe(true);
+    expect(parses({ ...emptyDigest(), chat: [{ ...chatConversation(), summary: "a".repeat(301) }] })).toBe(false);
+    expect(parses({ ...emptyDigest(), chat: [{ ...chatConversation(), summary: "a".repeat(300) }] })).toBe(true);
   });
 
   test("an unknown key fails, at the top level and in an entry", () => {
