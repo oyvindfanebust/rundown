@@ -2,14 +2,12 @@
 // SourceDescriptor. A descriptor holds everything true of a source before any
 // config exists — its key/label, its option schema, and a `build` step that
 // constructs a config-injected instance.
-// `buildRegistry(selection)` is the composition step at the composition root: it
-// turns the validated config selection into live, config-injected Sources.
+// The composition root (`src/root.ts`) receives this map as an argument and builds
+// the selected sources from it with `buildRegistry` (`source.ts`).
 // Adding a source is one import + one descriptor entry — explicit, typed,
 // greppable. No self-registration, no dynamic discovery.
 
-import type { Descriptors, Sources } from "./source.ts";
-import { noDebug, type DebugSink } from "../debug.ts";
-import type { Selection } from "../config.ts";
+import type { Descriptors } from "./source.ts";
 import { GraphSource, GRAPH_OPTIONS } from "./graph/index.ts";
 import { SlackSource, SLACK_OPTIONS } from "./slack/index.ts";
 
@@ -31,19 +29,4 @@ export const descriptors: Descriptors = {
 /** Registered source keys, in a stable order (used by init/status/login). */
 export function registeredKeys(): string[] {
   return Object.keys(descriptors);
-}
-
-/**
- * The composition step (ADR-0008 §5): build the selected sources with their
- * resolved per-source config injected, keyed by source key. `status()`/`read()`
- * on each instance then close over `this.config` (#27). The output is the
- * {@link Sources} the Aggregator consumes. `debug` is the per-invocation debug
- * sink (ADR-0015 §4), injected the same way and defaulting to the no-op.
- */
-export function buildRegistry(selection: Selection[], debug: DebugSink = noDebug): Sources {
-  const out: Sources = {};
-  for (const { sourceKey, options } of selection) {
-    out[sourceKey] = descriptors[sourceKey]!.build(options, debug);
-  }
-  return out;
 }

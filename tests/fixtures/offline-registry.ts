@@ -4,9 +4,7 @@
 // reads nothing and needs no network. It is not a production source: nothing in
 // `src/` imports this file, so the release binary never contains it.
 
-import type { Descriptors, Source, Sources } from "../../src/sources/source.ts";
-import type { Selection } from "../../src/config.ts";
-import { noDebug, type DebugSink } from "../../src/debug.ts";
+import type { Descriptors, Source } from "../../src/sources/source.ts";
 
 function offlineSource(): Source {
   return {
@@ -35,10 +33,4 @@ export const descriptors: Descriptors = {
 
 export function registeredKeys(): string[] {
   return Object.keys(descriptors);
-}
-
-export function buildRegistry(selection: Selection[], debug: DebugSink = noDebug): Sources {
-  const out: Sources = {};
-  for (const { sourceKey, options } of selection) out[sourceKey] = descriptors[sourceKey]!.build(options, debug);
-  return out;
 }

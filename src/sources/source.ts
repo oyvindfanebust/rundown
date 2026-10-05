@@ -5,6 +5,7 @@
 
 import type { SourceRecord, Window } from "../domain.ts";
 import type { DebugSink } from "../debug.ts";
+import type { Selection } from "../config.ts";
 
 /** A single declared config option for a source (drives validation + the init template). */
 export interface OptionSpec {
@@ -128,7 +129,7 @@ export interface Source {
 
 /**
  * A source lookup, keyed by registry key. The seam the Aggregator accepts as a
- * dependency (ADR-0008 §5): the `buildRegistry(selection)` output in production
+ * dependency (ADR-0008 §5): the {@link buildRegistry} output in production
  * (config-injected instances), an in-memory fake in tests. Injected at the
  * composition root, so no consumer reaches into the module-global registry.
  */
@@ -158,3 +159,20 @@ export interface SourceDescriptor {
 
 /** The static registry: source key → descriptor. Consumed by config validation, `init`, and `buildRegistry`. */
 export type Descriptors = Record<string, SourceDescriptor>;
+
+/**
+ * The composition step (ADR-0008 §5): build the selected sources from the given
+ * descriptors with their resolved per-source config injected, keyed by source key.
+ * `status()`/`read()` on each instance then close over `this.config` (#27). The
+ * output is the {@link Sources} the Aggregator consumes. `debug` is the
+ * per-invocation debug sink (ADR-0015 §4); each source defaults it to the no-op.
+ * The descriptors are an argument, so the composition root builds from whatever
+ * map it was given: the static registry in production, fakes in tests.
+ */
+export function buildRegistry(descriptors: Descriptors, selection: Selection[], debug?: DebugSink): Sources {
+  const out: Sources = {};
+  for (const { sourceKey, options } of selection) {
+    out[sourceKey] = descriptors[sourceKey]!.build(options, debug);
+  }
+  return out;
+}
