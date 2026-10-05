@@ -3,29 +3,16 @@
 // logic lives here.
 
 import { parseArgs, type ParseArgsConfig } from "node:util";
-import { spawn } from "node:child_process";
-import { existsSync, realpathSync } from "node:fs";
-import { mkdir, writeFile, access } from "node:fs/promises";
-import { constants } from "node:fs";
+import { existsSync } from "node:fs";
+import { mkdir, writeFile } from "node:fs/promises";
 import { dirname } from "node:path";
 import { buildDigest } from "./digest.ts";
-import { configDir, configPath, resolveConfig, ConfigError } from "./config.ts";
+import { configPath, resolveConfig, ConfigError } from "./config.ts";
 import { parseWindowSelector, WindowError, WINDOW_SPANS, type WindowSelector } from "./temporal.ts";
 import { descriptors, registeredKeys, buildRegistry } from "./sources/registry.ts";
 import { narrateStatus, optionTemplateDefault, type Source } from "./sources/source.ts";
 import { debugEnabled, makeDebugSink, type DebugSink } from "./debug.ts";
-import {
-  armUpdateCheck,
-  autoUpdateDisabled,
-  downloadAndSwap,
-  fsSwapIO,
-  fsUpdateStateIO,
-  persistentFailureWarning,
-  readUpdateState,
-  renderVersionLine,
-  runUpdateWorker,
-  WORKER_ENV,
-} from "./update.ts";
+import { runUpdateWorkerIfRequested, startUpdateGate, updateWarning, versionLine } from "./update.ts";
 
 // Build-time semver (ADR-0001 §7): the release workflow injects RUNDOWN_VERSION via
 // `bun build --define` from the git tag; running from source falls back to the dev marker.
@@ -134,11 +121,7 @@ async function cmdStatus(debug: DebugSink): Promise<void> {
   // that always renders (ADR-0001 §5). It makes no network call — the numbers come
   // from the state document the background updater writes — so `status` stays a
   // diagnostic that cannot hang, and a broken config still gets a version answer.
-  out.write(`${renderVersionLine({
-    running: VERSION,
-    state: await readUpdateState(fsUpdateStateIO, configDir()),
-    autoUpdateDisabled: autoUpdateDisabled(),
-  })}\n`);
+  out.write(`${await versionLine(VERSION)}\n`);
 
   let config;
   try {
@@ -249,7 +232,7 @@ async function cmdDigest(debug: DebugSink, windowOverride?: WindowSelector, sour
   // Nothing about this reaches the digest: ADR-0021 pins that contract with a schema
   // test, and it is the untrusted-derived artifact.
   if (process.stderr.isTTY) {
-    const warning = persistentFailureWarning(await readUpdateState(fsUpdateStateIO, configDir()));
+    const warning = await updateWarning();
     if (warning) process.stderr.write(`${warning}\n`);
   }
   const result = await buildDigest({ windowOverride, sourceFilter, onProgress, onDebug: debug });
@@ -271,29 +254,7 @@ async function cmdDigest(debug: DebugSink, windowOverride?: WindowSelector, sour
 // first-party artifact over TLS) and the untrusted-content axis cannot both be
 // live in one process.
 
-/** The running executable with symlinks resolved, so the installer's convenience symlink is never the target. */
-function resolvedExecPath(): string {
-  try {
-    return realpathSync(process.execPath);
-  } catch {
-    return process.execPath;
-  }
-}
-
-if (process.env[WORKER_ENV] !== undefined) {
-  await runUpdateWorker({
-    io: fsUpdateStateIO,
-    dir: configDir(),
-    now: () => new Date(),
-    version: VERSION,
-    fetch,
-    // The target is the resolved executable, so the installer's convenience
-    // symlink is never replaced by a regular file.
-    swap: (latest) =>
-      downloadAndSwap({ fetch, io: fsSwapIO, target: resolvedExecPath(), version: latest }),
-  });
-  process.exit(0);
-}
+if (await runUpdateWorkerIfRequested({ version: VERSION })) process.exit(0);
 
 const [command, ...rest] = process.argv.slice(2);
 
@@ -331,45 +292,13 @@ function debugFlagOnArgv(name: string | undefined, args: string[]): boolean {
 // Fire before the command runs, not after: several paths below exit the process
 // directly, and a trailing hook would be skipped on exactly the error paths where
 // a stale version is most likely. The gate never throws and never waits on the
-// worker, so an armed check costs the command nothing.
-{
-  const debug = makeDebugSink(debugEnabled(debugFlagOnArgv(command, rest)), (s) => process.stderr.write(s));
-  await armUpdateCheck({
-    version: VERSION,
-    env: process.env,
-    dir: configDir(),
-    configFile: configPath(),
-    io: fsUpdateStateIO,
-    now: () => new Date(),
-    execPath: resolvedExecPath(),
-    dirWritable: async (dir) => {
-      try {
-        await access(dir, constants.W_OK);
-        return true;
-      } catch {
-        return false;
-      }
-    },
-    spawnWorker: (execPath) => {
-      // `detached: true` is load-bearing, not decoration: it calls setsid, putting
-      // the worker in its own session. Without it the worker stays in this process
-      // group and the `process.exit(0)` at the end of this file tears down the whole
-      // tree — including the candidate the worker is mid-way through smoke-testing,
-      // which then looks like a failed liveness check rather than a killed process.
-      // Found by scripts/update-e2e.sh; unit fakes cannot see it.
-      //
-      // The resolved executable path, never argv[0], which in a compiled binary is
-      // the literal runtime name.
-      const child = spawn(execPath, execPath === process.execPath ? [import.meta.path] : [], {
-        env: { ...process.env, [WORKER_ENV]: "1" },
-        detached: true,
-        stdio: "ignore",
-      });
-      child.unref();
-    },
-    debug: (reason, spawned) => debug({ kind: "update-gate", spawned, reason }),
-  });
-}
+// worker, so an armed check costs the command nothing. `entry` is this script's
+// path, which the worker needs when running from source.
+await startUpdateGate({
+  version: VERSION,
+  entry: import.meta.path,
+  debug: makeDebugSink(debugEnabled(debugFlagOnArgv(command, rest)), (s) => process.stderr.write(s)),
+});
 
 // ── dispatch ──────────────────────────────────────────────────────────────
 
