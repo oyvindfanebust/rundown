@@ -13,6 +13,7 @@ import {
   runUpdateWorker,
   discoverLatestVersion,
   persistentFailureWarning,
+  workerArgs,
   WORKER_ENV,
   type UpdateGateDeps,
   type GateInputs,
@@ -535,6 +536,22 @@ describe("armUpdateCheck", () => {
     const deps = gateDeps({ io, dirWritable: async () => { throw new Error("nope"); } });
     expect((await armUpdateCheck(deps)).spawn).toBe(false);
     expect(deps.spawns).toEqual([]);
+  });
+});
+
+// The spawn adapter lives in update.ts but the entry script is the CLI's, so the
+// caller passes it in. This module's own path must never be the worker's script.
+describe("workerArgs", () => {
+  test("from source, the runtime gets the caller's entry script", () => {
+    expect(workerArgs("/usr/local/bin/bun", "/repo/src/cli.ts", "/usr/local/bin/bun")).toEqual(["/repo/src/cli.ts"]);
+  });
+
+  test("a compiled binary is its own entry and takes no arguments", () => {
+    expect(workerArgs("/home/u/.local/bin/rundown-real", "/$bunfs/root/rundown", "/usr/local/bin/bun")).toEqual([]);
+  });
+
+  test("compares against this process's runtime by default", () => {
+    expect(workerArgs(process.execPath, "/repo/src/cli.ts")).toEqual(["/repo/src/cli.ts"]);
   });
 });
 

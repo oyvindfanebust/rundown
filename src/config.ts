@@ -217,7 +217,10 @@ export function parseConfig(text: string, descriptors: Descriptors): {
   }
 
   // autoUpdate — the durable off-switch for background self-update (ADR-0001 §5).
-  // Validated and documented here; no code reads it yet.
+  // Validated here so a bad value fails the command. The update gate reads this
+  // field itself with a lenient parser (readAutoUpdateSetting in update.ts), on
+  // purpose: the gate runs before config resolution and must never throw, and a
+  // broken config must still reach status's invalid-config message.
   let autoUpdate: boolean | undefined;
   if (obj.autoUpdate !== undefined) {
     if (typeof obj.autoUpdate !== "boolean") {

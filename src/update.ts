@@ -12,11 +12,15 @@
 // Effects arrive by parameter, following the Graph and Slack sources and the debug
 // sink: the caller supplies the filesystem operations, the directory, and the
 // clock, which is what makes every branch below testable without a real
-// filesystem.
+// filesystem. The production entry points at the end of the module bind those
+// parameters to the real process and filesystem, so the CLI assembles none of them.
 
-import { chmod, mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
+import { spawn } from "node:child_process";
+import { constants, realpathSync } from "node:fs";
+import { access, chmod, mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
-import { stripJsonc } from "./config.ts";
+import { configDir, configPath, stripJsonc } from "./config.ts";
+import type { DebugSink } from "./debug.ts";
 
 /** What the last update check did. */
 export type UpdateOutcome = "updated" | "current" | "refused" | "failed";
@@ -160,9 +164,9 @@ export function isNewerVersion(latest: string, running: string): boolean {
 /**
  * Whether auto-update is switched off for this invocation via
  * `RUNDOWN_DISABLE_AUTOUPDATE` (ADR-0001 §5). `0`, `false`, and empty read as off,
- * the same convention `RUNDOWN_DEBUG` uses. The durable config field is a separate
- * reader that arrives with the gate; when it is set, the gate records the refusal
- * in the state document and the version line names it from there.
+ * the same convention `RUNDOWN_DEBUG` uses. The durable config field has its own
+ * reader, {@link readAutoUpdateSetting}; when it is set, the gate records the
+ * refusal in the state document and the version line names it from there.
  */
 export function autoUpdateDisabled(env: NodeJS.ProcessEnv = process.env): boolean {
   const v = env.RUNDOWN_DISABLE_AUTOUPDATE;
@@ -294,6 +298,9 @@ export function updateGateDecision({
  * syntax error keeps auto-updating even if it contains the off-switch. That bias
  * is correct — a broken file should not strand someone on an old binary — and the
  * strict reader still rejects the same file the moment a real command runs.
+ *
+ * Keep this reader separate from `parseConfig`: reusing the strict path would let
+ * the gate throw, or keep a broken config from reaching `status`'s message.
  */
 export async function readAutoUpdateSetting(io: UpdateStateIO, path: string): Promise<boolean | undefined> {
   try {
@@ -765,4 +772,110 @@ export function persistentFailureWarning(state: UpdateState | undefined): string
   if (state.consecutiveFailures < FAILURE_WARN_THRESHOLD) return undefined;
   const why = state.reason ? ` (${state.reason})` : "";
   return `rundown: self-update has failed ${state.consecutiveFailures} times in a row${why}. Run \`rundown status\` for details.`;
+}
+
+// ── the production entry points the CLI calls ────────────────────────────────
+//
+// Everything above takes its effects by parameter. The functions below are the one
+// place that binds those parameters to the real process and filesystem, so the CLI
+// passes no IO objects or paths. Each builds its adapters and calls a tested
+// function above.
+
+/** The running executable with symlinks resolved, so the installer's convenience symlink is never the target. */
+function resolvedExecPath(): string {
+  try {
+    return realpathSync(process.execPath);
+  } catch {
+    return process.execPath;
+  }
+}
+
+/**
+ * The arguments the worker is spawned with. From source, the executable is the Bun
+ * runtime and needs the entry script; a compiled binary is its own entry and takes
+ * none. `entry` is the CLI's own `import.meta.path`, passed in because this
+ * module's path would name the wrong script.
+ */
+export function workerArgs(execPath: string, entry: string, runtimeExecPath: string = process.execPath): string[] {
+  return execPath === runtimeExecPath ? [entry] : [];
+}
+
+/**
+ * Run as the internal update worker when {@link WORKER_ENV} is set, and report
+ * whether it did. The caller exits when this returns true. It must be called before
+ * any argument handling, which is what keeps untrusted content out of the worker's
+ * reach (see {@link runUpdateWorker}).
+ */
+export async function runUpdateWorkerIfRequested(opts: { version: string }): Promise<boolean> {
+  if (process.env[WORKER_ENV] === undefined) return false;
+  await runUpdateWorker({
+    io: fsUpdateStateIO,
+    dir: configDir(),
+    now: () => new Date(),
+    version: opts.version,
+    fetch,
+    // The target is the resolved executable, so the installer's convenience
+    // symlink is never replaced by a regular file.
+    swap: (latest) =>
+      downloadAndSwap({ fetch, io: fsSwapIO, target: resolvedExecPath(), version: latest }),
+  });
+  return true;
+}
+
+/**
+ * Arm the update check against the real process and filesystem. `entry` is the
+ * CLI's `import.meta.path` (see {@link workerArgs}); `debug` receives the gate's
+ * one event. Never throws, like {@link armUpdateCheck}.
+ */
+export async function startUpdateGate(opts: { version: string; entry: string; debug: DebugSink }): Promise<GateDecision> {
+  return armUpdateCheck({
+    version: opts.version,
+    env: process.env,
+    dir: configDir(),
+    configFile: configPath(),
+    io: fsUpdateStateIO,
+    now: () => new Date(),
+    execPath: resolvedExecPath(),
+    dirWritable: async (dir) => {
+      try {
+        await access(dir, constants.W_OK);
+        return true;
+      } catch {
+        return false;
+      }
+    },
+    // This adapter is covered only by scripts/update-e2e.sh, not by unit fakes.
+    spawnWorker: (execPath) => {
+      // `detached: true` is required: it calls setsid, putting the worker in its
+      // own session. Without it the worker stays in the CLI's process group and the
+      // `process.exit(0)` at the end of the CLI tears down the whole tree, including
+      // the candidate the worker is midway through smoke-testing, which then looks
+      // like a failed liveness check rather than a killed process. Found by
+      // scripts/update-e2e.sh; unit fakes cannot see it.
+      //
+      // The resolved executable path, never argv[0], which in a compiled binary is
+      // the literal runtime name.
+      const child = spawn(execPath, workerArgs(execPath, opts.entry), {
+        env: { ...process.env, [WORKER_ENV]: "1" },
+        detached: true,
+        stdio: "ignore",
+      });
+      child.unref();
+    },
+    debug: (reason, spawned) => opts.debug({ kind: "update-gate", spawned, reason }),
+  });
+}
+
+/** The persistent-failure warning for the state on disk, or `undefined`. See {@link persistentFailureWarning}. */
+export async function updateWarning(): Promise<string | undefined> {
+  return persistentFailureWarning(await readUpdateState(fsUpdateStateIO, configDir()));
+}
+
+/** The `status` version line for the state on disk. See {@link renderVersionLine}. */
+export async function versionLine(version: string): Promise<string> {
+  return renderVersionLine({
+    running: version,
+    state: await readUpdateState(fsUpdateStateIO, configDir()),
+    autoUpdateDisabled: autoUpdateDisabled(),
+  });
 }
