@@ -1,0 +1,13 @@
+{
+  "name": "rundown",
+  "description": "The rundown skill: a digest of your mail, chat and calendar for a coding agent to answer from.",
+  "owner": {
+    "name": "Øyvind Fanebust"
+  },
+  "plugins": [
+    {
+      "name": "rundown",
+      "source": "./"
+    }
+  ]
+}
