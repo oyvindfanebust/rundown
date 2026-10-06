@@ -11,8 +11,10 @@ key, label and option schema. With the digest
 `aggregate(window, selection) → Bundle` ([ADR-0020](0020-aggregation-and-digest-entries.md)),
 Summarizer, and Digester `digest(bundle, { window, timezone, generatedAt }, { summarize }) →
 Digest` ([ADR-0021](0021-the-digest.md)) in `src/digester.ts`. The Planner and `src/plan.ts` are
-gone. The composition root is `buildDigest` in `src/digest.ts`, for the `digest` command that
-replaces `brief`; config resolution no longer hands on `guidance`.
+gone. The composition root is `composeRundown` in `src/root.ts` (earlier `buildDigest` in
+`src/digest.ts`). It takes the source descriptors and the Summarizer as arguments and builds the
+`digest` command that replaces `brief`, plus `status` and `login`; `buildRegistry(descriptors,
+selection)` now lives in `sources/source.ts`. Config resolution no longer hands on `guidance`.
 
 - §1 and §2: the output is a single digest as JSON on stdout. The Aggregator merges, filters to
   the window and sorts, with no buckets ([ADR-0020](0020-aggregation-and-digest-entries.md)).

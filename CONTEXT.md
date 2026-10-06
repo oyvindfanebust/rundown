@@ -22,8 +22,11 @@ Two things are composition-root plumbing, not components: **[config resolution](
 and **[emission](#emission)** (serialize the digest to stdout, errors to stderr). They wrap the
 pipeline; they are not pipeline stages.
 
-The composition root is `buildDigest` (`src/digest.ts`) for the `digest` command: resolve config →
-aggregate → digest (which calls the summarizer) → emit. It reads the run's clock once, as
+The composition root is `composeRundown` (`src/root.ts`). It takes the source descriptors and the
+Summarizer as arguments and builds the `digest`, `status` and `login` commands from them; `cli.ts`
+passes the static registry and the real Summarizer, and tests pass fakes. `digest` runs resolve
+config → aggregate → digest (which calls the summarizer); `status` and `login` return data and
+events that `cli.ts` renders. The digest run reads the run's clock once, as
 [generatedAt](#generatedat).
 
 ### Repo layout (`src/`)
@@ -31,7 +34,7 @@ aggregate → digest (which calls the summarizer) → emit. It reads the run's c
 ```
 src/
   cli.ts            external surface: parse args, dispatch commands; emission lives here
-  digest.ts         composition root for `digest`: resolve config → aggregate → digest
+  root.ts           composition root: composeRundown(descriptors, summarize) → digest, status, login
   config.ts         load + validate ~/.config/rundown/config.json; delegate window resolution to temporal.ts → { selection, window, windowSpan, timezone }
   temporal.ts       window selector parsing + timezone resolution → absolute Window (span/date/range → instants)
   trust.ts          Untrusted<T> box + the single unwrap primitive

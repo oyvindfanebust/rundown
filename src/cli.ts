@@ -6,11 +6,12 @@ import { parseArgs, type ParseArgsConfig } from "node:util";
 import { existsSync } from "node:fs";
 import { mkdir, writeFile } from "node:fs/promises";
 import { dirname } from "node:path";
-import { buildDigest } from "./digest.ts";
-import { configPath, resolveConfig, ConfigError } from "./config.ts";
+import { composeRundown } from "./root.ts";
+import { configPath } from "./config.ts";
 import { parseWindowSelector, WindowError, WINDOW_SPANS, type WindowSelector } from "./temporal.ts";
-import { descriptors, registeredKeys, buildRegistry } from "./sources/registry.ts";
-import { narrateStatus, optionTemplateDefault, type Source } from "./sources/source.ts";
+import { descriptors, registeredKeys } from "./sources/registry.ts";
+import { narrateStatus, optionTemplateDefault } from "./sources/source.ts";
+import { summarize } from "./summarize.ts";
 import { debugEnabled, makeDebugSink, type DebugSink } from "./debug.ts";
 import { runUpdateWorkerIfRequested, startUpdateGate, updateWarning, versionLine } from "./update.ts";
 
@@ -111,6 +112,9 @@ async function cmdInit(): Promise<void> {
   );
 }
 
+// The composition root, built from the static source registry and the real Summarizer.
+const rundown = composeRundown({ descriptors, summarize });
+
 // ── status: converging per-source diagnostic ────────────────────────────────
 
 async function cmdStatus(debug: DebugSink): Promise<void> {
@@ -123,98 +127,80 @@ async function cmdStatus(debug: DebugSink): Promise<void> {
   // diagnostic that cannot hang, and a broken config still gets a version answer.
   out.write(`${await versionLine(VERSION)}\n`);
 
-  let config;
-  try {
-    config = await resolveConfig(descriptors);
-  } catch (e) {
-    if (e instanceof ConfigError) {
-      out.write(`config    ${path}   ✗ invalid\n\n    ${e.message}\n\n`);
-      out.write(`Config is checked before any source runs, so this surfaces first.\n`);
-      out.write(`Next: fix the file, then re-run rundown status\n`);
-      process.exit(1);
-    }
-    throw e;
+  const report = await rundown.status({ env: process.env, onDebug: debug });
+  if (report.kind === "invalid-config") {
+    out.write(`config    ${path}   ✗ invalid\n\n    ${report.message}\n\n`);
+    out.write(`Config is checked before any source runs, so this surfaces first.\n`);
+    out.write(`Next: fix the file, then re-run rundown status\n`);
+    process.exit(1);
   }
 
   out.write(`config    ${path}   ✓ valid\n`);
-  out.write(`timezone  ${config.timezone}\n`);
-  out.write(`window    ${config.windowSpan}\n`);
+  out.write(`timezone  ${report.timezone}\n`);
+  out.write(`window    ${report.windowSpan}\n`);
 
   // Global summarizer credential (ADR-0009 §4).
-  const keyPresent = Boolean(process.env.ANTHROPIC_API_KEY);
-  out.write(`summarizer  ${keyPresent ? "✓ ANTHROPIC_API_KEY present" : "✗ ANTHROPIC_API_KEY missing — export it"}\n`);
+  out.write(`summarizer  ${report.summarizerKey ? "✓ ANTHROPIC_API_KEY present" : "✗ ANTHROPIC_API_KEY missing — export it"}\n`);
 
   out.write(`\nsources\n`);
-  // Build the selected sources (config injected) to query their live status (#27).
-  const sources = buildRegistry(config.selection, debug);
-  let ready = 0;
-  const unauthed: string[] = [];
-  for (const { sourceKey } of config.selection) {
-    const source = sources[sourceKey]!;
-    const st = await source.status();
+  for (const { key, status } of report.sources) {
     // The narration owns the glyph/phrase/identity wording; this line
     // just lays out the parts. Identity shows whenever a source reports one.
-    const n = narrateStatus(st);
-    out.write(`  ${sourceKey}    ${n.glyph} ${n.label}${n.note ? `   ${n.note}` : ""}\n`);
-    if (st.state === "ready") ready++;
-    else if (st.state === "not-authenticated") unauthed.push(sourceKey);
+    const n = narrateStatus(status);
+    out.write(`  ${key}    ${n.glyph} ${n.label}${n.note ? `   ${n.note}` : ""}\n`);
   }
 
-  const total = config.selection.length;
+  const total = report.sources.length;
+  const ready = report.sources.filter((s) => s.status.state === "ready").length;
   out.write(`\n${ready} of ${total} source${total === 1 ? "" : "s"} ready.\n`);
-  if (!keyPresent) out.write(`Next: export ANTHROPIC_API_KEY\n`);
-  else if (unauthed.length > 0) out.write(`Next: rundown login   (authenticates ${unauthed.join(", ")})\n`);
-  else if (ready < total) out.write(`Next: fix source configuration above, then re-run rundown status\n`);
-  else out.write(`Next: rundown digest\n`);
+  switch (report.next) {
+    case "export-key":
+      out.write(`Next: export ANTHROPIC_API_KEY\n`);
+      break;
+    case "login":
+      out.write(`Next: rundown login   (authenticates ${report.unauthenticated.join(", ")})\n`);
+      break;
+    case "fix-config":
+      out.write(`Next: fix source configuration above, then re-run rundown status\n`);
+      break;
+    case "digest":
+      out.write(`Next: rundown digest\n`);
+      break;
+  }
 }
 
 // ── login: walk every configured-but-unauthenticated source, or ─────────────
 // (with a positional) target one source by its registry key ─────────────────
 
-/**
- * Log in one source, printing the same per-source lines the bare walk
- * has always printed. Returns whether it newly authenticated (false when it was
- * already ready) — shared by the bare walk and the targeted `login <source>` path.
- */
-async function loginOne(out: NodeJS.WritableStream, key: string, source: Source): Promise<boolean> {
-  const st = await source.status();
-  if (st.state === "ready") {
-    const n = narrateStatus(st);
-    out.write(`  ${key}   ${n.glyph} already authenticated${n.note ? `   ${n.note}` : ""}\n`);
-    return false;
-  }
-  out.write(`  ${key}   authenticating…\n`);
-  const identity = await source.login();
-  out.write(`  ${key}   ✓ authenticated   ${identity}\n`);
-  return true;
-}
-
 async function cmdLogin(debug: DebugSink, sourceKey?: string): Promise<void> {
   const out = process.stdout;
+  // Each line is written as its event arrives, so "authenticating…" shows before
+  // the interactive login blocks.
+  const result = await rundown.login({
+    only: sourceKey,
+    onDebug: debug,
+    onEvent: (event) => {
+      switch (event.phase) {
+        case "already": {
+          const n = narrateStatus({ state: "ready", identity: event.identity });
+          out.write(`  ${event.key}   ${n.glyph} already authenticated${n.note ? `   ${n.note}` : ""}\n`);
+          break;
+        }
+        case "authenticating":
+          out.write(`  ${event.key}   authenticating…\n`);
+          break;
+        case "authenticated":
+          out.write(`  ${event.key}   ✓ authenticated   ${event.identity}\n`);
+          break;
+      }
+    },
+  });
 
-  // Targeted mode: one registered source, independent of the user's config
-  // selection — pre-authenticating a source before adding it to config.json is
-  // legitimate, and the registry key is the only thing that needs resolving.
-  if (sourceKey !== undefined) {
-    const descriptor = descriptors[sourceKey];
-    if (!descriptor) fail(`Unknown source "${sourceKey}". Registered sources: ${registeredKeys().join(", ")}`);
-    // Config-independent: build with empty config (#27). A source that needs config
-    // reports `not-configured` from status(), which the login paths already narrate.
-    const source = descriptor.build({}, debug);
-    const authenticated = await loginOne(out, sourceKey, source);
-    out.write(authenticated ? `\nDone. Next: rundown status\n` : `\nAlready authenticated. Next: rundown status\n`);
-    return;
+  if (result.targeted) {
+    out.write(result.authenticated > 0 ? `\nDone. Next: rundown status\n` : `\nAlready authenticated. Next: rundown status\n`);
+  } else {
+    out.write(result.authenticated === 0 ? `\nAll configured sources already authenticated.\n` : `\nDone. Next: rundown status\n`);
   }
-
-  // Bare mode: walk every configured-but-unauthenticated source.
-  const config = await resolveConfig(descriptors);
-  const sources = buildRegistry(config.selection, debug);
-  let walked = 0;
-  for (const { sourceKey: key } of config.selection) {
-    if (await loginOne(out, key, sources[key]!)) walked++;
-  }
-
-  out.write(walked === 0 ? `\nAll configured sources already authenticated.\n` : `\nDone. Next: rundown status\n`);
 }
 
 // ── digest: the composed pipeline; emit one digest as JSON on stdout ─────────
@@ -235,7 +221,7 @@ async function cmdDigest(debug: DebugSink, windowOverride?: WindowSelector, sour
     const warning = await updateWarning();
     if (warning) process.stderr.write(`${warning}\n`);
   }
-  const result = await buildDigest({ windowOverride, sourceFilter, onProgress, onDebug: debug });
+  const result = await rundown.digest({ windowOverride, sourceFilter, onProgress, onDebug: debug });
   // Bun.write awaits the flush, so the JSON is fully emitted before we exit.
   await Bun.write(Bun.stdout, JSON.stringify(result) + "\n");
 }
