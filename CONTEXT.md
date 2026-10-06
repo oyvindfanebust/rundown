@@ -123,6 +123,9 @@ CLI (windows, `login`, `status`, errors). It prescribes no layout: the agent ans
 question from the digest rather than reproducing it, and landing is left to the agent
 ([ADR-0006](docs/adr/0006-output-emission.md)). Onboarding lives in an on-demand reference file
 inside the skill folder, reached by a context pointer, so the always-loaded body stays lean.
+The skill ships through two channels: `npx skills add`, which tracks `main`, and a Claude Code
+plugin marketplace in this repo, whose `rundown` plugin carries only the skill and is versioned with
+each release.
 
 The skill ships light: `SKILL.md` plus reference files only; it does not contain the CLI. The
 distribution story ([ADR-0001](docs/adr/0001-package-rundown-cli-as-compiled-binaries-in-skills.md))

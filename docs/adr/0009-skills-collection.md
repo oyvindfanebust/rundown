@@ -2,6 +2,32 @@
 
 **Status:** Accepted
 
+**Amendment (plugin marketplace, [#162](https://github.com/oyvindfanebust/rundown/issues/162)).**
+The one skill in `skills/rundown/` has a second delivery channel: this repo is a Claude Code plugin
+marketplace (`.claude-plugin/marketplace.json`) with one plugin, `rundown`
+(`.claude-plugin/plugin.json`), installed with `/plugin marketplace add oyvindfanebust/rundown`
+then `/plugin install rundown@rundown`. The plugin carries only the skill: no `bin/`, no hooks, no
+MCP servers, no `userConfig`. `npx skills add oyvindfanebust/rundown` stays the channel for other
+agents, and `skills/rundown/` does not move. release-please bumps the plugin version with each
+release, so plugin users get a new skill only at a release commit, in step with the binary it
+describes. The binary install stays separate: the agent runs `install.sh` on first use, as the
+onboarding reference already says. The options weighed:
+
+1. Keep the binary separate (chosen). Distribution, checksums, attestation, self-update and the
+   sealed-binary trust boundary ([ADR-0001](0001-package-rundown-cli-as-compiled-binaries-in-skills.md),
+   [ADR-0022](0022-trust-boundary.md)) are untouched.
+2. Ship per-platform binaries in the plugin payload. Rejected: compiled assets in git, and a second
+   update channel competing with the self-updater, which would write into `${CLAUDE_PLUGIN_ROOT}`
+   where plugin state does not belong. A plugin `bin/` is on the Bash tool's `PATH` only, not the
+   user's shell, so the user could not run `rundown login` from a terminal.
+3. An install hook that runs `install.sh`. Rejected: Claude Code plugins have no install-time or
+   post-install hook. The nearest, `SessionStart`, would run a network installer on every session
+   with no consent beyond the plugin trust.
+4. A `bin/rundown` launcher shim that installs the real binary on first call. Rejected: a second
+   install path to keep in step with `install.sh`, a network install hidden behind an ordinary
+   command, and it helps only inside Claude Code, to save a step the agent already performs
+   explicitly.
+
 **Amendment (digest, [#117](https://github.com/oyvindfanebust/rundown/issues/117)).** The skill
 reads the digest ([ADR-0021](0021-the-digest.md)), and per
 [#134](https://github.com/oyvindfanebust/rundown/issues/134) it prescribes no rendering

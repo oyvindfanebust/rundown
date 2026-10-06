@@ -29,6 +29,10 @@ constraints shape distribution:
 - The lockfile pins content (`computedHash`), not a commit; there is no `#ref`. So the default
   branch is the release surface for whatever the skills channel carries.
 
+Amendment (plugin marketplace, [#162](https://github.com/oyvindfanebust/rundown/issues/162)): the
+skill also ships through a Claude Code plugin marketplace ([ADR-0009](0009-skills-collection.md)),
+which is version-pinned to releases, while the skills channel keeps tracking `main`.
+
 The skill folder therefore ships light: it points at an already-installed binary rather than
 containing the CLI itself, which works around the file-copy-only channel's inability to carry a
 runnable program. One might expect the security argument for compiling ("compiling seals the

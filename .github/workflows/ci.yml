@@ -21,3 +21,7 @@ jobs:
         run: git ls-files '*.sh' | xargs -r shellcheck
       - name: "Trust-boundary: the two unwrap sites (ADR-0022 §3)"
         run: bash scripts/check-unwrap-sites.sh
+      - name: Validate the Claude Code plugin marketplace and plugin manifests
+        run: |
+          npx -y @anthropic-ai/claude-code@latest plugin validate . --strict
+          npx -y @anthropic-ai/claude-code@latest plugin validate .claude-plugin/plugin.json --strict

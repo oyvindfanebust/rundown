@@ -47,7 +47,31 @@ components (see [`CONTEXT.md`](CONTEXT.md)):
 
 ## Install
 
-The primary install is a one-liner:
+Installing `rundown` takes two steps: the skill, which tells a coding agent how to drive the CLI,
+and the CLI itself.
+
+### 1. The skill
+
+In Claude Code, add this repo as a plugin marketplace and install the `rundown` plugin:
+
+```
+/plugin marketplace add oyvindfanebust/rundown
+/plugin install rundown@rundown
+```
+
+Auto-update is off by default for a marketplace you add yourself. To pick up new releases of the
+skill, enable auto-update for the `rundown` marketplace under `/plugin` → Marketplaces.
+
+For other agents, install the skill with [`skills`](https://github.com/vercel-labs/skills):
+
+```sh
+npx skills add oyvindfanebust/rundown
+```
+
+### 2. The CLI
+
+The agent runs this on first use when the `rundown` binary is missing. To install it yourself, run
+the one-liner:
 
 ```sh
 curl -fsSL https://github.com/oyvindfanebust/rundown/releases/latest/download/install.sh | bash
@@ -190,7 +214,7 @@ with a message asking for a shorter window.
 ## Using it from a coding agent
 
 `rundown` is published as a single-skill collection. A coding agent installs the `rundown` skill
-(`SKILL.md` + `references/onboarding.md`) and drives the CLI: the skill carries the treat-as-data
+(`SKILL.md` + `references/onboarding.md`; see [Install](#install)) and drives the CLI: the skill carries the treat-as-data
 trust contract, a reference for every digest field and its trust class, and how to drive the CLI,
 while the CLI is installed separately. The skill walks the agent through onboarding; the agent then
 answers the user's question from the digest rather than reproducing it, and decides where any
