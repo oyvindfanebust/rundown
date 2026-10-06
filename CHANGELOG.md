@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.13.2](https://github.com/oyvindfanebust/rundown/compare/v0.13.1...v0.13.2) (2026-10-06)
+
+
+### Refactors
+
+* inject sources and summarizer into the composition root ([#160](https://github.com/oyvindfanebust/rundown/issues/160)) ([29ef315](https://github.com/oyvindfanebust/rundown/commit/29ef3159fd4475ba9dfc66c2ee1f5f4336c898d3))
+* **update:** own the gate's process and file I/O ([#159](https://github.com/oyvindfanebust/rundown/issues/159)) ([0024902](https://github.com/oyvindfanebust/rundown/commit/0024902437eec3944f34a7247898d7206c92171c))
+
 ## [0.13.1](https://github.com/oyvindfanebust/rundown/compare/v0.13.0...v0.13.1) (2026-10-04)
 
 
