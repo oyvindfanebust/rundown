@@ -1,7 +1,7 @@
 {
   "name": "rundown",
   "description": "Read your mail, chat and calendar for a window as one digest. The skill drives the separately installed rundown CLI.",
-  "version": "0.13.1",
+  "version": "0.13.2",
   "author": {
     "name": "Øyvind Fanebust"
   }
