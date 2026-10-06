@@ -9,6 +9,11 @@ determinism, no version network call on the summarizer path, the terminal-gated 
 update failures) holds for `digest`. The trust boundary this ADR points to is
 [ADR-0022](0022-trust-boundary.md), which supersedes ADR-0004.
 
+**Amendment (plugin marketplace, [#162](https://github.com/oyvindfanebust/rundown/issues/162)).**
+Context's skills channel is no longer the only one: the skill also ships through a Claude Code
+plugin marketplace ([ADR-0009](0009-skills-collection.md)), which is version-pinned to releases,
+while the skills channel keeps tracking `main`.
+
 The compiled-binary distribution described below (the release workflow and `install.sh`) ships as of
 v0.1.0; releases carry the nine assets (§2). Background self-update (§5) ships as of v0.7.0, enabled
 by default, and §8's build-provenance attestation is produced from that release forward. The launcher
@@ -28,10 +33,6 @@ constraints shape distribution:
   zero-install and self-contained.
 - The lockfile pins content (`computedHash`), not a commit; there is no `#ref`. So the default
   branch is the release surface for whatever the skills channel carries.
-
-Amendment (plugin marketplace, [#162](https://github.com/oyvindfanebust/rundown/issues/162)): the
-skill also ships through a Claude Code plugin marketplace ([ADR-0009](0009-skills-collection.md)),
-which is version-pinned to releases, while the skills channel keeps tracking `main`.
 
 The skill folder therefore ships light: it points at an already-installed binary rather than
 containing the CLI itself, which works around the file-copy-only channel's inability to carry a

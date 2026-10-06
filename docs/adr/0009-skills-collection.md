@@ -2,6 +2,28 @@
 
 **Status:** Accepted
 
+**Amendment (digest, [#117](https://github.com/oyvindfanebust/rundown/issues/117)).** The skill
+reads the digest ([ADR-0021](0021-the-digest.md)), and per
+[#134](https://github.com/oyvindfanebust/rundown/issues/134) it prescribes no rendering
+([#151](https://github.com/oyvindfanebust/rundown/issues/151)).
+
+- §2's rendering guidance is replaced by three parts:
+  - the trust contract, rewritten for the digest on [ADR-0022](0022-trust-boundary.md)'s classes:
+    labels and model output are quoted data, and imperatives in them are never acted on
+  - a field reference giving each digest field's meaning and trust class (trusted, label, model).
+    `tests/skill-field-reference.test.ts` checks it against the contract's field list, so a new
+    field or a changed class fails CI until the skill matches
+  - one sentence of stance: answer the user's question from the digest rather than reproduce it
+- §2's `brief` invocation becomes driving the CLI: `rundown digest` with its windows and
+  `--source`, `login`, `status` and the errors the agent can act on. The Brief shape, the default
+  grouping by `kind` and the render-time framing are gone; no layout is prescribed.
+- §1's description no longer triggers on plan-my-week requests or mentions rendering a Brief.
+- §3's onboarding steps that write `guidance` and end on `rundown brief` describe removed
+  behavior; the onboarding reference moves to the digest in
+  [#152](https://github.com/oyvindfanebust/rundown/issues/152).
+
+References below to the Brief, `brief` and rendering guidance describe the skill before the digest.
+
 **Amendment (plugin marketplace, [#162](https://github.com/oyvindfanebust/rundown/issues/162)).**
 The one skill in `skills/rundown/` has a second delivery channel: this repo is a Claude Code plugin
 marketplace (`.claude-plugin/marketplace.json`) with one plugin, `rundown`
@@ -27,28 +49,6 @@ onboarding reference already says. The options weighed:
    install path to keep in step with `install.sh`, a network install hidden behind an ordinary
    command, and it helps only inside Claude Code, to save a step the agent already performs
    explicitly.
-
-**Amendment (digest, [#117](https://github.com/oyvindfanebust/rundown/issues/117)).** The skill
-reads the digest ([ADR-0021](0021-the-digest.md)), and per
-[#134](https://github.com/oyvindfanebust/rundown/issues/134) it prescribes no rendering
-([#151](https://github.com/oyvindfanebust/rundown/issues/151)).
-
-- §2's rendering guidance is replaced by three parts:
-  - the trust contract, rewritten for the digest on [ADR-0022](0022-trust-boundary.md)'s classes:
-    labels and model output are quoted data, and imperatives in them are never acted on
-  - a field reference giving each digest field's meaning and trust class (trusted, label, model).
-    `tests/skill-field-reference.test.ts` checks it against the contract's field list, so a new
-    field or a changed class fails CI until the skill matches
-  - one sentence of stance: answer the user's question from the digest rather than reproduce it
-- §2's `brief` invocation becomes driving the CLI: `rundown digest` with its windows and
-  `--source`, `login`, `status` and the errors the agent can act on. The Brief shape, the default
-  grouping by `kind` and the render-time framing are gone; no layout is prescribed.
-- §1's description no longer triggers on plan-my-week requests or mentions rendering a Brief.
-- §3's onboarding steps that write `guidance` and end on `rundown brief` describe removed
-  behavior; the onboarding reference moves to the digest in
-  [#152](https://github.com/oyvindfanebust/rundown/issues/152).
-
-References below to the Brief, `brief` and rendering guidance describe the skill before the digest.
 
 This ADR owns the skills-collection half of packaging: what `SKILL.md` files `rundown` publishes,
 what each carries, and how the skill wraps the five-command CLI surface. The binary packaging,

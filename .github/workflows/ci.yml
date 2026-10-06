@@ -23,5 +23,5 @@ jobs:
         run: bash scripts/check-unwrap-sites.sh
       - name: Validate the Claude Code plugin marketplace and plugin manifests
         run: |
-          npx -y @anthropic-ai/claude-code@latest plugin validate . --strict
-          npx -y @anthropic-ai/claude-code@latest plugin validate .claude-plugin/plugin.json --strict
+          bun x @anthropic-ai/claude-code@latest plugin validate . --strict
+          bun x @anthropic-ai/claude-code@latest plugin validate .claude-plugin/plugin.json --strict
