@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.14.0](https://github.com/oyvindfanebust/rundown/compare/v0.13.2...v0.14.0) (2026-10-07)
+
+
+### ⚠ BREAKING CHANGES
+
+* lastFrom and lastFromYou are removed from mail and chat entries, and fromYou is renamed messagesFromYou.
+
+### Features
+
+* say where the user sits on the latest mail or chat message ([#165](https://github.com/oyvindfanebust/rundown/issues/165)) ([f5cb023](https://github.com/oyvindfanebust/rundown/commit/f5cb0238360cfaaeef5393cb096973404ce0ceb5))
+
 ## [0.13.2](https://github.com/oyvindfanebust/rundown/compare/v0.13.1...v0.13.2) (2026-10-06)
 
 
