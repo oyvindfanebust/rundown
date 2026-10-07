@@ -100,7 +100,7 @@ it composes the contract with the domain's `Window`/manifest and belongs with th
 `JSON.parse` and its bounded retry loop, and knows nothing of Zod, the Planner, or bundles. The
 contract module hands it the generated schema exactly as the Planner handed it the hand-written one.
 
-The [trust boundary](../../CONTEXT.md#trust-boundary) is unchanged in every dimension. There is no
+The [trust boundary](../../GLOSSARY.md#trust-boundary) is unchanged in every dimension. There is no
 new `unwrap()` site (the sole one stays in `plan.ts`'s Bundle rendering,
 [ADR-0004](0004-trust-boundary-enforcement.md) §3) and no `Untrusted<T>` in the contract, structured
 output is still via the API response format and never a tool ([ADR-0005](0005-planning-layer.md) §6),
@@ -143,5 +143,5 @@ The Brief contract lives in `src/brief-contract.ts` as the Zod source of truth.
 [ADR-0005](0005-planning-layer.md) owns the content decisions: the envelope / untrusted-derived-core
 split, the four `kind`s, the `evidence` quarantine, and `when` as free-text. This ADR only moved the
 schema's home. The Summarizer's generic plain-JSON-Schema contract
-([ADR-0005](0005-planning-layer.md) §1) and the [trust boundary](../../CONTEXT.md#trust-boundary)
+([ADR-0005](0005-planning-layer.md) §1) and the [trust boundary](../../GLOSSARY.md#trust-boundary)
 ([ADR-0004](0004-trust-boundary-enforcement.md)) are untouched, as described in Decision 2.

@@ -1,5 +1,5 @@
 // The ubiquitous language — the shared vocabulary types every component speaks.
-// One readable home for the domain nouns (CONTEXT.md is their prose definition).
+// One readable home for the domain nouns (GLOSSARY.md is their prose definition).
 // `Untrusted<T>` lives in trust.ts because it is a cross-cutting security
 // primitive, not a domain noun.
 

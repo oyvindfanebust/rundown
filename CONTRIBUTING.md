@@ -73,7 +73,7 @@ A PR that weakens this boundary is rejected regardless of how valuable the featu
 
 If you're planning a change anywhere near the Summarizer, `Untrusted<T>`, source adapters, or the
 CLI surface, read [`SECURITY.md`](SECURITY.md) for the full threat model and
-[ADR-0022](docs/adr/0022-trust-boundary.md) (with [`CONTEXT.md`](CONTEXT.md) for the
+[ADR-0022](docs/adr/0022-trust-boundary.md) (with [`GLOSSARY.md`](GLOSSARY.md) for the
 surrounding vocabulary) before you start — it'll save you a review round-trip.
 
 ## Reporting security issues
