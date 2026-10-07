@@ -157,9 +157,11 @@ input, joins the model's output, and copies every trusted value and label into t
 - **Rendering.** Each mail and chat entry renders as a block under its opaque id: trusted metadata
   (counts, times, the user's position on the last message, `continuesFromBefore`) and its newest
   messages up to about 8,000 chars, each message capped at 2,000. A mail message line names its To
-  and CC recipients, with "you" for the user written by code from `isMe`, capped at 400 chars apart
-  from the body, and says when the user is on neither line; a chat message line is marked
-  "(mentions you)" when it mentions the user. A cut message ends in "…[truncated]", whether the
+  and CC recipients other than the user, capped at 400 chars apart from the body, and then a role
+  marker written by code from `isMe` ("you are in To", "you are on CC" or "you are not on the To or
+  CC line"), outside the cap so a long list cannot cut it off. A label that reads "you" in any case
+  is rendered quoted and marked as a name, so only code can write the user's "you"; a chat message
+  line is marked "(mentions you)" when it mentions the user. A cut message ends in "…[truncated]", whether the
   normalizer or the Digester cut it. Older messages become one line, "N earlier messages in the
   window not shown", and the entry carries a trusted `truncated` count. Meetings render as context
   for the overview only. Timezone and weekday rendering and date-only handling move here from the

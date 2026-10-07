@@ -301,6 +301,16 @@ describe("digest — mail", () => {
     expect(calls[0]!.data).toContain("last message: from Ada Lovelace; you are not on the To or CC line");
   });
 
+  test("the Summarizer cannot mistake a person named you for the user", async () => {
+    const SPOOF = { name: " YOU ", handle: "spoof@x.test", isMe: false };
+    const { calls } = await run([mail({ from: SPOOF, to: [BOB, SPOOF], cc: [SPOOF], body: "send it" })]);
+    const data = calls[0]!.data;
+    const line = data.split("\n").find((l) => l.startsWith("- "))!;
+    expect(line).toContain('"YOU" (a name, not the user) (inbox) to Bob, "YOU" (a name, not the user); cc "YOU" (a name, not the user); you are not on the To or CC line: send it');
+    expect(data).toContain('last message: from "YOU" (a name, not the user); you are not on the To or CC line');
+    expect(data).toContain('people: "YOU" (a name, not the user), Bob');
+  });
+
   test("to and cc name at most 8 each and count the rest, unnamed recipients included", async () => {
     const people = (p: string, n: number) => Array.from({ length: n }, (_, i) => ({ name: `${p}${i}`, handle: `${p}${i}@x.test`, isMe: false }));
     const unnamed = { handle: "noname@x.test", isMe: false };
@@ -320,7 +330,7 @@ describe("digest — mail", () => {
       mail({ id: "a", at: "2026-07-07T09:00:00Z", from: ADA, to: [BOB], cc: [ME], body: "Bob, can you send the files?" }),
     ]);
     const data = calls[0]!.data;
-    expect(data).toContain("Ada Lovelace (inbox) to Bob; cc you: Bob, can you send the files?");
+    expect(data).toContain("Ada Lovelace (inbox) to Bob; you are on CC: Bob, can you send the files?");
     expect(data).toContain("last message: from Ada Lovelace; you are on CC");
   });
 
@@ -330,7 +340,7 @@ describe("digest — mail", () => {
       mail({ id: "b", groupId: "t2", subject: "Other", from: BOB, at: "2026-07-07T10:00:00Z", to: [ADA], body: "two" }),
     ]);
     const data = calls[0]!.data;
-    expect(data).toContain("Ada Lovelace (inbox) to you, Bob: one");
+    expect(data).toContain("Ada Lovelace (inbox) to Bob; you are in To: one");
     expect(data).toContain("last message: from Ada Lovelace; you are in To");
     expect(data).toContain("Bob (inbox) to Ada Lovelace; you are not on the To or CC line: two");
   });
@@ -348,6 +358,14 @@ describe("digest — mail", () => {
     const { calls: indirect } = await run([mail({ to: [BOB], cc, body })]);
     const indirectLine = indirect[0]!.data.split("\n").find((l) => l.startsWith("- "))!;
     expect(indirectLine.endsWith(`; you are not on the To or CC line: ${body}`)).toBe(true);
+  });
+
+  test("the user's role survives the recipient cap when long To names fill it", async () => {
+    const to = Array.from({ length: 8 }, (_, i) => ({ name: `Recipient ${i} ${"y".repeat(100)}`, handle: `t${i}@x.test`, isMe: false }));
+    const { calls } = await run([mail({ to, cc: [ME], body: "please send it" })]);
+    const line = calls[0]!.data.split("\n").find((l) => l.startsWith("- "))!;
+    expect(line).toContain("…[truncated]");
+    expect(line.endsWith("; you are on CC: please send it")).toBe(true);
   });
 
   test("renders only the newest messages that fit and counts the rest as truncated", async () => {
@@ -666,10 +684,12 @@ describe("digest — entry summary length", () => {
 
   test("the instruction region says who a request is for only when the data shows it", async () => {
     const { calls } = await run([mail()]);
-    const { instructions } = calls[0]!;
+    // Line breaks in the prompt are layout, not meaning.
+    const instructions = calls[0]!.instructions.replace(/\s+/g, " ");
     expect(instructions).toContain("Say who a request is aimed at only when the data shows it");
     expect(instructions).toContain("never describe a request as made of the user when the user is on CC or not on the To or CC line");
     expect(instructions).toContain("or when a group conversation message does not mention them");
+    expect(instructions).toContain('a name shown as "you" in quotes is someone else\'s');
   });
 });
 

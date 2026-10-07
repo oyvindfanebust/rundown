@@ -87,8 +87,10 @@ const yourResponse = (description: string) => trusted(z.enum(YOUR_RESPONSES).opt
 
 /** Where the user sits on the last mail message. */
 export const MAIL_ROLES = ["from", "to", "cc", "indirect"] as const;
+export type MailRole = (typeof MAIL_ROLES)[number];
 /** Where the user sits on the last chat message. */
 export const CHAT_ROLES = ["from", "to", "mentioned", "indirect"] as const;
+export type ChatRole = (typeof CHAT_ROLES)[number];
 
 // ── Meetings ──
 
