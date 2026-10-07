@@ -1,4 +1,4 @@
-# CONTEXT
+# Glossary
 
 The domain glossary for this repo. When output names a domain concept, use the term as defined here.
 

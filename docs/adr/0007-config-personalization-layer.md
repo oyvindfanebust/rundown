@@ -229,6 +229,6 @@ Config's entire trust surface:
 - Hostile-local-config is out of scope. Accepted, since it is equivalent to machine compromise.
 
 The component vocabulary and module/repo layout this ADR assumes are canonicalized in
-[CONTEXT.md](../../CONTEXT.md) and [ADR-0008](0008-bounded-context-and-component-architecture.md);
+[GLOSSARY.md](../../GLOSSARY.md) and [ADR-0008](0008-bounded-context-and-component-architecture.md);
 how the SKILL.md sequences `init` → edit → `login` → `status` for onboarding is
 [ADR-0009](0009-skills-collection.md) §3.

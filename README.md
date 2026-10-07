@@ -35,7 +35,7 @@ The full enforcement model — structural, in-code (`Untrusted<T>`), and behavio
 ## How it works
 
 `rundown` is one bounded context with a single external surface, the CLI. Inside are four
-components (see [`CONTEXT.md`](CONTEXT.md)):
+components (see [`GLOSSARY.md`](GLOSSARY.md)):
 
 - **Sources**: read-only adapters, one per backend/auth boundary (Graph, Slack), each returning
   typed records.
@@ -232,5 +232,5 @@ The typecheck is not optional: the `Untrusted<T>` two-unwrap-site guarantee is e
 typecheck time, so a green `tsc` run is part of the trust boundary. `scripts/check-unwrap-sites.sh`
 checks that only the Digester and `label()` call `unwrap()`.
 
-Design record: [`CONTEXT.md`](CONTEXT.md) (the domain glossary) and [`docs/adr/`](docs/adr/) (the
+Design record: [`GLOSSARY.md`](GLOSSARY.md) (the domain glossary) and [`docs/adr/`](docs/adr/) (the
 decision record).

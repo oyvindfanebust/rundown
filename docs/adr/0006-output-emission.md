@@ -21,7 +21,7 @@ residual).
 
 ## Context
 
-Emission is where the [Brief](../../CONTEXT.md) leaves `rundown`. A coding agent triggers planning
+Emission is where the [Brief](../../GLOSSARY.md) leaves `rundown`. A coding agent triggers planning
 on demand and is always in the loop; there is no unattended cron writing the Brief anywhere on its
 own. [ADR-0005](0005-planning-layer.md) already made the Brief a structured content contract
 (`{envelope, summary, items}`) with all presentation and landing assigned to the consuming agent.
