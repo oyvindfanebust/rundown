@@ -100,7 +100,7 @@ the entry, emission at the exit, and self-update off to the side.
 The canonical vocabulary is: *bounded context*, *component*, *composition root*, *plumbing*. Terms
 below the component level — `NormalizedItem`, `Bundle`, `bucket`, `Brief`, `ExtractedItem`,
 `Untrusted<T>`, `untrusted-derived`, `planning-guidance`, `Trust boundary` — each keep their meanings
-as defined in `CONTEXT.md`.
+as defined in `GLOSSARY.md`.
 
 ### 4. Repo layout — one flat `src/`, Sources as the one pluggable directory
 

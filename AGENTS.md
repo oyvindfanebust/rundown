@@ -5,7 +5,7 @@ consuming agent to answer from. `rundown` is one bounded context; its only exter
 CLI. It reads work sources (Microsoft Graph calendar and mail, and Slack messages) as typed records,
 aggregates them, groups them into digest entries, has a sandboxed model summarize them, and emits
 one digest as JSON on stdout. Planning, landing and rendering are the consuming agent's job.
-Architecture is canonical in `CONTEXT.md` and `docs/adr/`.
+Architecture is canonical in `GLOSSARY.md` and `docs/adr/`.
 
 (`CLAUDE.md` is a symlink to this file — one contract for every agent.)
 
@@ -89,7 +89,7 @@ What this means for an agent driving the CLI:
 ## Writing conventions
 
 Docs and comments use a plain, declarative voice. When you add or edit prose (README, ADRs,
-CONTEXT, this file, the skills), match it — see PR #3, the language-cleanup pass:
+GLOSSARY, this file, the skills), match it — see PR #3, the language-cleanup pass:
 
 - No bold, italics, or caps for emphasis. Reserve `**bold**` for genuine term labels (like the
   Structural / In-code / Behavioral list above); state everything else plainly.
@@ -103,7 +103,7 @@ CONTEXT, this file, the skills), match it — see PR #3, the language-cleanup pa
 
 ### Issue tracker
 
-Issues and PRDs live in this repo's GitHub Issues (via the `gh` CLI). See `docs/agents/issue-tracker.md`.
+Issues and specs live in this repo's GitHub Issues (via the `gh` CLI). See `docs/agents/issue-tracker.md`.
 
 ### Triage labels
 
@@ -111,4 +111,4 @@ Default five-role vocabulary (`needs-triage`, `needs-info`, `ready-for-agent`, `
 
 ### Domain docs
 
-Single-context: one `CONTEXT.md` + `docs/adr/` at the repo root. See `docs/agents/domain.md`.
+Single-context: one `GLOSSARY.md` + `docs/adr/` at the repo root. See `docs/agents/domain.md`.

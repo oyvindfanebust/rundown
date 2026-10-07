@@ -24,7 +24,7 @@ stretch of the calendar a user genuinely asks for. The open question was how to 
 dates without weakening the trust boundary or the "never frozen instants" rule.
 
 Window strings are trusted control values: they come from the CLI or config, never from a backend.
-This feature therefore does not touch the [trust boundary](../../CONTEXT.md#trust-boundary). There
+This feature therefore does not touch the [trust boundary](../../GLOSSARY.md#trust-boundary). There
 is no `Untrusted<T>` and no new `unwrap()` site. It is a parsing and resolution change, confined to
 config resolution and the CLI surface.
 
