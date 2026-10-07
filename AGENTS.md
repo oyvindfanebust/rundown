@@ -50,6 +50,9 @@ version bump and write `CHANGELOG.md`, so **commits must follow
   user-facing impact, not code size.
 - This repo squash-merges PRs, so the **PR title** becomes the commit on `main` — that title is the
   line release-please reads. Give every PR a Conventional Commit title.
+- Write every PR body with the `pr` skill: call the Skill tool with `pr` before `gh pr create` or
+  `gh pr edit --body`, and follow its template (Summary, Evidence, Merge Danger). This holds for
+  subagents and other skills that open PRs, such as `implement-spec`.
 
 The flow: push Conventional Commits to `main` → release-please keeps an open "release PR" showing the
 computed bump + changelog → merging it cuts the `vX.Y.Z` tag and GitHub Release and uploads the
