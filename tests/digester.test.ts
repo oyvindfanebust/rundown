@@ -151,11 +151,11 @@ describe("digest — mail", () => {
       type: "mail",
       subject: "Launch",
       messages: 2,
-      fromYou: 1,
+      messagesFromYou: 1,
       unread: 1,
       firstAt: "2026-07-07T09:00:00Z",
       lastAt: "2026-07-07T11:00:00Z",
-      lastFromYou: true,
+      lastMessage: { you: "from", to: ["Ada Lovelace", "Bob"] },
       people: ["Ada Lovelace", "Bob"],
       importance: "high",
       attachments: true,
@@ -168,10 +168,10 @@ describe("digest — mail", () => {
   test("presence is signal: no-signal fields are left out", async () => {
     const { result } = await run([mail()]);
     const thread = result.mail[0]!;
-    for (const key of ["threads", "fromYou", "unread", "truncated", "lastFromYou", "importance", "flagged", "attachments", "bulk", "continuesFromBefore", "morePeople"]) {
+    for (const key of ["threads", "messagesFromYou", "unread", "truncated", "importance", "flagged", "attachments", "bulk", "continuesFromBefore", "morePeople"]) {
       expect(thread).not.toHaveProperty(key);
     }
-    expect(thread.lastFrom).toBe("Ada Lovelace");
+    expect(thread.lastMessage).toEqual({ you: "to", from: "Ada Lovelace" });
     expect(result).not.toHaveProperty("unsummarized");
   });
 
@@ -263,8 +263,91 @@ describe("digest — mail", () => {
     const thread = result.mail[0]!;
     expect(thread.people).toEqual(["Bob", "Ada Lovelace", "P0", "P1", "P2", "P3", "P4", "P5"]);
     expect(thread.morePeople).toBe(6);
-    expect(thread).not.toHaveProperty("lastFrom");
+    // The last sender has no display name: `from` is absent rather than an address.
+    expect(thread.lastMessage).toEqual({ you: "to" });
     expect(JSON.stringify(result)).not.toContain("@x.test");
+  });
+
+  test("you is to, cc or indirect from the last message's recipients, and To wins over CC", async () => {
+    const you = async (over: Partial<EmailSpec>) => (await run([mail(over)])).result.mail[0]!.lastMessage;
+    expect(await you({ to: [ME], cc: [] })).toEqual({ you: "to", from: "Ada Lovelace" });
+    expect(await you({ to: [BOB], cc: [ME] })).toEqual({ you: "cc", from: "Ada Lovelace", to: ["Bob"] });
+    expect(await you({ to: [BOB], cc: [] })).toEqual({ you: "indirect", from: "Ada Lovelace", to: ["Bob"] });
+    expect(await you({ to: [ME, BOB], cc: [ME] })).toEqual({ you: "to", from: "Ada Lovelace", to: ["Bob"] });
+  });
+
+  test("you is from when the user wrote the last message, a delegate send included, and from is absent", async () => {
+    const SHARED = { name: "Team", handle: "team@x.test", isMe: false };
+    const { result } = await run([
+      mail({ id: "a", at: "2026-07-07T09:00:00Z" }),
+      mail({ id: "b", at: "2026-07-07T10:00:00Z", folder: "sent", from: SHARED, sentBy: ME, to: [ADA], cc: [BOB] }),
+    ]);
+    expect(result.mail[0]!.lastMessage).toEqual({ you: "from", to: ["Ada Lovelace"], cc: ["Bob"] });
+    expect(result.mail[0]!.messagesFromYou).toBe(1);
+  });
+
+  test("only the last message decides lastMessage, not earlier ones", async () => {
+    const { result } = await run([
+      mail({ id: "a", at: "2026-07-07T09:00:00Z", to: [ME] }),
+      mail({ id: "b", at: "2026-07-07T10:00:00Z", from: BOB, to: [ADA], cc: [ME] }),
+    ]);
+    expect(result.mail[0]!.lastMessage).toEqual({ you: "cc", from: "Bob", to: ["Ada Lovelace"] });
+  });
+
+  test("a recipient whose display name is you does not change you", async () => {
+    const SPOOF = { name: "you", handle: "spoof@x.test", isMe: false };
+    const { result, calls } = await run([mail({ to: [SPOOF], cc: [] })]);
+    expect(result.mail[0]!.lastMessage).toEqual({ you: "indirect", from: "Ada Lovelace", to: ["you"] });
+    expect(calls[0]!.data).toContain("last message: from Ada Lovelace; you are not on the To or CC line");
+  });
+
+  test("to and cc name at most 8 each and count the rest, unnamed recipients included", async () => {
+    const people = (p: string, n: number) => Array.from({ length: n }, (_, i) => ({ name: `${p}${i}`, handle: `${p}${i}@x.test`, isMe: false }));
+    const unnamed = { handle: "noname@x.test", isMe: false };
+    const { result } = await run([mail({ to: [ME, ...people("T", 10), unnamed], cc: [...people("C", 3), unnamed] })]);
+    expect(result.mail[0]!.lastMessage).toEqual({
+      you: "to",
+      from: "Ada Lovelace",
+      to: ["T0", "T1", "T2", "T3", "T4", "T5", "T6", "T7"],
+      moreTo: 3,
+      cc: ["C0", "C1", "C2"],
+      moreCc: 1,
+    });
+  });
+
+  test("the Summarizer sees each message's To and CC and the user's role", async () => {
+    const { calls } = await run([
+      mail({ id: "a", at: "2026-07-07T09:00:00Z", from: ADA, to: [BOB], cc: [ME], body: "Bob, can you send the files?" }),
+    ]);
+    const data = calls[0]!.data;
+    expect(data).toContain("Ada Lovelace (inbox) to Bob; cc you: Bob, can you send the files?");
+    expect(data).toContain("last message: from Ada Lovelace; you are on CC");
+  });
+
+  test("the Summarizer sees to you and the indirect case on the message line", async () => {
+    const { calls } = await run([
+      mail({ id: "a", groupId: "t1", at: "2026-07-07T09:00:00Z", to: [ME, BOB], body: "one" }),
+      mail({ id: "b", groupId: "t2", subject: "Other", from: BOB, at: "2026-07-07T10:00:00Z", to: [ADA], body: "two" }),
+    ]);
+    const data = calls[0]!.data;
+    expect(data).toContain("Ada Lovelace (inbox) to you, Bob: one");
+    expect(data).toContain("last message: from Ada Lovelace; you are in To");
+    expect(data).toContain("Bob (inbox) to Ada Lovelace; you are not on the To or CC line: two");
+  });
+
+  test("a huge CC list stays within the message budget and does not crowd out the body", async () => {
+    const cc = Array.from({ length: 500 }, (_, i) => ({ name: `Person Number ${i} ${"x".repeat(80)}`, handle: `p${i}@x.test`, isMe: false }));
+    const body = "b".repeat(1_900);
+    const { calls } = await run([mail({ cc, body })]);
+    const line = calls[0]!.data.split("\n").find((l) => l.startsWith("- "))!;
+    // The prefix, at most 400 chars of recipients, then the whole body.
+    expect(line.length).toBeLessThanOrEqual(2_400);
+    expect(line.endsWith(`: ${body}`)).toBe(true);
+    expect(line).toContain("…[truncated]");
+    // The trusted role marker survives the cap.
+    const { calls: indirect } = await run([mail({ to: [BOB], cc, body })]);
+    const indirectLine = indirect[0]!.data.split("\n").find((l) => l.startsWith("- "))!;
+    expect(indirectLine.endsWith(`; you are not on the To or CC line: ${body}`)).toBe(true);
   });
 
   test("renders only the newest messages that fit and counts the rest as truncated", async () => {
@@ -303,14 +386,20 @@ describe("digest — chat", () => {
       type: "chat",
       kind: "dm",
       messages: 2,
-      fromYou: 1,
+      messagesFromYou: 1,
       firstAt: "2026-07-07T10:00:00Z",
       lastAt: "2026-07-07T10:05:00Z",
-      lastFromYou: true,
+      lastMessage: { you: "from" },
       people: ["Ada Lovelace"],
       summary: "summary of c1",
     });
-    expect(channel).toMatchObject({ kind: "channel", channel: "launch", external: true, mentionsYou: 1, lastFrom: "Ada Lovelace" });
+    expect(channel).toMatchObject({
+      kind: "channel",
+      channel: "launch",
+      external: true,
+      mentionsYou: 1,
+      lastMessage: { you: "mentioned", from: "Ada Lovelace" },
+    });
     expect(channel).not.toHaveProperty("continuesFromBefore");
   });
 
@@ -330,6 +419,47 @@ describe("digest — chat", () => {
       }),
     ]);
     expect(result.chat[0]).toMatchObject({ kind: "group-dm", people: ["Ada Lovelace", "Silent Sam"] });
+  });
+
+  test("you is to for a DM, mentioned when it mentions you, indirect for a group DM that does not", async () => {
+    const GROUP = {
+      kind: "group_dm" as const,
+      isExternal: false,
+      members: [
+        { name: "Ada Lovelace", handle: "U2", isMe: false },
+        { name: "Me", handle: "U1", isMe: true },
+      ],
+    };
+    const you = async (over: Partial<ChatMessageSpec>) => (await run([chat(over)])).result.chat[0]!.lastMessage;
+    expect(await you({})).toEqual({ you: "to", from: "Ada Lovelace" });
+    expect(await you({ mentionsMe: true })).toEqual({ you: "mentioned", from: "Ada Lovelace" });
+    expect(await you({ channelId: "G1", conversation: GROUP })).toEqual({ you: "indirect", from: "Ada Lovelace" });
+    expect(await you({ channelId: "G1", conversation: GROUP, mentionsMe: true })).toEqual({ you: "mentioned", from: "Ada Lovelace" });
+    expect(await you({ channelId: "C1", conversation: { kind: "channel", isExternal: false, name: "x" } })).toEqual({
+      you: "indirect",
+      from: "Ada Lovelace",
+    });
+  });
+
+  test("the Summarizer sees which chat messages mention you and your role on the last one", async () => {
+    const { calls } = await run([
+      chat({ ts: "1", at: "2026-07-07T10:00:00Z", mentionsMe: true, text: "@Me can you look?" }),
+      chat({ ts: "2", at: "2026-07-07T10:05:00Z", text: "thanks" }),
+    ]);
+    const data = calls[0]!.data;
+    expect(data).toContain("Ada Lovelace (mentions you): @Me can you look?");
+    expect(data).toContain("Ada Lovelace: thanks");
+    expect(data).toContain("last message: from Ada Lovelace; a direct message to you");
+  });
+
+  test("the chat header names the indirect and mentioned roles", async () => {
+    const GROUP = { kind: "group_dm" as const, isExternal: false, members: [{ name: "Ada Lovelace", handle: "U2", isMe: false }] };
+    const { calls } = await run([chat({ channelId: "G1", conversation: GROUP, text: "@Bob please send it" })]);
+    expect(calls[0]!.data).toContain("last message: from Ada Lovelace; it does not mention you");
+    const { calls: mentioned } = await run([chat({ mentionsMe: true })]);
+    expect(mentioned[0]!.data).toContain("last message: from Ada Lovelace; it mentions you");
+    const { calls: mine } = await run([chat({ author: { name: "Me", handle: "U1", isMe: true } })]);
+    expect(mine[0]!.data).toContain("last message: from you");
   });
 });
 
@@ -447,13 +577,14 @@ describe("digest — the id join", () => {
     const { result } = await run([mail()], () =>
       ({
         summary: "o",
-        lastFromYou: true,
-        entries: [{ id: "e1", summary: "s", bulk: true, lastFromYou: true }],
+        lastMessage: { you: "from" },
+        entries: [{ id: "e1", summary: "s", bulk: true, lastMessage: { you: "from" }, messagesFromYou: 3 }],
       }) as unknown as SummarizerOutput,
     );
     expect(result.mail[0]).not.toHaveProperty("bulk");
-    expect(result.mail[0]).not.toHaveProperty("lastFromYou");
-    expect(result).not.toHaveProperty("lastFromYou");
+    expect(result.mail[0]).not.toHaveProperty("messagesFromYou");
+    expect(result.mail[0]!.lastMessage).toEqual({ you: "to", from: "Ada Lovelace" });
+    expect(result).not.toHaveProperty("lastMessage");
   });
 
   test("summaries and the overview are defanged", async () => {
@@ -531,6 +662,14 @@ describe("digest — entry summary length", () => {
     const { instructions } = calls[0]!;
     expect(instructions).toContain("1–2 sentences, about 180 characters");
     expect(instructions).not.toContain("300");
+  });
+
+  test("the instruction region says who a request is for only when the data shows it", async () => {
+    const { calls } = await run([mail()]);
+    const { instructions } = calls[0]!;
+    expect(instructions).toContain("Say who a request is aimed at only when the data shows it");
+    expect(instructions).toContain("never describe a request as made of the user when the user is on CC or not on the To or CC line");
+    expect(instructions).toContain("or when a group conversation message does not mention them");
   });
 });
 
@@ -649,7 +788,7 @@ describe("digest — labels", () => {
 
   test("names clamp at 120", async () => {
     const { result } = await run([mail({ from: { name: "N".repeat(200), handle: "n@x.test", isMe: false } })]);
-    expect(result.mail[0]!.lastFrom).toBe(`${"N".repeat(119)}…`);
+    expect(result.mail[0]!.lastMessage.from).toBe(`${"N".repeat(119)}…`);
   });
 
   test("a 300-char mail subject read through the normalizer emits a 255-char label ending in …", async () => {
