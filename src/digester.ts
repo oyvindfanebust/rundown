@@ -29,7 +29,9 @@ import {
   SUMMARIZER_OUTPUT_SCHEMA,
   SummarizerOutputSchema,
   type ChatConversation,
+  type ChatRole,
   type Digest,
+  type MailRole,
   type MailThread,
   type Meeting,
   type Occurrence,
@@ -48,6 +50,12 @@ export const INPUT_BUDGET = 800_000;
 export const ENTRY_TEXT_MAX = 8_000;
 /** Longest single rendered message, the mark included. Equals the normalizer's BODY_MAX (see normalize.ts). */
 export const MESSAGE_TEXT_MAX = 2_000;
+/**
+ * Longest rendered To and CC name text on one mail message line, the mark included. Capped
+ * apart from the body so a long list cannot crowd it out; the user's role marker follows it,
+ * outside the cap.
+ */
+export const RECIPIENTS_TEXT_MAX = 400;
 
 export class DigestError extends Error {
   constructor(message: string) {
@@ -108,6 +116,13 @@ Return:
   bracketed id copied exactly (without the brackets). Each summary is
   1–2 sentences, about ${ENTRY_SUMMARY_TARGET} characters, and says what the thread or conversation is about and where it stands. Do not
   return entries for meetings; they are context for the overview only.
+Each mail message line names its To and CC recipients and then where the user sits on that
+message. Each block's "last message" line states where the user sits on the latest message. A
+chat message line marked "(mentions you)" mentions the user. "you" as a sender means the user;
+a name shown as "you" in quotes is someone else's.
+Say who a request is aimed at only when the data shows it, and never describe a request as made
+of the user when the user is on CC or not on the To or CC line, or when a group conversation
+message does not mention them.
 Write plain text: no links, no URLs, no markdown.`;
 }
 
@@ -180,12 +195,57 @@ function namesOf(people: Person[]): { names?: string[]; more?: number } {
 
 /** The block line naming the people of an entry, or none when nobody is named. */
 function peopleLine(heading: string, names?: string[], more?: number): string[] {
-  return names ? [`${heading}: ${names.join(", ")}${more ? ` and ${more} more` : ""}`] : [];
+  return names ? [`${heading}: ${joinNames(names, more)}`] : [];
+}
+
+/** Names for a Summarizer line, comma-joined, then how many more. */
+function joinNames(names: string[], more?: number): string {
+  return `${names.map(spokenName).join(", ")}${more ? ` and ${more} more` : ""}`;
+}
+
+/**
+ * A labelled name as the Summarizer reads it. Only trusted code writes "you" for the user, so a
+ * name that reads "you" in any case is quoted and marked as someone else's.
+ */
+function spokenName(name: string): string {
+  return name.toLowerCase() === "you" ? `"${name}" (a name, not the user)` : name;
+}
+
+/**
+ * One recipient list for a Summarizer message line: up to {@link NAMES_MAX} names other than
+ * the user's, then how many more. Empty when nobody but the user is on it. The user's place
+ * on the message is a separate role marker (see {@link renderMailRecipients}).
+ */
+function renderRecipients(people: Person[]): string {
+  const { names, more } = namesOf(people);
+  if (!names) return more ? `${more} unnamed` : "";
+  return joinNames(names, more);
+}
+
+/**
+ * An entry's names and the count beyond them as digest fields under the given keys, each
+ * present only when it has a value.
+ */
+function nameFields<N extends string, M extends string>(
+  { names, more }: { names?: string[]; more?: number },
+  namesKey: N,
+  moreKey: M,
+): { [K in N]?: string[] } & { [K in M]?: number } {
+  return { ...(names ? { [namesKey]: names } : {}), ...(more ? { [moreKey]: more } : {}) } as {
+    [K in N]?: string[];
+  } & { [K in M]?: number };
+}
+
+/** The block line naming who wrote the latest message and where the user sits on it. */
+function lastMessageLine<R extends string>(role: R, sender: Person, roleText: Record<Exclude<R, "from">, string>): string {
+  if (role === "from") return "last message: from you";
+  return `last message: from ${displayName(sender)}; ${roleText[role as Exclude<R, "from">]}`;
 }
 
 function displayName(p: Person): string {
   if (p.isMe) return "you";
-  return label(p.name, NAME_MAX) ?? "(unnamed)";
+  const name = label(p.name, NAME_MAX);
+  return name === undefined ? "(unnamed)" : spokenName(name);
 }
 
 // ── Entries ──
@@ -255,12 +315,44 @@ function groupMail(emails: Email[]): Email[][] {
   });
 }
 
+/**
+ * The user's position on one mail message: from when the user wrote it (`byMe`, a delegate or
+ * shared-mailbox send included), else from the recipients' `isMe`. To wins over CC.
+ */
+function mailRole(m: Email): MailRole {
+  if (m.byMe) return "from";
+  if (m.to.some((p) => p.isMe)) return "to";
+  if (m.cc.some((p) => p.isMe)) return "cc";
+  return "indirect";
+}
+
+const MAIL_ROLE_TEXT: Record<Exclude<MailRole, "from">, string> = {
+  to: "you are in To",
+  cc: "you are on CC",
+  indirect: "you are not on the To or CC line",
+};
+
+/**
+ * A mail message line's To and CC names, capped, and then the user's role on it. The role
+ * marker sits outside the cap so a long list cannot cut it off. A message the user wrote has
+ * no marker: its sender already reads "you".
+ */
+function renderMailRecipients(m: Email): string {
+  const to = renderRecipients(m.to);
+  const cc = renderRecipients(m.cc);
+  const lists = [...(to ? [`to ${to}`] : []), ...(cc ? [`cc ${cc}`] : [])];
+  const parts = lists.length > 0 ? [capField(lists.join("; "), RECIPIENTS_TEXT_MAX)] : [];
+  const role = mailRole(m);
+  if (role !== "from") parts.push(MAIL_ROLE_TEXT[role]);
+  return parts.length === 0 ? "" : ` ${parts.join("; ")}`;
+}
+
 function mailEntry(group: Email[], threadLeads: Email[], tz: string): Built<MailThread> {
   const threadCount = threadLeads.length;
   const lead = group[0]!;
   const msgs = [...group].sort((a, b) => Date.parse(a.at) - Date.parse(b.at));
   const last = msgs[msgs.length - 1]!;
-  const fromYou = msgs.filter((m) => m.byMe).length;
+  const messagesFromYou = msgs.filter((m) => m.byMe).length;
   const unread = msgs.filter((m) => !m.isRead).length;
   const people = namesOf(
     [...msgs].reverse().flatMap((m) => [m.from, ...(m.sentBy ? [m.sentBy] : [])]).concat(
@@ -274,11 +366,19 @@ function mailEntry(group: Email[], threadLeads: Email[], tz: string): Built<Mail
       ? "low"
       : undefined;
   const lines = msgs.map((m) => {
+    const recipients = renderMailRecipients(m);
     const body = capField(oneLine(unwrap(m.body)), MESSAGE_TEXT_MAX);
-    return `- ${renderInstant(m.at, tz)} ${displayName(m.from)} (${m.folder}): ${body}`;
+    return `- ${renderInstant(m.at, tz)} ${displayName(m.from)} (${m.folder})${recipients}: ${body}`;
   });
   const { shown, hidden } = newestLines(lines);
-  const lastFrom = last.byMe ? undefined : label(last.from.name, NAME_MAX);
+  const you = mailRole(last);
+  const lastFrom = you === "from" ? undefined : label(last.from.name, NAME_MAX);
+  const lastMessage: MailThread["lastMessage"] = {
+    you,
+    ...(lastFrom !== undefined ? { from: lastFrom } : {}),
+    ...nameFields(namesOf(last.to), "to", "moreTo"),
+    ...nameFields(namesOf(last.cc), "cc", "moreCc"),
+  };
 
   const entry: MailThread = {
     id: lead.entryKey,
@@ -286,15 +386,13 @@ function mailEntry(group: Email[], threadLeads: Email[], tz: string): Built<Mail
     subject: label(lead.subject, TITLE_MAX) ?? "(no subject)",
     messages: msgs.length,
     ...(threadCount > 1 ? { threads: threadCount } : {}),
-    ...(fromYou > 0 ? { fromYou } : {}),
+    ...(messagesFromYou > 0 ? { messagesFromYou } : {}),
     ...(unread > 0 ? { unread } : {}),
     ...(hidden > 0 ? { truncated: hidden } : {}),
     firstAt: msgs[0]!.at,
     lastAt: last.at,
-    ...(last.byMe ? { lastFromYou: true as const } : {}),
-    ...(lastFrom !== undefined ? { lastFrom } : {}),
-    ...(people.names ? { people: people.names } : {}),
-    ...(people.more ? { morePeople: people.more } : {}),
+    lastMessage,
+    ...nameFields(people, "people", "morePeople"),
     ...(importance ? { importance } : {}),
     ...(msgs.some((m) => m.flagged) ? { flagged: true as const } : {}),
     ...(msgs.some((m) => m.hasAttachments) ? { attachments: true as const } : {}),
@@ -306,8 +404,8 @@ function mailEntry(group: Email[], threadLeads: Email[], tz: string): Built<Mail
     const head = [
       `[${runId}] mail thread`,
       `subject: ${capField(oneLine(unwrap(lead.subject)), MESSAGE_TEXT_MAX)}`,
-      `messages in the window: ${msgs.length}${fromYou > 0 ? ` (${fromYou} from you)` : ""}${threadCount > 1 ? `, ${threadCount} threads merged` : ""}`,
-      `last message: ${last.byMe ? "from you" : `from ${displayName(last.from)}`}`,
+      `messages in the window: ${msgs.length}${messagesFromYou > 0 ? ` (${messagesFromYou} from you)` : ""}${threadCount > 1 ? `, ${threadCount} threads merged` : ""}`,
+      lastMessageLine(you, last.from, MAIL_ROLE_TEXT),
     ];
     head.push(...peopleLine("people", entry.people, entry.morePeople));
     if (entry.continuesFromBefore) head.push("the thread began before the window; earlier messages are not shown");
@@ -319,6 +417,20 @@ function mailEntry(group: Email[], threadLeads: Email[], tz: string): Built<Mail
 
 const CHAT_KIND = { dm: "dm", group_dm: "group-dm", channel: "channel" } as const;
 
+/** The user's position on one chat message, from `byMe` and `mentionsMe` only. Mentioned wins over to. */
+function chatRole(m: ChatMessage): ChatRole {
+  if (m.byMe) return "from";
+  if (m.mentionsMe) return "mentioned";
+  if (m.conversation.kind === "dm") return "to";
+  return "indirect";
+}
+
+const CHAT_ROLE_TEXT: Record<Exclude<ChatRole, "from">, string> = {
+  mentioned: "it mentions you",
+  to: "a direct message to you",
+  indirect: "it does not mention you",
+};
+
 function chatEntry(msgs: ChatMessage[], tz: string): Built<ChatConversation> {
   const sorted = [...msgs].sort((a, b) => Date.parse(a.at) - Date.parse(b.at));
   const first = sorted[0]!;
@@ -327,13 +439,15 @@ function chatEntry(msgs: ChatMessage[], tz: string): Built<ChatConversation> {
   const kind = CHAT_KIND[conversation.kind];
   const authorsNewestFirst = [...sorted].reverse().map((m) => m.author);
   const people = namesOf([last.author, ...(conversation.members ?? []), ...authorsNewestFirst]);
-  const fromYou = sorted.filter((m) => m.byMe).length;
+  const messagesFromYou = sorted.filter((m) => m.byMe).length;
   const mentionsYou = sorted.filter((m) => m.mentionsMe).length;
   const channel = kind === "channel" ? label(conversation.name, NAME_MAX) : undefined;
-  const lastFrom = last.byMe ? undefined : label(last.author.name, NAME_MAX);
+  const you = chatRole(last);
+  const lastFrom = you === "from" ? undefined : label(last.author.name, NAME_MAX);
   const lines = sorted.map((m) => {
     const text = capField(oneLine(unwrap(m.text)), MESSAGE_TEXT_MAX);
-    return `- ${renderInstant(m.at, tz)} ${displayName(m.author)}: ${text === "" ? "(no text)" : text}`;
+    const mention = m.mentionsMe && !m.byMe ? " (mentions you)" : "";
+    return `- ${renderInstant(m.at, tz)} ${displayName(m.author)}${mention}: ${text === "" ? "(no text)" : text}`;
   });
   const { shown, hidden } = newestLines(lines);
 
@@ -344,15 +458,13 @@ function chatEntry(msgs: ChatMessage[], tz: string): Built<ChatConversation> {
     ...(channel !== undefined ? { channel } : {}),
     ...(conversation.isExternal ? { external: true as const } : {}),
     messages: sorted.length,
-    ...(fromYou > 0 ? { fromYou } : {}),
+    ...(messagesFromYou > 0 ? { messagesFromYou } : {}),
     ...(mentionsYou > 0 ? { mentionsYou } : {}),
     ...(hidden > 0 ? { truncated: hidden } : {}),
     firstAt: first.at,
     lastAt: last.at,
-    ...(last.byMe ? { lastFromYou: true as const } : {}),
-    ...(lastFrom !== undefined ? { lastFrom } : {}),
-    ...(people.names ? { people: people.names } : {}),
-    ...(people.more ? { morePeople: people.more } : {}),
+    lastMessage: { you, ...(lastFrom !== undefined ? { from: lastFrom } : {}) },
+    ...nameFields(people, "people", "morePeople"),
     // No continuesFromBefore: earlier chat messages are not read, so it is never known.
   };
 
@@ -365,7 +477,8 @@ function chatEntry(msgs: ChatMessage[], tz: string): Built<ChatConversation> {
           : "group direct message";
     const head = [
       `[${runId}] chat conversation: ${where}${conversation.isExternal ? ", shared with another workspace" : ""}`,
-      `messages in the window: ${sorted.length}${fromYou > 0 ? ` (${fromYou} from you)` : ""}`,
+      `messages in the window: ${sorted.length}${messagesFromYou > 0 ? ` (${messagesFromYou} from you)` : ""}`,
+      lastMessageLine(you, last.author, CHAT_ROLE_TEXT),
     ];
     head.push(...peopleLine("people", entry.people, entry.morePeople));
     if (hidden > 0) head.push(`${hidden} earlier messages in the window not shown`);

@@ -11,6 +11,28 @@ follows [ADR-0011](0011-brief-contract-source-of-truth.md). Decided on the map
 [ADR-0020](0020-aggregation-and-digest-entries.md); the trust classes are
 [ADR-0022](0022-trust-boundary.md).
 
+**Amendment (where the user sits, [#164](https://github.com/oyvindfanebust/rundown/issues/164)).**
+Mail and chat entries describe their latest message with a `lastMessage` object, and `lastFrom`,
+`lastFromYou` and `fromYou` are removed (§2). A mail entry named who wrote the latest message but
+not who it was addressed to, and the Summarizer saw each message's sender and one merged `people`
+list. On 2026-10-06 a "Re: CV API" mail asked a colleague for files with the user on CC; the
+Summarizer wrote that the request was made of the user, and the consuming agent put it on the
+user's action list. A group DM had the same gap: the Summarizer saw `@Name` without knowing which
+name was the user. `lastMessage.you` is one trusted value for the user's position, derived by code
+from the source's `isMe`, `byMe` and `mentionsMe`, never by the model. For mail it is `from`
+(`byMe`, which covers delegate and shared-mailbox sends), else `to` when a To recipient is the
+user, else `cc`, else `indirect` (BCC or a list, which Graph does not tell apart for the
+recipient). For chat it is `from`, else `mentioned` when the message mentions the user, else `to`
+in a DM, else `indirect`. The user never appears in `from`, `to` or `cc`, which are labels through
+`label()`, capped like `people`, with the rest counted in `moreTo` and `moreCc`. The count `fromYou`
+became `messagesFromYou`, so it reads as a count beside `messages` and not as a flag beside
+`you: "from"`. The Summarizer input carries the same facts (§4), and the instruction region tells
+the model to say who a request is aimed at only when the data shows it, and never to describe a
+request as made of the user when the user is on CC or indirect, or when a group conversation
+message does not mention them. No new unwrap site: names reach the Summarizer through the
+Digester's existing `unwrap()` and the digest through `label()`. The change breaks the contract
+and ships as `feat!:`, without a deprecation period for the removed fields.
+
 ## Context
 
 `rundown brief` emitted a curated plan: the Planner asked the model for commitments, tasks,
@@ -69,9 +91,14 @@ type Meeting =
 interface MailThread {
   id: Digest; type: "mail";
   subject: string;                                     // label ≤ 255
-  messages: number; threads?: number; fromYou?: number; unread?: number; truncated?: number;
+  messages: number; threads?: number; messagesFromYou?: number; unread?: number; truncated?: number;
   firstAt: Instant; lastAt: Instant;
-  lastFromYou?: true; lastFrom?: string;               // lastFrom: label, absent when lastFromYou
+  lastMessage: {
+    you: "from" | "to" | "cc" | "indirect";            // trusted, from isMe; To wins over CC
+    from?: string;                                     // label; absent when you is "from"
+    to?: string[]; moreTo?: number;                    // label ≤ 8, you excluded / trusted
+    cc?: string[]; moreCc?: number;                    // label ≤ 8, you excluded / trusted
+  };
   people?: string[]; morePeople?: number;              // label ≤ 8, last sender first
   importance?: "high" | "low"; flagged?: true; attachments?: true;
   bulk?: true;                                         // every message not by you is "other"
@@ -84,9 +111,12 @@ interface ChatConversation {
   kind: "dm" | "group-dm" | "channel";
   channel?: string;                                    // label, channels only
   external?: true;
-  messages: number; fromYou?: number; mentionsYou?: number; truncated?: number;
+  messages: number; messagesFromYou?: number; mentionsYou?: number; truncated?: number;
   firstAt: Instant; lastAt: Instant;
-  lastFromYou?: true; lastFrom?: string;
+  lastMessage: {
+    you: "from" | "to" | "mentioned" | "indirect";     // trusted; mentioned wins over to
+    from?: string;                                     // label; absent when you is "from"
+  };
   people?: string[]; morePeople?: number;              // label ≤ 8; a DM's counterpart
   continuesFromBefore?: true;
   summary?: string;                                    // model ≤ 300
@@ -95,8 +125,8 @@ interface ChatConversation {
 
 - Presence is signal. False, zero, default and empty fields are left out, so `flagged` appears only
   when a thread is flagged and `showAs` only when it is not `busy`.
-- "You" fields (`youOrganize`, `fromYou`, `lastFromYou`, `mentionsYou`) replace the user's own name,
-  which never appears.
+- "You" fields (`youOrganize`, `messagesFromYou`, `mentionsYou`, `lastMessage.you`) replace the
+  user's own name, which never appears.
 - Meetings carry no summary: an event has no body, and a model summary would restate the title.
 - The schema documents that a channel entry covers only the user's messages and mentions of the
   user, and that a group DM's `people` may be only the authors seen when its name cannot be read
@@ -125,8 +155,13 @@ input, joins the model's output, and copies every trusted value and label into t
   threads, `c1…` for chat conversations. Nothing stable or source-derived is in the prompt. The
   entry ids in the digest are the `entryKey` digests (ADR-0020 §5), which the model never sees.
 - **Rendering.** Each mail and chat entry renders as a block under its opaque id: trusted metadata
-  (counts, times, `lastFromYou`, `continuesFromBefore`) and its newest messages up to about 8,000
-  chars, each message capped at 2,000; a cut message ends in "…[truncated]", whether the
+  (counts, times, the user's position on the last message, `continuesFromBefore`) and its newest
+  messages up to about 8,000 chars, each message capped at 2,000. A mail message line names its To
+  and CC recipients other than the user, capped at 400 chars apart from the body, and then a role
+  marker written by code from `isMe` ("you are in To", "you are on CC" or "you are not on the To or
+  CC line"), outside the cap so a long list cannot cut it off. A label that reads "you" in any case
+  is rendered quoted and marked as a name, so only code can write the user's "you"; a chat message
+  line is marked "(mentions you)" when it mentions the user. A cut message ends in "…[truncated]", whether the
   normalizer or the Digester cut it. Older messages become one line, "N earlier messages in the
   window not shown", and the entry carries a trusted `truncated` count. Meetings render as context
   for the overview only. Timezone and weekday rendering and date-only handling move here from the

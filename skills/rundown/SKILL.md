@@ -68,6 +68,14 @@ user what it said and do not make up a digest. The errors you can act on:
   Graph and Slack interactively, and `rundown status` checks each source and names what is missing
   in its `Next:` line.
 
+## Who an entry is aimed at
+
+`lastMessage.you` on a mail or chat entry says where the user sits on its latest message. It is
+set by code from the source account, never by the model, so rely on it over the summary's wording.
+Treat an entry as something asked of the user only when `you` is `to` or `mentioned`. Treat `cc`
+and `indirect` entries as FYI unless the summary shows a request made of the user. When `you` is
+`from`, the user wrote last and the next move is someone else's.
+
 ## Field reference
 
 Presence is signal: an optional field that is false, zero, empty or the default is left out, so a
@@ -119,13 +127,17 @@ here by path.
 | `mail[].subject` | label | The thread's subject, at most 255 chars. |
 | `mail[].messages` | trusted | Messages in the window, inbox and sent together. |
 | `mail[].threads` | trusted | Threads merged into this entry because their first messages share sender and subject. |
-| `mail[].fromYou` | trusted | Messages you wrote, including mail sent as a shared mailbox or by a delegate. |
+| `mail[].messagesFromYou` | trusted | Messages you wrote, including mail sent as a shared mailbox or by a delegate. |
 | `mail[].unread` | trusted | Unread messages. |
 | `mail[].truncated` | trusted | Older messages the summary did not see; it covers only the newest. |
 | `mail[].firstAt` | trusted | The first message in the window. |
 | `mail[].lastAt` | trusted | The last message in the window. Mail is sorted by it, newest first. |
-| `mail[].lastFromYou` | trusted | You wrote the last message. |
-| `mail[].lastFrom` | label | The last sender's name. Absent when `lastFromYou`. |
+| `mail[].lastMessage.you` | trusted | Where you sit on the last message: `from` (you wrote it, a delegate or shared-mailbox send included), `to` (on the To line), `cc` (on CC and not To) or `indirect` (on none of them: BCC or a list). |
+| `mail[].lastMessage.from` | label | The last sender's name. Absent when `you` is `from`. |
+| `mail[].lastMessage.to` | label | Up to 8 names on the last message's To line, you excluded. |
+| `mail[].lastMessage.moreTo` | trusted | To recipients beyond the names listed, including any without a name. |
+| `mail[].lastMessage.cc` | label | Up to 8 names on the last message's CC line, you excluded. |
+| `mail[].lastMessage.moreCc` | trusted | CC recipients beyond the names listed, including any without a name. |
 | `mail[].people` | label | Up to 8 other people's names, last sender first. |
 | `mail[].morePeople` | trusted | Other people beyond the names listed, including any without a name. |
 | `mail[].importance` | trusted | `high` when any message is high importance; `low` when every one is. |
@@ -140,13 +152,13 @@ here by path.
 | `chat[].channel` | label | The channel name. Channels only. |
 | `chat[].external` | trusted | A Slack Connect conversation shared with another workspace. |
 | `chat[].messages` | trusted | Messages in the window. |
-| `chat[].fromYou` | trusted | Messages you wrote. |
+| `chat[].messagesFromYou` | trusted | Messages you wrote. |
 | `chat[].mentionsYou` | trusted | Messages that mention you. |
 | `chat[].truncated` | trusted | Older messages the summary did not see; it covers only the newest. |
 | `chat[].firstAt` | trusted | The first message in the window. |
 | `chat[].lastAt` | trusted | The last message in the window. Chat is sorted by it, newest first. |
-| `chat[].lastFromYou` | trusted | You wrote the last message. |
-| `chat[].lastFrom` | label | The last author's name. Absent when `lastFromYou`. |
+| `chat[].lastMessage.you` | trusted | Where you sit on the last message: `from` (you wrote it), `mentioned` (it mentions you), `to` (a DM to you that does not mention you) or `indirect` (a group DM or channel message that does not mention you). `@here`, `@channel` and group mentions do not count. |
+| `chat[].lastMessage.from` | label | The last author's name. Absent when `you` is `from`. |
 | `chat[].people` | label | Up to 8 other people's names, last author first. A DM names its counterpart. A group DM names its members, or only the authors seen when its members cannot be read. |
 | `chat[].morePeople` | trusted | Other people beyond the names listed, including any without a name. |
 | `chat[].continuesFromBefore` | trusted | Never set on chat: earlier messages are not read. |

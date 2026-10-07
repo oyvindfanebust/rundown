@@ -85,6 +85,13 @@ export const YOUR_RESPONSES = ["accepted", "tentative", "declined", "notResponde
 export type YourResponse = (typeof YOUR_RESPONSES)[number];
 const yourResponse = (description: string) => trusted(z.enum(YOUR_RESPONSES).optional(), description);
 
+/** Where the user sits on the last mail message. */
+export const MAIL_ROLES = ["from", "to", "cc", "indirect"] as const;
+export type MailRole = (typeof MAIL_ROLES)[number];
+/** Where the user sits on the last chat message. */
+export const CHAT_ROLES = ["from", "to", "mentioned", "indirect"] as const;
+export type ChatRole = (typeof CHAT_ROLES)[number];
+
 // ── Meetings ──
 
 const meetingBase = {
@@ -153,13 +160,25 @@ export const MailThread = container(
     threads: optCount(
       "Present when several threads were merged because their first messages share the sender and the subject (ignoring Re: and Fw:).",
     ),
-    fromYou: optCount("Messages you wrote, including mail sent as a shared mailbox or by a delegate for you."),
+    messagesFromYou: optCount("Messages you wrote, including mail sent as a shared mailbox or by a delegate for you."),
     unread: optCount("Unread messages."),
     truncated: optCount("Older messages the summary did not see; it covers only the newest."),
     firstAt: instant("The first message in the window."),
     lastAt: instant("The last message in the window."),
-    lastFromYou: flag("You wrote the last message."),
-    lastFrom: labelled(z.string().max(NAME_MAX).optional(), "The last sender's name. Absent when lastFromYou."),
+    lastMessage: container(
+      z.strictObject({
+        you: trusted(
+          z.enum(MAIL_ROLES),
+          'Where you sit on the last message: "from" (you wrote it, a delegate or shared-mailbox send included), "to" (you are on the To line), "cc" (you are on CC and not To) or "indirect" (you are on none of them, so it reached you by BCC or a list).',
+        ),
+        from: labelled(z.string().max(NAME_MAX).optional(), 'The last sender\'s name. Absent when you is "from".'),
+        to: names(`Up to ${NAMES_MAX} names on the last message's To line, you excluded.`),
+        moreTo: optCount("To recipients beyond the names listed, including any without a display name."),
+        cc: names(`Up to ${NAMES_MAX} names on the last message's CC line, you excluded.`),
+        moreCc: optCount("CC recipients beyond the names listed, including any without a display name."),
+      }),
+      "The last message in the window: who sent it, who it was addressed to, and where you sit on it.",
+    ),
     people: names(`Up to ${NAMES_MAX} other people's names, last sender first.`),
     morePeople: optCount("Other people beyond the names listed, including any without a display name."),
     importance: trusted(z.enum(["high", "low"]).optional(), "High when any message is high importance; low when every one is."),
@@ -188,13 +207,21 @@ export const ChatConversation = container(
     channel: labelled(z.string().max(NAME_MAX).optional(), "The channel name. Channels only."),
     external: flag("A Slack Connect conversation, shared with another workspace."),
     messages: count("Messages in the window."),
-    fromYou: optCount("Messages you wrote."),
+    messagesFromYou: optCount("Messages you wrote."),
     mentionsYou: optCount("Messages that mention you."),
     truncated: optCount("Older messages the summary did not see; it covers only the newest."),
     firstAt: instant("The first message in the window."),
     lastAt: instant("The last message in the window."),
-    lastFromYou: flag("You wrote the last message."),
-    lastFrom: labelled(z.string().max(NAME_MAX).optional(), "The last author's name. Absent when lastFromYou."),
+    lastMessage: container(
+      z.strictObject({
+        you: trusted(
+          z.enum(CHAT_ROLES),
+          'Where you sit on the last message: "from" (you wrote it), "mentioned" (it mentions you), "to" (a direct message to you that does not mention you) or "indirect" (a group DM or channel message that does not mention you). @here, @channel and group mentions do not count.',
+        ),
+        from: labelled(z.string().max(NAME_MAX).optional(), 'The last author\'s name. Absent when you is "from".'),
+      }),
+      "The last message in the window: who wrote it and where you sit on it.",
+    ),
     people: names(
       `Up to ${NAMES_MAX} other people's names, last author first. A DM names its counterpart. A group DM names its members, or only the authors seen when the conversation's members cannot be read.`,
     ),

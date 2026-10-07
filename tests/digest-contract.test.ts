@@ -129,11 +129,11 @@ const mailThread = () => ({
   type: "mail",
   subject: "Contract renewal",
   messages: 3,
-  fromYou: 1,
+  messagesFromYou: 1,
   unread: 1,
   firstAt: "2026-10-01T08:00:00Z",
   lastAt: "2026-10-03T12:00:00Z",
-  lastFrom: "Grace Hopper",
+  lastMessage: { you: "cc", from: "Grace Hopper", to: ["Alan Turing"], moreTo: 2, cc: ["Ada Lovelace"], moreCc: 1 },
   people: ["Grace Hopper"],
   importance: "high",
   attachments: true,
@@ -149,7 +149,7 @@ const chatConversation = () => ({
   mentionsYou: 1,
   firstAt: "2026-10-02T08:00:00Z",
   lastAt: "2026-10-03T15:00:00Z",
-  lastFromYou: true,
+  lastMessage: { you: "from" },
   people: ["Linus Torvalds"],
   summary: "The deploy question is answered.",
 });
@@ -285,8 +285,11 @@ describe("DigestSchema", () => {
   });
 
   test("a name over 120 chars fails; at 120 it passes", () => {
-    expect(parses(withMail({ lastFrom: "a".repeat(121) }))).toBe(false);
-    expect(parses(withMail({ lastFrom: "a".repeat(120) }))).toBe(true);
+    const last = (patch: Record<string, unknown>) => withMail({ lastMessage: { you: "to", ...patch } });
+    expect(parses(last({ from: "a".repeat(121) }))).toBe(false);
+    expect(parses(last({ from: "a".repeat(120) }))).toBe(true);
+    expect(parses(last({ to: ["a".repeat(121)] }))).toBe(false);
+    expect(parses(last({ cc: ["a".repeat(121)] }))).toBe(false);
     expect(parses(withMail({ people: ["a".repeat(121)] }))).toBe(false);
     expect(parses({ ...emptyDigest(), chat: [{ ...chatConversation(), channel: "a".repeat(121) }] })).toBe(false);
   });
@@ -295,20 +298,44 @@ describe("DigestSchema", () => {
     const people = (n: number) => Array.from({ length: n }, (_, i) => `Person ${i}`);
     expect(parses(withMail({ people: people(9) }))).toBe(false);
     expect(parses(withMail({ people: people(8) }))).toBe(true);
+    expect(parses(withMail({ lastMessage: { you: "to", to: people(9) } }))).toBe(false);
+    expect(parses(withMail({ lastMessage: { you: "to", cc: people(9) } }))).toBe(false);
+    expect(parses(withMail({ lastMessage: { you: "to", to: people(8), cc: people(8) } }))).toBe(true);
     expect(parses({ ...emptyDigest(), meetings: [{ ...oneOff(), attendees: people(9) }] })).toBe(false);
   });
 
   test("a flag set to false fails: flags are true or absent", () => {
-    expect(parses(withMail({ lastFromYou: false }))).toBe(false);
     expect(parses(withMail({ flagged: false }))).toBe(false);
     expect(parses({ ...emptyDigest(), meetings: [{ ...oneOff(), online: false }] })).toBe(false);
     expect(parses({ ...emptyDigest(), chat: [{ ...chatConversation(), external: false }] })).toBe(false);
   });
 
   test("an optional count of 0 fails: counts are positive or absent", () => {
-    expect(parses(withMail({ fromYou: 0 }))).toBe(false);
+    expect(parses(withMail({ messagesFromYou: 0 }))).toBe(false);
+    expect(parses(withMail({ lastMessage: { you: "to", moreTo: 0 } }))).toBe(false);
+    expect(parses(withMail({ lastMessage: { you: "to", moreCc: 0 } }))).toBe(false);
     expect(parses({ ...emptyDigest(), unsummarized: 0 })).toBe(false);
     expect(parses({ ...emptyDigest(), meetings: [{ ...oneOff(), moreAttendees: 0 }] })).toBe(false);
+  });
+
+  test("the removed lastFrom, lastFromYou and fromYou fail, on mail and chat", () => {
+    const withChat = (patch: Record<string, unknown>) => ({ ...emptyDigest(), chat: [{ ...chatConversation(), ...patch }] });
+    for (const patch of [{ lastFrom: "Grace Hopper" }, { lastFromYou: true }, { fromYou: 1 }]) {
+      expect(parses(withMail(patch))).toBe(false);
+      expect(parses(withChat(patch))).toBe(false);
+    }
+  });
+
+  test("lastMessage is required, its you must be one of the roles, and it is strict", () => {
+    const { lastMessage: _drop, ...noLast } = mailThread();
+    expect(parses({ ...emptyDigest(), mail: [noLast] })).toBe(false);
+    for (const you of ["from", "to", "cc", "indirect"]) expect(parses(withMail({ lastMessage: { you } }))).toBe(true);
+    expect(parses(withMail({ lastMessage: { you: "mentioned" } }))).toBe(false);
+    expect(parses(withMail({ lastMessage: { you: "to", bcc: ["x"] } }))).toBe(false);
+    const withChat = (lastMessage: unknown) => ({ ...emptyDigest(), chat: [{ ...chatConversation(), lastMessage }] });
+    for (const you of ["from", "to", "mentioned", "indirect"]) expect(parses(withChat({ you }))).toBe(true);
+    expect(parses(withChat({ you: "cc" }))).toBe(false);
+    expect(parses(withChat({ you: "to", to: ["x"] }))).toBe(false);
   });
 
   test("an entry id that is not 16 hex chars fails", () => {
@@ -338,10 +365,17 @@ describe("DIGEST_FIELDS", () => {
       summary: "model",
       "mail[].subject": "label",
       "mail[].summary": "model",
-      "mail[].lastFromYou": "trusted",
-      "mail[].lastFrom": "label",
+      "mail[].lastMessage.you": "trusted",
+      "mail[].lastMessage.from": "label",
+      "mail[].lastMessage.to": "label",
+      "mail[].lastMessage.moreTo": "trusted",
+      "mail[].lastMessage.cc": "label",
+      "mail[].lastMessage.moreCc": "trusted",
       "mail[].people": "label",
-      "mail[].fromYou": "trusted",
+      "mail[].messagesFromYou": "trusted",
+      "chat[].lastMessage.you": "trusted",
+      "chat[].lastMessage.from": "label",
+      "chat[].messagesFromYou": "trusted",
       "chat[].channel": "label",
       "chat[].kind": "trusted",
       "chat[].summary": "model",
